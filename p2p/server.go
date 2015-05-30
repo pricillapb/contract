@@ -55,9 +55,10 @@ type Server struct {
 	// Zero defaults to preset values.
 	MaxPendingPeers int
 
-	// Discovery specifies whether the peer discovery mechanism should be started
-	// or not. Disabling is usually useful for protocol debugging (manual topology).
-	Discovery bool
+	// NoDiscovery can be used to disable off the UDP-based peer
+	// discovery protocol. Disabling it can be useful for protocol
+	// debugging (manual topology).
+	NoDiscovery bool
 
 	// Name sets the node name of this server.
 	// Use common.MakeName to create a name that follows existing conventions.
@@ -311,17 +312,14 @@ func (srv *Server) Start() (err error) {
 	srv.peerOpDone = make(chan struct{})
 
 	// node table
-	if srv.Discovery {
+	dynPeers := 0
+	if !srv.NoDiscovery {
+		dynPeers = srv.MaxPeers / 2
 		ntab, err := discover.ListenUDP(srv.PrivateKey, srv.ListenAddr, srv.NAT, srv.NodeDatabase)
 		if err != nil {
 			return err
 		}
 		srv.ntab = ntab
-	}
-
-	dynPeers := srv.MaxPeers / 2
-	if !srv.Discovery {
-		dynPeers = 0
 	}
 	dialer := newDialState(srv.StaticNodes, srv.ntab, dynPeers)
 
