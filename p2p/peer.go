@@ -147,9 +147,11 @@ func (p *Peer) run() DiscReason {
 	p.wg.Wait()
 
 	if requested {
+		glog.V(logger.Debug).Infof("%v: local disconnect request: %v\n", p, reason)
 		reason = DiscRequested
+	} else {
+		glog.V(logger.Debug).Infof("%v: Disconnected: %v\n", p, reason)
 	}
-	glog.V(logger.Debug).Infof("%v: Disconnected: %v\n", p, reason)
 	return reason
 }
 
@@ -196,7 +198,7 @@ func (p *Peer) handle(msg Msg) error {
 		// This is the last message. We don't need to discard or
 		// check errors because, the connection will be closed after it.
 		rlp.Decode(msg.Payload, &reason)
-		glog.V(logger.Debug).Infof("%v: Disconnect Requested: %v\n", p, reason[0])
+		glog.V(logger.Debug).Infof("%v: remote disconnect request: %v\n", p, reason[0])
 		return reason[0]
 	case msg.Code < baseProtocolLength:
 		// ignore other base protocol messages
