@@ -9,14 +9,9 @@ fi
 
 # Create fake Go workspace if it doesn't exist yet.
 workspace="$PWD/build/_workspace"
-root="$PWD"
 ethdir="$workspace/src/github.com/ethereum"
-if [ ! -L "$ethdir/go-ethereum" ]; then
-    mkdir -p "$ethdir"
-    cd "$ethdir"
-    ln -s ../../../../../. go-ethereum
-    cd "$root"
-fi
+mkdir -p "$ethdir"
+ln -fsn "$PWD" "$ethdir/go-ethereum"
 
 # Set up the environment to use the workspace.
 # Also add Godeps workspace so we build using canned dependencies.
