@@ -30,9 +30,9 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/ecies"
-	"github.com/ethereum/go-ethereum/crypto/sha3"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -63,16 +63,7 @@ func TestEncHandshake(t *testing.T) {
 		if err := testEncHandshake(nil); err != nil {
 			t.Fatalf("i=%d %v", i, err)
 		}
-		t.Logf("(without token) %d %v\n", i+1, time.Since(start))
-	}
-	for i := 0; i < 10; i++ {
-		tok := make([]byte, shaLen)
-		rand.Reader.Read(tok)
-		start := time.Now()
-		if err := testEncHandshake(tok); err != nil {
-			t.Fatalf("i=%d %v", i, err)
-		}
-		t.Logf("(with token) %d %v\n", i+1, time.Since(start))
+		t.Logf("%d %v\n", i+1, time.Since(start))
 	}
 }
 
@@ -128,17 +119,17 @@ func testEncHandshake(token []byte) error {
 	}
 
 	// compare derived secrets
-	if !reflect.DeepEqual(c0.rw.egressMAC, c1.rw.ingressMAC) {
-		return fmt.Errorf("egress mac mismatch:\n c0.rw: %#v\n c1.rw: %#v", c0.rw.egressMAC, c1.rw.ingressMAC)
+	if !reflect.DeepEqual(c0.rw.encIV, c1.rw.decIV) {
+		return fmt.Errorf("encIV mismatch:\n c0.encIV: %#v\n c1.decIV: %#v", c0.rw.encIV, c1.rw.decIV)
 	}
-	if !reflect.DeepEqual(c0.rw.ingressMAC, c1.rw.egressMAC) {
-		return fmt.Errorf("ingress mac mismatch:\n c0.rw: %#v\n c1.rw: %#v", c0.rw.ingressMAC, c1.rw.egressMAC)
+	if !reflect.DeepEqual(c0.rw.decIV, c1.rw.encIV) {
+		return fmt.Errorf("decIV mismatch:\n c0.decIV: %#v\n c1.encIV: %#v", c0.rw.decIV, c1.rw.encIV)
 	}
-	if !reflect.DeepEqual(c0.rw.enc, c1.rw.enc) {
-		return fmt.Errorf("enc cipher mismatch:\n c0.rw: %#v\n c1.rw: %#v", c0.rw.enc, c1.rw.enc)
+	if !reflect.DeepEqual(c0.rw.enc, c1.rw.dec) {
+		return fmt.Errorf("enc cipher mismatch:\n c0.enc: %#v\n c1.dec: %#v", c0.rw.enc, c1.rw.dec)
 	}
-	if !reflect.DeepEqual(c0.rw.dec, c1.rw.dec) {
-		return fmt.Errorf("dec cipher mismatch:\n c0.rw: %#v\n c1.rw: %#v", c0.rw.dec, c1.rw.dec)
+	if !reflect.DeepEqual(c0.rw.dec, c1.rw.enc) {
+		return fmt.Errorf("dec cipher mismatch:\n c0.dec: %#v\n c1.enc: %#v", c0.rw.dec, c1.rw.enc)
 	}
 	return nil
 }
@@ -262,90 +253,17 @@ func TestProtocolHandshakeErrors(t *testing.T) {
 	}
 }
 
-func TestRLPXFrameFake(t *testing.T) {
-	buf := new(bytes.Buffer)
-	hash := fakeHash([]byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})
-	rw := newRLPXFrameRW(buf, secrets{
-		AES:        crypto.Sha3(),
-		MAC:        crypto.Sha3(),
-		IngressMAC: hash,
-		EgressMAC:  hash,
-	})
-
-	golden := unhex(`
-00828ddae471818bb0bfa6b551d1cb42
-01010101010101010101010101010101
-ba628a4ba590cb43f7848f41c4382885
-01010101010101010101010101010101
-`)
-
-	// Check WriteMsg. This puts a message into the buffer.
-	if err := Send(rw, 8, []uint{1, 2, 3, 4}); err != nil {
-		t.Fatalf("WriteMsg error: %v", err)
-	}
-	written := buf.Bytes()
-	if !bytes.Equal(written, golden) {
-		t.Fatalf("output mismatch:\n  got:  %x\n  want: %x", written, golden)
-	}
-
-	// Check ReadMsg. It reads the message encoded by WriteMsg, which
-	// is equivalent to the golden message above.
-	msg, err := rw.ReadMsg()
-	if err != nil {
-		t.Fatalf("ReadMsg error: %v", err)
-	}
-	if msg.Size != 5 {
-		t.Errorf("msg size mismatch: got %d, want %d", msg.Size, 5)
-	}
-	if msg.Code != 8 {
-		t.Errorf("msg code mismatch: got %d, want %d", msg.Code, 8)
-	}
-	payload, _ := ioutil.ReadAll(msg.Payload)
-	wantPayload := unhex("C401020304")
-	if !bytes.Equal(payload, wantPayload) {
-		t.Errorf("msg payload mismatch:\ngot  %x\nwant %x", payload, wantPayload)
-	}
-}
-
-type fakeHash []byte
-
-func (fakeHash) Write(p []byte) (int, error) { return len(p), nil }
-func (fakeHash) Reset()                      {}
-func (fakeHash) BlockSize() int              { return 0 }
-
-func (h fakeHash) Size() int           { return len(h) }
-func (h fakeHash) Sum(b []byte) []byte { return append(b, h...) }
-
 func TestRLPXFrameRW(t *testing.T) {
-	var (
-		aesSecret      = make([]byte, 16)
-		macSecret      = make([]byte, 16)
-		egressMACinit  = make([]byte, 32)
-		ingressMACinit = make([]byte, 32)
-	)
-	for _, s := range [][]byte{aesSecret, macSecret, egressMACinit, ingressMACinit} {
-		rand.Read(s)
-	}
+	var s1, s2 secrets
+	s1.AES1 = make([]byte, 32)
+	s1.AES2 = make([]byte, 32)
+	rand.Read(s1.AES1)
+	rand.Read(s2.AES2)
 	conn := new(bytes.Buffer)
-
-	s1 := secrets{
-		AES:        aesSecret,
-		MAC:        macSecret,
-		EgressMAC:  sha3.NewKeccak256(),
-		IngressMAC: sha3.NewKeccak256(),
-	}
-	s1.EgressMAC.Write(egressMACinit)
-	s1.IngressMAC.Write(ingressMACinit)
 	rw1 := newRLPXFrameRW(conn, s1)
 
-	s2 := secrets{
-		AES:        aesSecret,
-		MAC:        macSecret,
-		EgressMAC:  sha3.NewKeccak256(),
-		IngressMAC: sha3.NewKeccak256(),
-	}
-	s2.EgressMAC.Write(ingressMACinit)
-	s2.IngressMAC.Write(egressMACinit)
+	s2.AES1 = common.CopyBytes(s1.AES2)
+	s2.AES2 = common.CopyBytes(s1.AES1)
 	rw2 := newRLPXFrameRW(conn, s2)
 
 	// send some messages
