@@ -462,14 +462,23 @@ func (tab *Table) add(new *Node) {
 	var oldest *Node
 	if len(b.entries) == bucketSize {
 		oldest = b.entries[bucketSize-1]
+		if oldest.contested {
+			// The node is already being replaced, don't attempt
+			// to replace it.
+			return
+		}
+		oldest.contested = true
 		// Let go of the mutex so other goroutines can access
 		// the table while we ping the least recently active node.
 		tab.mutex.Unlock()
-		if err := tab.ping(oldest.ID, oldest.addr()); err == nil {
+		err := tab.ping(oldest.ID, oldest.addr())
+		tab.mutex.Lock()
+		oldest.contested = false
+		if err == nil {
 			// The node responded, don't replace it.
+			tab.mutex.Unlock()
 			return
 		}
-		tab.mutex.Lock()
 	}
 	added := b.replace(new, oldest)
 	tab.mutex.Unlock()
