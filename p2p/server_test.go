@@ -18,7 +18,6 @@ package p2p
 
 import (
 	"crypto/ecdsa"
-	"errors"
 	"math/rand"
 	"net"
 	"reflect"
@@ -26,54 +25,16 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/crypto/sha3"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 )
 
-func init() {
-	// glog.SetV(6)
-	// glog.SetToStderr(true)
-}
-
-type testTransport struct {
-	id discover.NodeID
-	*rlpx
-
-	closeErr error
-}
-
-func newTestTransport(id discover.NodeID, fd net.Conn) transport {
-	wrapped := newRLPX(fd).(*rlpx)
-	wrapped.rw = newRLPXFrameRW(fd, secrets{
-		MAC:        zero16,
-		AES:        zero16,
-		IngressMAC: sha3.NewKeccak256(),
-		EgressMAC:  sha3.NewKeccak256(),
-	})
-	return &testTransport{id: id, rlpx: wrapped}
-}
-
-func (c *testTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (discover.NodeID, error) {
-	return c.id, nil
-}
-
-func (c *testTransport) doProtoHandshake(our *protoHandshake) (*protoHandshake, error) {
-	return &protoHandshake{ID: c.id, Name: "test"}, nil
-}
-
-func (c *testTransport) close(err error) {
-	c.rlpx.fd.Close()
-	c.closeErr = err
-}
-
-func startTestServer(t *testing.T, id discover.NodeID, pf func(*Peer)) *Server {
+func startTestServer(t *testing.T, pf func(*Peer)) *Server {
 	server := &Server{
-		Name:         "test",
-		MaxPeers:     10,
-		ListenAddr:   "127.0.0.1:0",
-		PrivateKey:   newkey(),
-		newPeerHook:  pf,
-		newTransport: func(fd net.Conn) transport { return newTestTransport(id, fd) },
+		Name:        "test",
+		MaxPeers:    10,
+		ListenAddr:  "127.0.0.1:0",
+		PrivateKey:  newkey(),
+		newPeerHook: pf,
 	}
 	if err := server.Start(); err != nil {
 		t.Fatalf("Could not start server: %v", err)
@@ -84,8 +45,9 @@ func startTestServer(t *testing.T, id discover.NodeID, pf func(*Peer)) *Server {
 func TestServerListen(t *testing.T) {
 	// start the test server
 	connected := make(chan *Peer)
-	remid := randomID()
-	srv := startTestServer(t, remid, func(p *Peer) {
+	remkey := newkey()
+	remid := discover.PubkeyID(&remkey.PublicKey)
+	srv := startTestServer(t, func(p *Peer) {
 		if p.ID() != remid {
 			t.Error("peer func called with wrong node id")
 		}
@@ -98,11 +60,13 @@ func TestServerListen(t *testing.T) {
 	defer srv.Stop()
 
 	// dial the test server
-	conn, err := net.DialTimeout("tcp", srv.ListenAddr, 5*time.Second)
+	fd, err := net.DialTimeout("tcp", srv.ListenAddr, 5*time.Second)
 	if err != nil {
 		t.Fatalf("could not dial: %v", err)
 	}
-	defer conn.Close()
+	defer fd.Close()
+	conn := newDevConn(fd, remkey, &srv.PrivateKey.PublicKey)
+	conn.doProtoHandshake(&protoHandshake{Version: baseProtocolVersion, ID: remid})
 
 	select {
 	case peer := <-connected:
@@ -120,6 +84,12 @@ func TestServerListen(t *testing.T) {
 }
 
 func TestServerDial(t *testing.T) {
+	// start the server
+	connected := make(chan *Peer)
+	srv := startTestServer(t, func(p *Peer) { connected <- p })
+	defer close(connected)
+	defer srv.Stop()
+
 	// run a one-shot TCP server to handle the connection.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -127,21 +97,18 @@ func TestServerDial(t *testing.T) {
 	}
 	defer listener.Close()
 	accepted := make(chan net.Conn)
+	remkey := newkey()
+	remid := discover.PubkeyID(&remkey.PublicKey)
 	go func() {
-		conn, err := listener.Accept()
+		fd, err := listener.Accept()
 		if err != nil {
 			t.Error("accept error:", err)
 			return
 		}
-		accepted <- conn
+		accepted <- fd
+		conn := newDevConn(fd, remkey, nil)
+		conn.doProtoHandshake(&protoHandshake{Version: baseProtocolVersion, ID: remid, Name: "test"})
 	}()
-
-	// start the server
-	connected := make(chan *Peer)
-	remid := randomID()
-	srv := startTestServer(t, remid, func(p *Peer) { connected <- p })
-	defer close(connected)
-	defer srv.Stop()
 
 	// tell the server to connect
 	tcpAddr := listener.Addr().(*net.TCPAddr)
@@ -275,9 +242,8 @@ func TestServerAtCap(t *testing.T) {
 	defer srv.Stop()
 
 	newconn := func(id discover.NodeID) *conn {
-		fd, _ := net.Pipe()
-		tx := newTestTransport(id, fd)
-		return &conn{fd: fd, transport: tx, flags: inboundConn, id: id, cont: make(chan error)}
+		pipe, _ := net.Pipe()
+		return &conn{devConn: newDevConn(pipe, nil, nil), flags: inboundConn, id: id, cont: make(chan error)}
 	}
 
 	// Inject a few connections to fill up the peer set.
@@ -303,124 +269,124 @@ func TestServerAtCap(t *testing.T) {
 
 }
 
-func TestServerSetupConn(t *testing.T) {
-	id := randomID()
-	srvkey := newkey()
-	srvid := discover.PubkeyID(&srvkey.PublicKey)
-	tests := []struct {
-		dontstart bool
-		tt        *setupTransport
-		flags     connFlag
-		dialDest  *discover.Node
+// func TestServerSetupConn(t *testing.T) {
+// 	id := randomID()
+// 	srvkey := newkey()
+// 	srvid := discover.PubkeyID(&srvkey.PublicKey)
+// 	tests := []struct {
+// 		dontstart bool
+// 		tt        *setupTransport
+// 		flags     connFlag
+// 		dialDest  *discover.Node
 
-		wantCloseErr error
-		wantCalls    string
-	}{
-		{
-			dontstart:    true,
-			tt:           &setupTransport{id: id},
-			wantCalls:    "close,",
-			wantCloseErr: errServerStopped,
-		},
-		{
-			tt:           &setupTransport{id: id, encHandshakeErr: errors.New("read error")},
-			flags:        inboundConn,
-			wantCalls:    "doEncHandshake,close,",
-			wantCloseErr: errors.New("read error"),
-		},
-		{
-			tt:           &setupTransport{id: id},
-			dialDest:     &discover.Node{ID: randomID()},
-			flags:        dynDialedConn,
-			wantCalls:    "doEncHandshake,close,",
-			wantCloseErr: DiscUnexpectedIdentity,
-		},
-		{
-			tt:           &setupTransport{id: id, phs: &protoHandshake{ID: randomID()}},
-			dialDest:     &discover.Node{ID: id},
-			flags:        dynDialedConn,
-			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
-			wantCloseErr: DiscUnexpectedIdentity,
-		},
-		{
-			tt:           &setupTransport{id: id, protoHandshakeErr: errors.New("foo")},
-			dialDest:     &discover.Node{ID: id},
-			flags:        dynDialedConn,
-			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
-			wantCloseErr: errors.New("foo"),
-		},
-		{
-			tt:           &setupTransport{id: srvid, phs: &protoHandshake{ID: srvid}},
-			flags:        inboundConn,
-			wantCalls:    "doEncHandshake,close,",
-			wantCloseErr: DiscSelf,
-		},
-		{
-			tt:           &setupTransport{id: id, phs: &protoHandshake{ID: id}},
-			flags:        inboundConn,
-			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
-			wantCloseErr: DiscUselessPeer,
-		},
-	}
+// 		wantCloseErr error
+// 		wantCalls    string
+// 	}{
+// 		{
+// 			dontstart:    true,
+// 			tt:           &setupTransport{id: id},
+// 			wantCalls:    "close,",
+// 			wantCloseErr: errServerStopped,
+// 		},
+// 		{
+// 			tt:           &setupTransport{id: id, encHandshakeErr: errors.New("read error")},
+// 			flags:        inboundConn,
+// 			wantCalls:    "doEncHandshake,close,",
+// 			wantCloseErr: errors.New("read error"),
+// 		},
+// 		{
+// 			tt:           &setupTransport{id: id},
+// 			dialDest:     &discover.Node{ID: randomID()},
+// 			flags:        dynDialedConn,
+// 			wantCalls:    "doEncHandshake,close,",
+// 			wantCloseErr: DiscUnexpectedIdentity,
+// 		},
+// 		{
+// 			tt:           &setupTransport{id: id, phs: &protoHandshake{ID: randomID()}},
+// 			dialDest:     &discover.Node{ID: id},
+// 			flags:        dynDialedConn,
+// 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
+// 			wantCloseErr: DiscUnexpectedIdentity,
+// 		},
+// 		{
+// 			tt:           &setupTransport{id: id, protoHandshakeErr: errors.New("foo")},
+// 			dialDest:     &discover.Node{ID: id},
+// 			flags:        dynDialedConn,
+// 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
+// 			wantCloseErr: errors.New("foo"),
+// 		},
+// 		{
+// 			tt:           &setupTransport{id: srvid, phs: &protoHandshake{ID: srvid}},
+// 			flags:        inboundConn,
+// 			wantCalls:    "doEncHandshake,close,",
+// 			wantCloseErr: DiscSelf,
+// 		},
+// 		{
+// 			tt:           &setupTransport{id: id, phs: &protoHandshake{ID: id}},
+// 			flags:        inboundConn,
+// 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
+// 			wantCloseErr: DiscUselessPeer,
+// 		},
+// 	}
 
-	for i, test := range tests {
-		srv := &Server{
-			PrivateKey:   srvkey,
-			MaxPeers:     10,
-			NoDial:       true,
-			Protocols:    []Protocol{discard},
-			newTransport: func(fd net.Conn) transport { return test.tt },
-		}
-		if !test.dontstart {
-			if err := srv.Start(); err != nil {
-				t.Fatalf("couldn't start server: %v", err)
-			}
-		}
-		p1, _ := net.Pipe()
-		srv.setupConn(p1, test.flags, test.dialDest)
-		if !reflect.DeepEqual(test.tt.closeErr, test.wantCloseErr) {
-			t.Errorf("test %d: close error mismatch: got %q, want %q", i, test.tt.closeErr, test.wantCloseErr)
-		}
-		if test.tt.calls != test.wantCalls {
-			t.Errorf("test %d: calls mismatch: got %q, want %q", i, test.tt.calls, test.wantCalls)
-		}
-	}
-}
+// 	for i, test := range tests {
+// 		srv := &Server{
+// 			PrivateKey:   srvkey,
+// 			MaxPeers:     10,
+// 			NoDial:       true,
+// 			Protocols:    []Protocol{discard},
+// 			newTransport: func(fd net.Conn) transport { return test.tt },
+// 		}
+// 		if !test.dontstart {
+// 			if err := srv.Start(); err != nil {
+// 				t.Fatalf("couldn't start server: %v", err)
+// 			}
+// 		}
+// 		p1, _ := net.Pipe()
+// 		srv.setupConn(p1, test.flags, test.dialDest)
+// 		if !reflect.DeepEqual(test.tt.closeErr, test.wantCloseErr) {
+// 			t.Errorf("test %d: close error mismatch: got %q, want %q", i, test.tt.closeErr, test.wantCloseErr)
+// 		}
+// 		if test.tt.calls != test.wantCalls {
+// 			t.Errorf("test %d: calls mismatch: got %q, want %q", i, test.tt.calls, test.wantCalls)
+// 		}
+// 	}
+// }
 
-type setupTransport struct {
-	id              discover.NodeID
-	encHandshakeErr error
+// type setupTransport struct {
+// 	id              discover.NodeID
+// 	encHandshakeErr error
 
-	phs               *protoHandshake
-	protoHandshakeErr error
+// 	phs               *protoHandshake
+// 	protoHandshakeErr error
 
-	calls    string
-	closeErr error
-}
+// 	calls    string
+// 	closeErr error
+// }
 
-func (c *setupTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (discover.NodeID, error) {
-	c.calls += "doEncHandshake,"
-	return c.id, c.encHandshakeErr
-}
-func (c *setupTransport) doProtoHandshake(our *protoHandshake) (*protoHandshake, error) {
-	c.calls += "doProtoHandshake,"
-	if c.protoHandshakeErr != nil {
-		return nil, c.protoHandshakeErr
-	}
-	return c.phs, nil
-}
-func (c *setupTransport) close(err error) {
-	c.calls += "close,"
-	c.closeErr = err
-}
+// func (c *setupTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (discover.NodeID, error) {
+// 	c.calls += "doEncHandshake,"
+// 	return c.id, c.encHandshakeErr
+// }
+// func (c *setupTransport) doProtoHandshake(our *protoHandshake) (*protoHandshake, error) {
+// 	c.calls += "doProtoHandshake,"
+// 	if c.protoHandshakeErr != nil {
+// 		return nil, c.protoHandshakeErr
+// 	}
+// 	return c.phs, nil
+// }
+// func (c *setupTransport) close(err error) {
+// 	c.calls += "close,"
+// 	c.closeErr = err
+// }
 
-// setupConn shouldn't write to/read from the connection.
-func (c *setupTransport) WriteMsg(Msg) error {
-	panic("WriteMsg called on setupTransport")
-}
-func (c *setupTransport) ReadMsg() (Msg, error) {
-	panic("ReadMsg called on setupTransport")
-}
+// // setupConn shouldn't write to/read from the connection.
+// func (c *setupTransport) WriteMsg(Msg) error {
+// 	panic("WriteMsg called on setupTransport")
+// }
+// func (c *setupTransport) ReadMsg() (Msg, error) {
+// 	panic("ReadMsg called on setupTransport")
+// }
 
 func newkey() *ecdsa.PrivateKey {
 	key, err := crypto.GenerateKey()
