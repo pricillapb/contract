@@ -61,10 +61,10 @@ type protoHandshake struct {
 
 // Peer represents a connected remote node.
 type Peer struct {
-	conn *conn
 	// contains an element for each running subprotocol (excluding devp2p).
 	running []*protoRW
 
+	conn     *conn
 	wg       sync.WaitGroup
 	protoErr chan error
 	closed   chan struct{}
@@ -76,7 +76,7 @@ func NewPeer(id discover.NodeID, name string, caps []Cap) *Peer {
 	pipe, _ := net.Pipe()
 	randomPriv, _ := crypto.GenerateKey()
 	dc := newDevConn(pipe, randomPriv, nil)
-	conn := &conn{devConn: dc, id: id, caps: caps, name: name}
+	conn := &conn{transport: dc, id: id, caps: caps, name: name}
 	peer := newPeer(conn, nil)
 	close(peer.closed) // ensures Disconnect doesn't block
 	return peer
@@ -140,13 +140,17 @@ func (p *Peer) run() DiscReason {
 		readErr   = make(chan error, 1)
 		reason    DiscReason
 		requested bool
+		// While most of the code works with the transport interface so it
+		// can be tested, using the connection requires an actual
+		// *devConn.
+		devconn = p.conn.transport.(*devConn)
 	)
 	p.wg.Add(2)
-	go p.readLoop(readErr)
-	go p.pingLoop()
+	go p.readLoop(devconn.protocols[0], readErr)
+	go p.pingLoop(devconn.protocols[0])
 
 	// Start all protocol handlers.
-	p.startProtocols(writeErr)
+	p.startProtocols(devconn, writeErr)
 
 	// Wait for an error or disconnect.
 loop:
@@ -189,8 +193,7 @@ loop:
 	return reason
 }
 
-func (p *Peer) pingLoop() {
-	devp2p := p.conn.protocols[0]
+func (p *Peer) pingLoop(devp2p *devProtocol) {
 	ping := time.NewTicker(pingInterval)
 	defer p.wg.Done()
 	defer ping.Stop()
@@ -207,9 +210,8 @@ func (p *Peer) pingLoop() {
 	}
 }
 
-func (p *Peer) readLoop(errc chan<- error) {
+func (p *Peer) readLoop(devp2p *devProtocol, errc chan<- error) {
 	defer p.wg.Done()
-	devp2p := p.conn.protocols[0]
 	for {
 		msg, err := devp2p.ReadMsg()
 		if err != nil {
@@ -295,16 +297,20 @@ outer:
 	return result
 }
 
-func (p *Peer) startProtocols(writeErr chan<- error) {
+func (p *Peer) startProtocols(dc *devConn, writeErr chan<- error) {
+	// Acknowledge the protocols on the RLPx layer. This creates
+	// *devProtocol wrappers, dc.protocols[i] contains entries for in
+	// range 1..len(p.running).
+	dc.addProtocols(len(p.running))
+
 	p.wg.Add(len(p.running))
-	p.conn.addProtocols(len(p.running))
 	for i, proto := range p.running {
 		// Initialize the channels.
 		proto := proto
 		proto.in = make(chan Msg)
 		proto.closed = p.closed
 		proto.werr = writeErr
-		proto.rw = p.conn.protocols[i+1]
+		proto.rw = dc.protocols[i+1]
 		// Launch proto.Run
 		glog.V(logger.Detail).Infof("%v: Starting protocol %s/%d\n", p, proto.Name, proto.Version)
 		go func() {

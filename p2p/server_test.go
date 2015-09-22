@@ -18,6 +18,7 @@ package p2p
 
 import (
 	"crypto/ecdsa"
+	"errors"
 	"math/rand"
 	"net"
 	"reflect"
@@ -28,13 +29,14 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/discover"
 )
 
-func startTestServer(t *testing.T, pf func(*Peer)) *Server {
+func startTestServer(t *testing.T, trustedNodes []*discover.Node, pf func(*Peer) DiscReason) *Server {
 	server := &Server{
-		Name:        "test",
-		MaxPeers:    10,
-		ListenAddr:  "127.0.0.1:0",
-		PrivateKey:  newkey(),
-		newPeerHook: pf,
+		Name:            "test",
+		MaxPeers:        10,
+		ListenAddr:      "127.0.0.1:0",
+		PrivateKey:      newkey(),
+		TrustedNodes:    trustedNodes,
+		peerRunFunction: pf,
 	}
 	if err := server.Start(); err != nil {
 		t.Fatalf("Could not start server: %v", err)
@@ -47,7 +49,8 @@ func TestServerListen(t *testing.T) {
 	connected := make(chan *Peer)
 	remkey := newkey()
 	remid := discover.PubkeyID(&remkey.PublicKey)
-	srv := startTestServer(t, func(p *Peer) {
+	quitPeers := make(chan struct{})
+	srv := startTestServer(t, nil, func(p *Peer) DiscReason {
 		if p.ID() != remid {
 			t.Error("peer func called with wrong node id")
 		}
@@ -55,9 +58,12 @@ func TestServerListen(t *testing.T) {
 			t.Error("peer func called with nil conn")
 		}
 		connected <- p
+		<-quitPeers
+		return DiscQuitting
 	})
 	defer close(connected)
 	defer srv.Stop()
+	defer close(quitPeers)
 
 	// dial the test server
 	fd, err := net.DialTimeout("tcp", srv.ListenAddr, 5*time.Second)
@@ -86,9 +92,15 @@ func TestServerListen(t *testing.T) {
 func TestServerDial(t *testing.T) {
 	// start the server
 	connected := make(chan *Peer)
-	srv := startTestServer(t, func(p *Peer) { connected <- p })
+	quitPeers := make(chan struct{})
+	srv := startTestServer(t, nil, func(p *Peer) DiscReason {
+		connected <- p
+		<-quitPeers
+		return DiscQuitting
+	})
 	defer close(connected)
 	defer srv.Stop()
+	defer close(quitPeers)
 
 	// run a one-shot TCP server to handle the connection.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -230,20 +242,21 @@ func (t *testTask) Do(srv *Server) {
 // at capacity. Trusted connections should still be accepted.
 func TestServerAtCap(t *testing.T) {
 	trustedID := randomID()
-	srv := &Server{
-		PrivateKey:   newkey(),
-		MaxPeers:     10,
-		NoDial:       true,
-		TrustedNodes: []*discover.Node{{ID: trustedID}},
-	}
-	if err := srv.Start(); err != nil {
-		t.Fatalf("could not start: %v", err)
-	}
+	quitPeers := make(chan struct{})
+	srv := startTestServer(t, []*discover.Node{{ID: trustedID}}, func(*Peer) DiscReason {
+		<-quitPeers
+		return DiscQuitting
+	})
 	defer srv.Stop()
+	defer close(quitPeers)
 
 	newconn := func(id discover.NodeID) *conn {
-		pipe, _ := net.Pipe()
-		return &conn{devConn: newDevConn(pipe, nil, nil), flags: inboundConn, id: id, cont: make(chan error)}
+		return &conn{
+			transport: &fakeTransport{id: id},
+			flags:     inboundConn,
+			id:        id,
+			cont:      make(chan error),
+		}
 	}
 
 	// Inject a few connections to fill up the peer set.
@@ -266,127 +279,126 @@ func TestServerAtCap(t *testing.T) {
 	if !c.is(trustedConn) {
 		t.Error("Server did not set trusted flag")
 	}
-
 }
 
-// func TestServerSetupConn(t *testing.T) {
-// 	id := randomID()
-// 	srvkey := newkey()
-// 	srvid := discover.PubkeyID(&srvkey.PublicKey)
-// 	tests := []struct {
-// 		dontstart bool
-// 		tt        *setupTransport
-// 		flags     connFlag
-// 		dialDest  *discover.Node
+func TestServerSetupConn(t *testing.T) {
+	remkey, srvkey := newkey(), newkey()
+	id := discover.PubkeyID(&remkey.PublicKey)
+	srvid := discover.PubkeyID(&srvkey.PublicKey)
+	tests := []struct {
+		dontstart bool
+		tt        *fakeTransport
+		flags     connFlag
+		dialDest  *discover.Node
 
-// 		wantCloseErr error
-// 		wantCalls    string
-// 	}{
-// 		{
-// 			dontstart:    true,
-// 			tt:           &setupTransport{id: id},
-// 			wantCalls:    "close,",
-// 			wantCloseErr: errServerStopped,
-// 		},
-// 		{
-// 			tt:           &setupTransport{id: id, encHandshakeErr: errors.New("read error")},
-// 			flags:        inboundConn,
-// 			wantCalls:    "doEncHandshake,close,",
-// 			wantCloseErr: errors.New("read error"),
-// 		},
-// 		{
-// 			tt:           &setupTransport{id: id},
-// 			dialDest:     &discover.Node{ID: randomID()},
-// 			flags:        dynDialedConn,
-// 			wantCalls:    "doEncHandshake,close,",
-// 			wantCloseErr: DiscUnexpectedIdentity,
-// 		},
-// 		{
-// 			tt:           &setupTransport{id: id, phs: &protoHandshake{ID: randomID()}},
-// 			dialDest:     &discover.Node{ID: id},
-// 			flags:        dynDialedConn,
-// 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
-// 			wantCloseErr: DiscUnexpectedIdentity,
-// 		},
-// 		{
-// 			tt:           &setupTransport{id: id, protoHandshakeErr: errors.New("foo")},
-// 			dialDest:     &discover.Node{ID: id},
-// 			flags:        dynDialedConn,
-// 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
-// 			wantCloseErr: errors.New("foo"),
-// 		},
-// 		{
-// 			tt:           &setupTransport{id: srvid, phs: &protoHandshake{ID: srvid}},
-// 			flags:        inboundConn,
-// 			wantCalls:    "doEncHandshake,close,",
-// 			wantCloseErr: DiscSelf,
-// 		},
-// 		{
-// 			tt:           &setupTransport{id: id, phs: &protoHandshake{ID: id}},
-// 			flags:        inboundConn,
-// 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
-// 			wantCloseErr: DiscUselessPeer,
-// 		},
-// 	}
+		wantCloseErr error
+		wantCalls    string
+	}{
+		{
+			dontstart:    true,
+			tt:           &fakeTransport{id: id},
+			wantCalls:    "close,",
+			wantCloseErr: errServerStopped,
+		},
+		{
+			tt:           &fakeTransport{id: id, encHandshakeErr: errors.New("read error")},
+			flags:        inboundConn,
+			wantCalls:    "doEncHandshake,close,",
+			wantCloseErr: errors.New("read error"),
+		},
+		{
+			tt:           &fakeTransport{id: id},
+			dialDest:     &discover.Node{ID: randomID()},
+			flags:        dynDialedConn,
+			wantCalls:    "doEncHandshake,close,",
+			wantCloseErr: DiscUnexpectedIdentity,
+		},
+		{
+			tt:           &fakeTransport{id: id, phs: &protoHandshake{ID: randomID()}},
+			dialDest:     &discover.Node{ID: id},
+			flags:        dynDialedConn,
+			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
+			wantCloseErr: DiscUnexpectedIdentity,
+		},
+		{
+			tt:           &fakeTransport{id: id, protoHandshakeErr: errors.New("foo")},
+			dialDest:     &discover.Node{ID: id},
+			flags:        dynDialedConn,
+			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
+			wantCloseErr: errors.New("foo"),
+		},
+		{
+			tt:           &fakeTransport{id: srvid, phs: &protoHandshake{ID: srvid}},
+			flags:        inboundConn,
+			wantCalls:    "doEncHandshake,close,",
+			wantCloseErr: DiscSelf,
+		},
+		{
+			tt:           &fakeTransport{id: id, phs: &protoHandshake{ID: id}},
+			flags:        inboundConn,
+			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
+			wantCloseErr: DiscUselessPeer,
+		},
+	}
 
-// 	for i, test := range tests {
-// 		srv := &Server{
-// 			PrivateKey:   srvkey,
-// 			MaxPeers:     10,
-// 			NoDial:       true,
-// 			Protocols:    []Protocol{discard},
-// 			newTransport: func(fd net.Conn) transport { return test.tt },
-// 		}
-// 		if !test.dontstart {
-// 			if err := srv.Start(); err != nil {
-// 				t.Fatalf("couldn't start server: %v", err)
-// 			}
-// 		}
-// 		p1, _ := net.Pipe()
-// 		srv.setupConn(p1, test.flags, test.dialDest)
-// 		if !reflect.DeepEqual(test.tt.closeErr, test.wantCloseErr) {
-// 			t.Errorf("test %d: close error mismatch: got %q, want %q", i, test.tt.closeErr, test.wantCloseErr)
-// 		}
-// 		if test.tt.calls != test.wantCalls {
-// 			t.Errorf("test %d: calls mismatch: got %q, want %q", i, test.tt.calls, test.wantCalls)
-// 		}
-// 	}
-// }
+	for i, test := range tests {
+		srv := &Server{
+			PrivateKey: srvkey,
+			MaxPeers:   10,
+			NoDial:     true,
+			Protocols:  []Protocol{discard},
+		}
+		if !test.dontstart {
+			if err := srv.Start(); err != nil {
+				t.Fatalf("couldn't start server: %v", err)
+			}
+		}
+		srv.setupConn(test.tt, test.flags, test.dialDest)
+		if !reflect.DeepEqual(test.tt.closeErr, test.wantCloseErr) {
+			t.Errorf("test %d: close error mismatch: got %q, want %q", i, test.tt.closeErr, test.wantCloseErr)
+		}
+		if test.tt.calls != test.wantCalls {
+			t.Errorf("test %d: calls mismatch: got %q, want %q", i, test.tt.calls, test.wantCalls)
+		}
+	}
+}
 
-// type setupTransport struct {
-// 	id              discover.NodeID
-// 	encHandshakeErr error
+type fakeTransport struct {
+	id              discover.NodeID
+	encHandshakeErr error
 
-// 	phs               *protoHandshake
-// 	protoHandshakeErr error
+	phs               *protoHandshake
+	protoHandshakeErr error
 
-// 	calls    string
-// 	closeErr error
-// }
+	calls    string
+	closeErr error
+}
 
-// func (c *setupTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (discover.NodeID, error) {
-// 	c.calls += "doEncHandshake,"
-// 	return c.id, c.encHandshakeErr
-// }
-// func (c *setupTransport) doProtoHandshake(our *protoHandshake) (*protoHandshake, error) {
-// 	c.calls += "doProtoHandshake,"
-// 	if c.protoHandshakeErr != nil {
-// 		return nil, c.protoHandshakeErr
-// 	}
-// 	return c.phs, nil
-// }
-// func (c *setupTransport) close(err error) {
-// 	c.calls += "close,"
-// 	c.closeErr = err
-// }
-
-// // setupConn shouldn't write to/read from the connection.
-// func (c *setupTransport) WriteMsg(Msg) error {
-// 	panic("WriteMsg called on setupTransport")
-// }
-// func (c *setupTransport) ReadMsg() (Msg, error) {
-// 	panic("ReadMsg called on setupTransport")
-// }
+func (c *fakeTransport) Handshake() error {
+	c.calls += "doEncHandshake,"
+	return c.encHandshakeErr
+}
+func (c *fakeTransport) doProtoHandshake(our *protoHandshake) (*protoHandshake, error) {
+	c.calls += "doProtoHandshake,"
+	if c.protoHandshakeErr != nil {
+		return nil, c.protoHandshakeErr
+	}
+	return c.phs, nil
+}
+func (c *fakeTransport) close(err error) {
+	c.calls += "close,"
+	c.closeErr = err
+}
+func (c *fakeTransport) RemoteID() *ecdsa.PublicKey {
+	key, _ := c.id.Pubkey()
+	return key
+}
+func (c *fakeTransport) RemoteAddr() net.Addr {
+	return &net.TCPAddr{Port: 33, IP: net.IP{0, 0, 0, 1}}
+}
+func (c *fakeTransport) LocalAddr() net.Addr {
+	return &net.TCPAddr{Port: 44, IP: net.IP{0, 0, 0, 2}}
+}
 
 func newkey() *ecdsa.PrivateKey {
 	key, err := crypto.GenerateKey()

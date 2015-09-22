@@ -48,7 +48,7 @@ var discard = Protocol{
 func testPeer(protos []Protocol) (*devConn, *Peer, <-chan DiscReason) {
 	fd1, fd2 := net.Pipe()
 	k1, k2 := newkey(), newkey()
-	c1 := &conn{devConn: newDevConn(fd1, k1, &k2.PublicKey)}
+	c1 := &conn{transport: newDevConn(fd1, k1, &k2.PublicKey)}
 	for _, p := range protos {
 		c1.caps = append(c1.caps, p.cap())
 	}

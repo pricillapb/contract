@@ -123,7 +123,7 @@ type Server struct {
 
 	// Hooks for testing. These are useful because we can inhibit
 	// the whole protocol stack.
-	newPeerHook func(*Peer)
+	peerRunFunction func(*Peer) DiscReason
 
 	lock    sync.Mutex // protects running
 	running bool
@@ -156,10 +156,22 @@ const (
 	trustedConn
 )
 
+// used in place of devConn so server tests can substitute a mock.
+type transport interface {
+	// devConn
+	doProtoHandshake(our *protoHandshake) (their *protoHandshake, err error)
+	close(err error)
+	// rlpx.Conn
+	Handshake() error
+	RemoteAddr() net.Addr
+	LocalAddr() net.Addr
+	RemoteID() *ecdsa.PublicKey
+}
+
 // conn wraps a network connection with information gathered
 // during the two handshakes.
 type conn struct {
-	*devConn
+	transport
 	id    discover.NodeID
 	flags connFlag
 	cont  chan error // The run loop uses cont to signal errors to setupConn.
@@ -486,7 +498,7 @@ running:
 	}
 	// Disconnect all peers.
 	for _, p := range peers {
-		p.Disconnect(DiscQuitting)
+		p.conn.close(DiscQuitting)
 	}
 	// Wait for peers to shut down. Pending connections and tasks are
 	// not handled here and will terminate soon-ish because srv.quit
@@ -578,12 +590,12 @@ func (srv *Server) listenLoop() {
 // setupConn runs the handshakes and attempts to add the connection
 // as a peer. It returns when the connection has been added as a peer
 // or the handshakes have failed.
-func (srv *Server) setupConn(dc *devConn, flags connFlag, dialDest *discover.Node) {
+func (srv *Server) setupConn(t transport, flags connFlag, dialDest *discover.Node) {
 	// Prevent leftover pending conns from entering the handshake.
 	srv.lock.Lock()
 	running := srv.running
 	srv.lock.Unlock()
-	c := &conn{devConn: dc, flags: flags, cont: make(chan error)}
+	c := &conn{transport: t, flags: flags, cont: make(chan error)}
 	if !running {
 		c.close(errServerStopped)
 		return
@@ -656,15 +668,17 @@ func (srv *Server) runPeer(p *Peer) {
 		NumConnections:      srv.PeerCount(),
 	})
 
-	if srv.newPeerHook != nil {
-		srv.newPeerHook(p)
+	var reason DiscReason
+	if srv.peerRunFunction != nil {
+		reason = srv.peerRunFunction(p)
+	} else {
+		reason = p.run()
 	}
-	discreason := p.run()
 	// Note: run waits for existing peers to be sent on srv.delpeer
 	// before returning, so this send should not select on srv.quit.
 	srv.delpeer <- p
 
-	glog.V(logger.Debug).Infof("Removed %v (%v)\n", p, discreason)
+	glog.V(logger.Debug).Infof("Removed %v (%v)\n", p, reason)
 	srvjslog.LogJson(&logger.P2PDisconnected{
 		RemoteId:       p.ID().String(),
 		NumConnections: srv.PeerCount(),
