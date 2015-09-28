@@ -33,6 +33,7 @@ package rlpx
 import (
 	"crypto/ecdsa"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -233,18 +234,55 @@ func (p *Protocol) ReadPacket() (len uint32, r io.Reader, err error) {
 
 // SendPacket sends len bytes from the payload reader on the connection.
 func (p *Protocol) SendPacket(len uint32, payload io.Reader) error {
-	// Grab the protocol lock to ensure that messages in the
-	// protocol are sent one at a time.
-	// TODO: remove
 	if err := p.c.Handshake(); err != nil {
 		return err
 	}
-	p.wmu.Lock()
-	defer p.wmu.Unlock()
-	if len <= staticFrameSize { // or old RLPx version
-		return p.c.sendFrame(regularHeader{p.id, 0}, payload, len)
+	if len <= staticFrameSize {
+		// The message is small enough and can be sent in a single frame.
+		buf := makeFrameWriteBuffer()
+		if n, err := io.CopyN(buf, payload, int64(len)); err != nil {
+			return fmt.Errorf("read from packet payload failed at pos %d: %v", n, err)
+		}
+		return p.c.sendFrame(regularHeader{p.id, 0}, buf)
 	}
 	return p.sendChunked(len, payload)
+}
+
+func (p *Protocol) sendChunked(totalsize uint32, payload io.Reader) error {
+	contextid := p.nextContextID()
+	size := totalsize
+	initial := true
+	buf := makeFrameWriteBuffer()
+	for seq := uint16(0); size > 0; seq++ {
+		var header interface{}
+		if initial {
+			header = chunkStartHeader{p.id, contextid, totalsize}
+			initial = false
+		} else {
+			header = regularHeader{p.id, contextid}
+		}
+
+		fsize := staticFrameSize
+		if totalsize < fsize {
+			fsize = totalsize
+		}
+		size -= fsize
+		if !initial {
+			buf.reset()
+		}
+		if n, err := io.CopyN(buf, payload, int64(fsize)); err != nil {
+			// The remote end is waiting for the rest of the packet
+			// but we can't provide it. Since there is no way to cancel
+			// partial transfers, our only option is closing the connection.
+			// TODO: close the connection
+			rpos := size - uint32(n)
+			return fmt.Errorf("read from packet payload failed at pos %d: %v", rpos, err)
+		}
+		if err := p.c.sendFrame(header, buf); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // returns the next context ID for a chunked transfer.
@@ -254,32 +292,8 @@ func (p *Protocol) nextContextID() uint16 {
 	return p.contextidSeq
 }
 
-func (p *Protocol) sendChunked(totalsize uint32, body io.Reader) error {
-	contextid := p.nextContextID()
-	size := totalsize
-	initial := true
-	for seq := uint16(0); size > 0; seq++ {
-		fsize := staticFrameSize
-		if totalsize < fsize {
-			fsize = totalsize
-		}
-		size -= fsize
-		var header interface{}
-		if initial {
-			header = chunkStartHeader{p.id, contextid, totalsize}
-			initial = false
-		} else {
-			header = regularHeader{p.id, contextid}
-		}
-		if err := p.c.sendFrame(header, body, fsize); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *Conn) sendFrame(header interface{}, body io.Reader, size uint32) error {
+func (c *Conn) sendFrame(header interface{}, body *frameBuffer) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	return c.rw.sendFrame(header, body, size)
+	return c.rw.sendFrame(header, body)
 }

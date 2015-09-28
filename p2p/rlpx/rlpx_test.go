@@ -55,11 +55,62 @@ func TestConcurrentTransfer(t *testing.T) {
 	})
 }
 
+func TestConcurrentTransferReadError(t *testing.T) {
+	var (
+		p1, p2        = net.Pipe()
+		k1, k2        = newkey(), newkey()
+		sc            = Server(p1, &Config{k1})
+		cc            = Client(p2, &k1.PublicKey, &Config{Key: k2})
+		badPacketSize = uint32(16 * 8 * 1024)
+	)
+	run(t, rig{
+		"client": func() error { return testProtoWriters(t, sc, 10) },
+		"server": func() error { return testProtoReaders(t, cc, 10) },
+
+		// This sends a bad frame after a two sane ones.
+		"badFrameWrite": func() error {
+			if err := cc.Handshake(); err != nil {
+				return fmt.Errorf("handshake error: %v", err)
+			}
+			heads := []interface{}{
+				chunkStartHeader{Protocol: 11, ContextID: 1, TotalSize: badPacketSize},
+				regularHeader{Protocol: 11, ContextID: 1},
+				// The bad frame is a chunk start header with a context id
+				// that is already in use.
+				chunkStartHeader{Protocol: 11, ContextID: 1, TotalSize: 22},
+			}
+			for i, h := range heads {
+				buf := makeFrameWriteBuffer()
+				buf.Write(make([]byte, 1024))
+				if err := cc.sendFrame(h, buf); err != nil {
+					return fmt.Errorf("error sending frame %d: %v", i, err)
+				}
+			}
+			return nil
+		},
+
+		// The other end should receive an error from Read.
+		"badFrameRead": func() error {
+			proto := sc.Protocol(11)
+			_, r, err := proto.ReadPacket()
+			if err != nil {
+				return fmt.Errorf("unexpected ReadPacket error: %v", err)
+			}
+			_, err = io.CopyN(ioutil.Discard, r, int64(badPacketSize))
+			if err == nil {
+				return fmt.Errorf("no error received")
+			}
+			if err != errUnexpectedChunkStart {
+				return fmt.Errorf("wrong error: got %q want %q", err, errUnexpectedChunkStart)
+			}
+			// TODO: shouldn't all transfers fail?
+			return nil
+		},
+	})
+}
+
 func testProtoWriters(t *testing.T, conn *Conn, nprotos uint16) error {
 	defer conn.Close()
-	if err := conn.Handshake(); err != nil {
-		return fmt.Errorf("handshake error: %v", err)
-	}
 	writers := rig{}
 	for i := uint16(0); i < nprotos; i++ {
 		i := i
@@ -71,9 +122,6 @@ func testProtoWriters(t *testing.T, conn *Conn, nprotos uint16) error {
 
 func testProtoReaders(t *testing.T, conn *Conn, nprotos uint16) error {
 	defer conn.Close()
-	if err := conn.Handshake(); err != nil {
-		return fmt.Errorf("handshake error: %v", err)
-	}
 	readers := rig{}
 	for i := uint16(0); i < nprotos; i++ {
 		i := i

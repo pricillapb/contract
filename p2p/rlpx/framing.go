@@ -27,19 +27,22 @@ import (
 	"io"
 	"sync"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
-func init() {
-	spew.Config.DisableMethods = true
-}
-
-const staticFrameSize uint32 = 8 * 1024
+const (
+	staticFrameSize     uint32 = 8 * 1024
+	frameHeaderSize            = 16 // encoded header
+	frameHeaderFullSize        = 32 // encoded header + MAC
+)
 
 var zero16 = make([]byte, 16)
 
-var ErrProtocolClaimTimeout = errors.New("protocol for pending message was not claimed in time")
+var (
+	ErrProtocolClaimTimeout = errors.New("protocol for pending message was not claimed in time")
+	errUnexpectedChunkStart = errors.New("received chunk start header for existing transfer")
+	errChunkTooLarge        = errors.New("chunk size larger than remaining message size")
+)
 
 // readLoop runs in its own goroutine for each connection,
 // dispatching frames to protocols.
@@ -81,7 +84,7 @@ func readLoop(c *Conn) (err error) {
 		if cr := p.xfers[hdr.contextID]; cr != nil {
 			// existing chunked transfer
 			if hdr.chunkStart {
-				return fmt.Errorf("received chunk start header for active transfer")
+				return errUnexpectedChunkStart
 			}
 			end, err := cr.feed(body)
 			if end {
@@ -184,7 +187,7 @@ func (cr *chunkedReader) feed(body *bytes.Buffer) (bool, error) {
 	defer cr.cond.L.Unlock()
 	ulen := uint32(body.Len())
 	if ulen > cr.bufN {
-		cr.err = fmt.Errorf("chunk size larger than remaining message size")
+		cr.err = errChunkTooLarge
 		cr.cond.Signal() // wake up Read
 		return true, cr.err
 	}
@@ -248,7 +251,6 @@ type frameRW struct {
 	conn      io.ReadWriter
 	macCipher cipher.Block
 
-	wbuf      bytes.Buffer
 	enc       cipher.Stream
 	egressMAC hash.Hash
 
@@ -280,30 +282,37 @@ func newFrameRW(conn io.ReadWriter, s secrets) *frameRW {
 	}
 }
 
-func (rw *frameRW) sendFrame(hdr interface{}, body io.Reader, size uint32) error {
-	if size > maxUint24 {
+// sends a frame on the connection. the body buffer must placeholder bytes
+// for the encoded frame header and its MAC.
+func (rw *frameRW) sendFrame(hdr interface{}, body *frameBuffer) error {
+	wbuf := *body
+	usize := uint32(len(wbuf))
+	if usize < frameHeaderFullSize {
+		panic(fmt.Sprintf("invalid body buffer, size < %d", frameHeaderFullSize))
+	}
+	if usize-frameHeaderFullSize > maxUint24 {
 		return errors.New("frame size overflows uint24")
 	}
-	rw.wbuf.Reset()
 
 	// Write and encrypt the frame header to the buffer.
-	rw.wbuf.Write(zero16[:3])
-	putInt24(rw.wbuf.Bytes(), size)
-	rlp.Encode(&rw.wbuf, hdr)
-	pad16(&rw.wbuf)
-	rw.enc.XORKeyStream(rw.wbuf.Bytes(), rw.wbuf.Bytes())
-	rw.wbuf.Write(updateMAC(rw.egressMAC, rw.macCipher, rw.wbuf.Bytes()))
+	headbuf := wbuf[:frameHeaderSize]
+	putInt24(headbuf, usize-frameHeaderFullSize)
+	headbufAfterSize := headbuf[3:3]
+	rlp.Encode(&headbufAfterSize, hdr)
+	rw.enc.XORKeyStream(headbuf, headbuf)
+	copy(wbuf[frameHeaderSize:], updateMAC(rw.egressMAC, rw.macCipher, headbuf))
 
 	// Write and encrypt frame data to the buffer.
-	io.CopyN(&rw.wbuf, body, int64(size))
-	pad16(&rw.wbuf)
-	rw.enc.XORKeyStream(rw.wbuf.Bytes()[32:], rw.wbuf.Bytes()[32:])
-	rw.egressMAC.Write(rw.wbuf.Bytes()[32:])
+	wbuf.pad16()
+	rw.enc.XORKeyStream(wbuf[frameHeaderFullSize:], wbuf[frameHeaderFullSize:])
+	rw.egressMAC.Write(wbuf[frameHeaderFullSize:])
 	fmacseed := rw.egressMAC.Sum(nil)
-	rw.wbuf.Write(updateMAC(rw.egressMAC, rw.macCipher, fmacseed))
+	wbuf = append(wbuf, zero16...)
+	copy(wbuf[len(wbuf)-16:], updateMAC(rw.egressMAC, rw.macCipher, fmacseed))
 
 	// Send the whole buffered frame on the socket.
-	_, err := io.Copy(rw.conn, &rw.wbuf)
+	_, err := rw.conn.Write(wbuf)
+	*body = wbuf
 	return err
 }
 
@@ -362,6 +371,34 @@ func updateMAC(mac hash.Hash, block cipher.Block, seed []byte) []byte {
 	}
 	mac.Write(aesbuf)
 	return mac.Sum(nil)[:16]
+}
+
+type frameBuffer []byte
+
+func makeFrameWriteBuffer() *frameBuffer {
+	buf := make(frameBuffer, frameHeaderFullSize, frameHeaderFullSize+staticFrameSize)
+	return &buf
+}
+
+// reset truncates the buffer so it contains just enough space for an
+// encoded frame header. it must be called before writing payload content
+// for a new frame.
+func (buf *frameBuffer) reset() {
+	*buf = (*buf)[:frameHeaderFullSize]
+	for i := range *buf {
+		(*buf)[i] = 0
+	}
+}
+
+func (buf *frameBuffer) Write(s []byte) (n int, err error) {
+	*buf = append(*buf, s...)
+	return len(s), nil
+}
+
+func (buf *frameBuffer) pad16() {
+	if padding := len(*buf) % 16; padding > 0 {
+		*buf = append(*buf, zero16[:16-padding]...)
+	}
 }
 
 func readInt24(b []byte) uint32 {

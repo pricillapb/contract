@@ -92,8 +92,10 @@ ba628a4ba590cb43f7848f41c4382885
 `)
 	body := unhex(`08C401020304`)
 
-	// Check sendFrame. This puts a message into the buffer.
-	if err := rw.sendFrame(regularHeader{0, 0}, bytes.NewReader(body), uint32(len(body))); err != nil {
+	// Check sendFrame. This encodes the frame to buf.
+	fwbuf := makeFrameWriteBuffer()
+	fwbuf.Write(body)
+	if err := rw.sendFrame(regularHeader{0, 0}, fwbuf); err != nil {
 		t.Fatalf("sendFrame error: %v", err)
 	}
 	written := buf.Bytes()
@@ -101,8 +103,8 @@ ba628a4ba590cb43f7848f41c4382885
 		t.Fatalf("output mismatch:\n  got:  %x\n  want: %x", written, golden)
 	}
 
-	// Check ReadMsg. It reads the message encoded by WriteMsg, which
-	// is equivalent to the golden message above.
+	// Check readFrame. It reads the message encoded by sendFrame, which
+	// must be equivalent to the golden message above.
 	hdr, bodybuf, err := rw.readFrame()
 	if err != nil {
 		t.Fatalf("ReadMsg error: %v", err)
