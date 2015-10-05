@@ -70,7 +70,6 @@ func readLoop(c *Conn) (err error) {
 		if err != nil {
 			return err
 		}
-
 		// Grab the protocol, checking the local cache before
 		// interacting with the claims machinery in Conn.
 		p := proto[hdr.protocol]
@@ -132,7 +131,7 @@ type chunkedReader struct {
 	cond        *sync.Cond
 	bufs        []*bytes.Buffer
 	err         error
-	readN, bufN uint32
+	readN, bufN uint32 // how much still needs to be read/buffered
 }
 
 func newChunkedReader(len uint32) *chunkedReader {
@@ -143,36 +142,61 @@ func (cr *chunkedReader) Read(rslice []byte) (int, error) {
 	cr.cond.L.Lock()
 	defer cr.cond.L.Unlock()
 
-	// Wait for the next frame to be read.
+	if err := cr.waitFrame(); err != nil {
+		return 0, err
+	}
+	nn := 0
+	for _, buf := range cr.bufs {
+		n, _ := buf.Read(rslice[nn:])
+		nn += n
+		if nn == len(rslice) {
+			break
+		}
+	}
+	cr.readN -= uint32(nn)
+	cr.removeDrainedBuffers()
+	return nn, nil
+}
+
+func (cr *chunkedReader) ReadByte() (byte, error) {
+	cr.cond.L.Lock()
+	defer cr.cond.L.Unlock()
+
+	if err := cr.waitFrame(); err != nil {
+		return 0, err
+	}
+	// TODO: make sure that frames are always non-empty.
+	b, _ := cr.bufs[0].ReadByte()
+	cr.removeDrainedBuffers()
+	return b, nil
+}
+
+// blocks until at least one frame is available
+func (cr *chunkedReader) waitFrame() error {
 	for {
 		if cr.err != nil {
-			return 0, cr.err
+			return cr.err
 		}
 		if cr.readN == 0 {
-			return 0, io.EOF
+			return io.EOF
 		}
 		if len(cr.bufs) > 0 {
 			break
 		}
 		cr.cond.Wait()
 	}
-	// Read content from the buffers that appeared.
-	nn := 0
+	return nil
+}
+
+func (cr *chunkedReader) removeDrainedBuffers() {
 	drained := 0
 	for _, buf := range cr.bufs {
-		n, _ := buf.Read(rslice[nn:])
-		nn += n
-		if buf.Len() == 0 {
-			drained++
-		}
-		if n == 0 {
+		if buf.Len() != 0 {
 			break
 		}
+		drained++
 	}
-	cr.readN -= uint32(nn)
-	// Remove drained buffers.
 	cr.bufs = cr.bufs[:copy(cr.bufs, cr.bufs[drained:])]
-	return nn, nil
 }
 
 func (cr *chunkedReader) close(err error) {
