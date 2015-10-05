@@ -137,7 +137,8 @@ func (p *devProtocol) WriteMsg(msg Msg) error {
 	if msg.Size > math.MaxUint32-uint32(codelen) {
 		return errMsgTooBig
 	}
-	return p.p.SendPacket(msg.Size+uint32(codelen), io.MultiReader(code, msg.Payload))
+	plen := msg.Size + uint32(codelen)
+	return p.p.SendPacket(plen, io.MultiReader(code, msg.Payload))
 }
 
 func (p *devProtocol) ReadMsg() (msg Msg, err error) {
@@ -145,11 +146,17 @@ func (p *devProtocol) ReadMsg() (msg Msg, err error) {
 	if err != nil {
 		return msg, err
 	}
-	if err := rlp.Decode(r, &msg.Code); err != nil {
+	// Parse the message code, which is prepended to the protocol payload.
+	// r must be recognized as buffered by package rlp to prevent it from
+	// reading into the payload. The interface assertion ensures that it is.
+	// The input limit is 9, which is as large as an encoded uint64 can get.
+	s := rlp.NewStream(r.(rlp.ByteReader), 9)
+	if err := s.Decode(&msg.Code); err != nil {
 		return msg, err
 	}
+	// Remaining data in r belongs to the protocol.
 	msg.Payload = r
-	msg.Size = len - uint32(rlp.IntSize(uint64(len)))
+	msg.Size = len - uint32(rlp.IntSize(msg.Code))
 	msg.ReceivedAt = time.Now()
 	return msg, nil
 }
