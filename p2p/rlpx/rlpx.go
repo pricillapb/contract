@@ -248,25 +248,24 @@ func (p *Protocol) SendPacket(len uint32, payload io.Reader) error {
 	return p.sendChunked(len, payload)
 }
 
-func (p *Protocol) sendChunked(totalsize uint32, payload io.Reader) error {
+func (p *Protocol) sendChunked(size uint32, payload io.Reader) error {
 	contextid := p.nextContextID()
-	size := totalsize
 	initial := true
 	buf := makeFrameWriteBuffer()
+	var rpos int64
 	for seq := uint16(0); size > 0; seq++ {
 		var header interface{}
 		if initial {
-			header = chunkStartHeader{p.id, contextid, totalsize}
+			header = chunkStartHeader{p.id, contextid, size}
 			initial = false
 		} else {
 			header = regularHeader{p.id, contextid}
 		}
 
 		fsize := staticFrameSize
-		if totalsize < fsize {
-			fsize = totalsize
+		if size < fsize {
+			fsize = size
 		}
-		size -= fsize
 		if !initial {
 			buf.reset()
 		}
@@ -275,12 +274,13 @@ func (p *Protocol) sendChunked(totalsize uint32, payload io.Reader) error {
 			// but we can't provide it. Since there is no way to cancel
 			// partial transfers, our only option is closing the connection.
 			// TODO: close the connection
-			rpos := size - uint32(n)
-			return fmt.Errorf("read from packet payload failed at pos %d: %v", rpos, err)
+			return fmt.Errorf("read from packet payload failed at pos %d: %v", rpos+n, err)
 		}
+		rpos += int64(fsize)
 		if err := p.c.sendFrame(header, buf); err != nil {
 			return err
 		}
+		size -= fsize
 	}
 	return nil
 }
