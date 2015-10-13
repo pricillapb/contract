@@ -17,7 +17,6 @@
 package rlpx
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -26,6 +25,7 @@ import (
 	"hash"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -36,10 +36,10 @@ const (
 	frameHeaderFullSize        = 32 // encoded header + MAC
 )
 
-var zero16 = make([]byte, 16)
+var zeroHeader = make([]byte, frameHeaderFullSize)
 
 var (
-	ErrProtocolClaimTimeout = errors.New("protocol for pending message was not claimed in time")
+	errProtocolClaimTimeout = errors.New("protocol for pending message was not claimed in time")
 	errUnexpectedChunkStart = errors.New("received chunk start header for existing transfer")
 	errChunkTooLarge        = errors.New("chunk size larger than remaining message size")
 )
@@ -54,8 +54,8 @@ func readLoop(c *Conn) (err error) {
 		c.mu.Lock()
 		for _, p := range c.proto {
 			p.readClose(err)
-			for _, cr := range p.xfers {
-				cr.close(err)
+			for _, pr := range p.xfers {
+				pr.close(err)
 			}
 		}
 		c.readErr = err
@@ -63,162 +63,191 @@ func readLoop(c *Conn) (err error) {
 	}()
 
 	// Local cache of claimed protocols.
-	proto := make(map[uint16]*Protocol)
+	protos := make(map[uint16]*Protocol)
 
 	for {
-		hdr, body, err := c.rw.readFrame()
+		// Read the next frame header.
+		c.fd.SetReadDeadline(time.Now().Add(c.cfg.readIdleTimeout()))
+		fsize, hdr, err := c.rw.readFrameHeader()
 		if err != nil {
 			return err
 		}
 		// Grab the protocol, checking the local cache before
 		// interacting with the claims machinery in Conn.
-		p := proto[hdr.protocol]
-		if p == nil {
-			if p = c.waitForProtocol(hdr.protocol); p == nil {
-				return ErrProtocolClaimTimeout
+		proto := protos[hdr.protocol]
+		if proto == nil {
+			if proto = c.waitForProtocol(hdr.protocol); proto == nil {
+				return errProtocolClaimTimeout
 			}
-			proto[p.id] = p
+			protos[proto.id] = proto
 		}
-
-		if cr := p.xfers[hdr.contextID]; cr != nil {
-			// existing chunked transfer
+		// Wait until there is enough buffer space for the body
+		// before reading it.
+		err = proto.readBufSema.waitAcquire(fsize, c.cfg.readBufferWaitTimeout())
+		if err != nil {
+			return err
+		}
+		// Read the body of the frame.
+		c.fd.SetReadDeadline(time.Now().Add(c.cfg.readTimeout()))
+		body, err := c.rw.readFrameBody(fsize)
+		if err != nil {
+			return err
+		}
+		// Dispatch the frame to the protocol.
+		// This shouldn't block.
+		if pr := proto.xfers[hdr.contextID]; pr != nil {
 			if hdr.chunkStart {
 				return errUnexpectedChunkStart
 			}
-			end, err := cr.feed(body)
+			end, err := pr.feed(body)
 			if end {
-				delete(p.xfers, hdr.contextID)
+				delete(proto.xfers, hdr.contextID)
 			}
 			if err != nil {
 				return err
 			}
 		} else {
-			// new transfer
-			len, r, err := frameToPacket(hdr, body)
+			pr, err := frameToPacket(proto, hdr, body)
 			if err != nil {
 				return err
 			}
-			if cr, ok := r.(*chunkedReader); ok {
-				// Keep dispatching chunks for this protocol until the packet ends.
-				p.xfers[hdr.contextID] = cr
+			if pr.bufN > 0 {
+				// Track as ongoing transfer if there is still something
+				// to buffer after the initial frame.
+				proto.xfers[hdr.contextID] = pr
 			}
-			p.newPacket <- packet{len, r}
+			proto.feedPacket(pr)
 		}
 	}
 }
 
 // frameToPacket handles the initial frame for a new packet.
-func frameToPacket(hdr frameHeader, body *bytes.Buffer) (len uint32, r io.Reader, err error) {
-	len = uint32(body.Len())
-	if !hdr.chunkStart || len == hdr.totalSize {
-		// For regular frames, the frame is the packet.
-		return len, body, nil
-	}
-	// For chunk start frames, the body reader is a chunkReader.
-	if len > hdr.totalSize {
-		return len, nil, fmt.Errorf("initial chunk size %d larger than total size %d")
-	}
-	cr := newChunkedReader(hdr.totalSize)
-	cr.feed(body)
-	return hdr.totalSize, cr, nil
-}
-
-// chunkedReader is the payload reader for chunked messages.
-// chunks are appended to it as they are read from the connection.
-// when the content of a chunk has been consumed, it returns to the
-// buffer pool.
-type chunkedReader struct {
-	cond        *sync.Cond
-	bufs        []*bytes.Buffer
-	err         error
-	readN, bufN uint32 // how much still needs to be read/buffered
-}
-
-func newChunkedReader(len uint32) *chunkedReader {
-	return &chunkedReader{cond: sync.NewCond(new(sync.Mutex)), readN: len, bufN: len}
-}
-
-func (cr *chunkedReader) Read(rslice []byte) (int, error) {
-	cr.cond.L.Lock()
-	defer cr.cond.L.Unlock()
-
-	if err := cr.waitFrame(); err != nil {
-		return 0, err
-	}
-	nn := 0
-	for _, buf := range cr.bufs {
-		n, _ := buf.Read(rslice[nn:])
-		nn += n
-		if nn == len(rslice) {
-			break
+func frameToPacket(proto *Protocol, hdr frameHeader, frame frameBuffer) (pr *packetReader, err error) {
+	if hdr.chunkStart {
+		if uint32(len(frame)) > hdr.totalSize {
+			return nil, fmt.Errorf("initial chunk size %d larger than total size %d")
+		}
+		if uint32(len(frame)) < hdr.totalSize {
+			return newPacketReader(proto.readBufSema, hdr.totalSize, frame), nil
 		}
 	}
-	cr.readN -= uint32(nn)
-	cr.removeDrainedBuffers()
-	return nn, nil
+	return newPacketReader(proto.readBufSema, uint32(len(frame)), frame), nil
 }
 
-func (cr *chunkedReader) ReadByte() (byte, error) {
-	cr.cond.L.Lock()
-	defer cr.cond.L.Unlock()
+// packetReader is the payload of a packet.
+// frames are appended to it as they are read from the connection.
+type packetReader struct {
+	// all of these can be accessed without locking
+	// because Read is not safe for concurrent use.
+	readBufs []frameBuffer
+	origBufs []frameBuffer
+	bufSema  *bufSema
+	readN    uint32 // how much can still be read
 
-	if err := cr.waitFrame(); err != nil {
+	// these fields are protected by cond.L
+	cond    *sync.Cond    // wakes waitFrame
+	newBufs []frameBuffer // buffer inbox
+	err     error         // error inbox
+	bufN    uint32        // how much still needs to be buffered
+}
+
+func newPacketReader(bsem *bufSema, psize uint32, initialFrame frameBuffer) *packetReader {
+	pr := &packetReader{
+		bufSema: bsem,
+		cond:    sync.NewCond(new(sync.Mutex)),
+		readN:   psize,
+		bufN:    psize,
+	}
+	if len(initialFrame) > 0 {
+		pr.bufN -= uint32(len(initialFrame))
+		pr.readBufs = []frameBuffer{initialFrame}
+		pr.origBufs = []frameBuffer{initialFrame}
+	}
+	return pr
+}
+
+func (pr *packetReader) Read(rslice []byte) (int, error) {
+	if err := pr.waitFrame(); err != nil {
 		return 0, err
 	}
-	// TODO: make sure that frames are always non-empty.
-	b, _ := cr.bufs[0].ReadByte()
-	cr.removeDrainedBuffers()
+	n := 0
+	for i := 0; i < len(pr.readBufs) && n < len(rslice); i++ {
+		nn, _ := pr.readBufs[i].Read(rslice[n:])
+		n += nn
+	}
+	pr.afterRead(n)
+	return n, nil
+}
+
+func (pr *packetReader) ReadByte() (byte, error) {
+	if err := pr.waitFrame(); err != nil {
+		return 0, err
+	}
+	b, _ := pr.readBufs[0].ReadByte()
+	pr.afterRead(1)
 	return b, nil
 }
 
-// blocks until at least one frame is available
-func (cr *chunkedReader) waitFrame() error {
-	for {
-		if cr.err != nil {
-			return cr.err
-		}
-		if cr.readN == 0 {
-			return io.EOF
-		}
-		if len(cr.bufs) > 0 {
-			break
-		}
-		cr.cond.Wait()
+// blocks until at least one frame is available,
+// then transfers any new frame buffers that have appeared
+// to readBufs/origBufs.
+func (pr *packetReader) waitFrame() error {
+	if len(pr.readBufs) > 0 {
+		return nil
 	}
-	return nil
+	if pr.readN == 0 {
+		return io.EOF
+	}
+	pr.cond.L.Lock()
+	defer pr.cond.L.Unlock()
+	for len(pr.newBufs) == 0 && pr.err == nil {
+		pr.cond.Wait()
+	}
+	pr.readBufs = append(pr.readBufs, pr.newBufs...)
+	pr.origBufs = append(pr.origBufs, pr.newBufs...)
+	pr.newBufs = pr.newBufs[:0]
+	return pr.err
 }
 
-func (cr *chunkedReader) removeDrainedBuffers() {
+// removes drained buffers and decrements the read buffer semaphore.
+func (pr *packetReader) afterRead(n int) {
+	pr.readN -= uint32(n)
 	drained := 0
-	for _, buf := range cr.bufs {
-		if buf.Len() != 0 {
+	drainedLen := uint32(0)
+	for i, buf := range pr.readBufs {
+		if len(buf) != 0 {
 			break
 		}
 		drained++
+		drainedLen += uint32(len(pr.origBufs[i]))
 	}
-	cr.bufs = cr.bufs[:copy(cr.bufs, cr.bufs[drained:])]
+	if drained > 0 {
+		pr.readBufs = pr.readBufs[:copy(pr.readBufs, pr.readBufs[drained:])]
+		pr.origBufs = pr.origBufs[:copy(pr.origBufs, pr.origBufs[drained:])]
+		pr.bufSema.release(drainedLen)
+	}
 }
 
-func (cr *chunkedReader) close(err error) {
-	cr.cond.L.Lock()
-	cr.err = err
-	cr.cond.Signal() // wake up Read
-	cr.cond.L.Unlock()
+func (pr *packetReader) close(err error) {
+	pr.cond.L.Lock()
+	pr.err = err
+	pr.cond.Signal() // wake up waitFrame
+	pr.cond.L.Unlock()
 }
 
-func (cr *chunkedReader) feed(body *bytes.Buffer) (bool, error) {
-	cr.cond.L.Lock()
-	defer cr.cond.L.Unlock()
-	ulen := uint32(body.Len())
-	if ulen > cr.bufN {
-		cr.err = errChunkTooLarge
-		cr.cond.Signal() // wake up Read
-		return true, cr.err
+func (pr *packetReader) feed(frame frameBuffer) (end bool, err error) {
+	pr.cond.L.Lock()
+	defer pr.cond.L.Unlock()
+	if uint32(len(frame)) > pr.bufN {
+		pr.err = errChunkTooLarge
+		end = true
+	} else {
+		pr.bufN -= uint32(len(frame))
+		pr.newBufs = append(pr.newBufs, frame)
+		end = pr.bufN == 0
 	}
-	cr.bufN -= ulen
-	cr.bufs = append(cr.bufs, body)
-	cr.cond.Signal() // wake up Read
-	return cr.bufN == 0, nil
+	pr.cond.Signal() // wake up waitFrame
+	return end, pr.err
 }
 
 // represents a frame header that has been read.
@@ -237,10 +266,15 @@ type regularHeader struct {
 	Protocol, ContextID uint16
 }
 
-func decodeHeader(b []byte) (h frameHeader, err error) {
+func decodeHeader(b []byte) (fsize uint32, h frameHeader, err error) {
+	fsize = readInt24(b)
+	if fsize == 0 {
+		return 0, h, errors.New("zero-sized frame")
+	}
+	b = b[3:]
 	lc, rest, err := rlp.SplitList(b)
 	if err != nil {
-		return h, err
+		return fsize, h, err
 	}
 	// This is silly. rlp.DecodeBytes errors for data
 	// after the value, so we need to pass a slice
@@ -267,7 +301,7 @@ func decodeHeader(b []byte) (h frameHeader, err error) {
 	default:
 		err = fmt.Errorf("too many list elements")
 	}
-	return h, err
+	return fsize, h, err
 }
 
 // frameRW implements the framed wire protocol.
@@ -331,7 +365,7 @@ func (rw *frameRW) sendFrame(hdr interface{}, body *frameBuffer) error {
 	rw.enc.XORKeyStream(wbuf[frameHeaderFullSize:], wbuf[frameHeaderFullSize:])
 	rw.egressMAC.Write(wbuf[frameHeaderFullSize:])
 	fmacseed := rw.egressMAC.Sum(nil)
-	wbuf = append(wbuf, zero16...)
+	wbuf = append(wbuf, zeroHeader[:frameHeaderSize]...)
 	copy(wbuf[len(wbuf)-16:], updateMAC(rw.egressMAC, rw.macCipher, fmacseed))
 
 	// Send the whole buffered frame on the socket.
@@ -340,49 +374,46 @@ func (rw *frameRW) sendFrame(hdr interface{}, body *frameBuffer) error {
 	return err
 }
 
-func (rw *frameRW) readFrame() (hdr frameHeader, body *bytes.Buffer, err error) {
+func (rw *frameRW) readFrameHeader() (fsize uint32, hdr frameHeader, err error) {
 	// Read the header and verify its MAC.
 	if _, err := io.ReadFull(rw.conn, rw.headbuf); err != nil {
-		return hdr, nil, err
+		return 0, hdr, err
 	}
 	shouldMAC := updateMAC(rw.ingressMAC, rw.macCipher, rw.headbuf[:16])
 	if !hmac.Equal(shouldMAC, rw.headbuf[16:]) {
-		return hdr, nil, errors.New("bad header MAC")
+		return 0, hdr, errors.New("bad header MAC")
 	}
 	rw.dec.XORKeyStream(rw.headbuf[:16], rw.headbuf[:16])
 
 	// Parse the header.
-	fsize := readInt24(rw.headbuf)
-	hdr, err = decodeHeader(rw.headbuf[3:])
+	fsize, hdr, err = decodeHeader(rw.headbuf)
 	if err != nil {
-		return hdr, nil, fmt.Errorf("invalid frame header: %v", err)
+		err = fmt.Errorf("can't decode frame header: %v", err)
 	}
+	return fsize, hdr, err
+}
 
+func (rw *frameRW) readFrameBody(fsize uint32) (frameBuffer, error) {
 	// Grab a buffer for the content.
-	body = new(bytes.Buffer)
-	var rsize = fsize // frame size rounded up to 16 byte boundary
+	var rsize = fsize
 	if padding := fsize % 16; padding > 0 {
-		rsize += 16 - padding
+		rsize += 16 - padding // frame size rounded up to 16 byte boundary
 	}
-	if _, err := io.CopyN(body, rw.conn, int64(rsize)+16); err != nil {
-		return hdr, nil, err
+	fb := makeFrameReadBuffer(rsize + 16)
+	if _, err := io.ReadFull(rw.conn, fb); err != nil {
+		return nil, err
 	}
 
 	// Verify the body MAC and decrypt the content.
-	fb := body.Bytes()
 	mac, bb := fb[len(fb)-16:], fb[:len(fb)-16]
 	rw.ingressMAC.Write(bb)
 	fmacseed := rw.ingressMAC.Sum(nil)
-	shouldMAC = updateMAC(rw.ingressMAC, rw.macCipher, fmacseed)
+	shouldMAC := updateMAC(rw.ingressMAC, rw.macCipher, fmacseed)
 	if !hmac.Equal(shouldMAC, mac) {
-		return hdr, nil, errors.New("bad frame body MAC")
+		return nil, errors.New("bad frame body MAC")
 	}
 	rw.dec.XORKeyStream(bb, bb)
-
-	// Truncate the buffer so it contains the content
-	// without padding and the MAC.
-	body.Truncate(int(fsize))
-	return hdr, body, nil
+	return bb[:fsize], nil
 }
 
 // updateMAC reseeds the given hash with encrypted seed.
@@ -404,14 +435,15 @@ func makeFrameWriteBuffer() *frameBuffer {
 	return &buf
 }
 
-// reset truncates the buffer so it contains just enough space for an
-// encoded frame header. it must be called before writing payload content
-// for a new frame.
-func (buf *frameBuffer) reset() {
-	*buf = (*buf)[:frameHeaderFullSize]
-	for i := range *buf {
-		(*buf)[i] = 0
-	}
+func makeFrameReadBuffer(size uint32) frameBuffer {
+	return make(frameBuffer, size)
+}
+
+// resetForWrite truncates the buffer so it contains just enough space
+// for an encoded frame header. it must be called before writing
+// payload content for a new frame.
+func (buf *frameBuffer) resetForWrite() {
+	*buf = append((*buf)[:0], zeroHeader...)
 }
 
 func (buf *frameBuffer) Write(s []byte) (n int, err error) {
@@ -419,9 +451,27 @@ func (buf *frameBuffer) Write(s []byte) (n int, err error) {
 	return len(s), nil
 }
 
+func (buf *frameBuffer) Read(s []byte) (int, error) {
+	if buf == nil || len(*buf) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(s, *buf)
+	*buf = (*buf)[n:]
+	return n, nil
+}
+
+func (buf *frameBuffer) ReadByte() (byte, error) {
+	if buf == nil || len(*buf) == 0 {
+		return 0, io.EOF
+	}
+	b := (*buf)[0]
+	*buf = (*buf)[1:]
+	return b, nil
+}
+
 func (buf *frameBuffer) pad16() {
 	if padding := len(*buf) % 16; padding > 0 {
-		*buf = append(*buf, zero16[:16-padding]...)
+		*buf = append(*buf, zeroHeader[:16-padding]...)
 	}
 }
 
@@ -433,10 +483,4 @@ func putInt24(s []byte, v uint32) {
 	s[0] = byte(v >> 16)
 	s[1] = byte(v >> 8)
 	s[2] = byte(v)
-}
-
-func pad16(b *bytes.Buffer) {
-	if padding := b.Len() % 16; padding > 0 {
-		b.Write(zero16[:16-padding])
-	}
 }

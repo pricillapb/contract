@@ -33,7 +33,7 @@ func TestSequentialTransfer(t *testing.T) {
 	var (
 		p1, p2 = net.Pipe()
 		k1, k2 = newkey(), newkey()
-		sc     = Server(p1, &Config{k1})
+		sc     = Server(p1, &Config{Key: k1})
 		cc     = Client(p2, &k1.PublicKey, &Config{Key: k2})
 	)
 	run(t, rig{
@@ -46,7 +46,7 @@ func TestConcurrentTransfer(t *testing.T) {
 	var (
 		p1, p2 = net.Pipe()
 		k1, k2 = newkey(), newkey()
-		sc     = Server(p1, &Config{k1})
+		sc     = Server(p1, &Config{Key: k1})
 		cc     = Client(p2, &k1.PublicKey, &Config{Key: k2})
 	)
 	run(t, rig{
@@ -59,7 +59,7 @@ func TestConcurrentTransferReadError(t *testing.T) {
 	var (
 		p1, p2        = net.Pipe()
 		k1, k2        = newkey(), newkey()
-		sc            = Server(p1, &Config{k1})
+		sc            = Server(p1, &Config{Key: k1})
 		cc            = Client(p2, &k1.PublicKey, &Config{Key: k2})
 		badPacketSize = uint32(16 * 8 * 1024)
 	)
@@ -114,7 +114,7 @@ func testProtoWriters(t *testing.T, conn *Conn, nprotos uint16) error {
 	writers := rig{}
 	for i := uint16(0); i < nprotos; i++ {
 		i := i
-		writers[fmt.Sprint("protocol", i)] = func() error { return testWriter(t, conn.Protocol(i)) }
+		writers[fmt.Sprint("protocol ", i)] = func() error { return testWriter(t, conn.Protocol(i)) }
 	}
 	run(t, writers)
 	return nil
@@ -125,7 +125,7 @@ func testProtoReaders(t *testing.T, conn *Conn, nprotos uint16) error {
 	readers := rig{}
 	for i := uint16(0); i < nprotos; i++ {
 		i := i
-		readers[fmt.Sprint("protocol", i)] = func() error { return testReader(t, conn.Protocol(i)) }
+		readers[fmt.Sprint("protocol ", i)] = func() error { return testReader(t, conn.Protocol(i)) }
 	}
 	run(t, readers)
 	return nil

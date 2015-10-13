@@ -19,7 +19,7 @@
 // RLPx multiplexes packet streams over an authenticated and encrypted
 // network connection.
 //
-// The protocol specification lives at https://github.com/ethereum/devp2p.
+// The wire protocol specification lives at https://github.com/ethereum/devp2p.
 //
 // Protocols
 //
@@ -27,7 +27,7 @@
 // connection, ensuring that available bandwidth is fairly distributed
 // among them. Negotiation of protocol identifiers is not part of the
 // transport layer and is typically done by sending messages with
-// protocol 0.
+// protocol identifier 0.
 package rlpx
 
 import (
@@ -40,6 +40,15 @@ import (
 	"time"
 )
 
+const (
+	defaultHandshakeTimeout      = 5 * time.Second
+	defaultReadTimeout           = 10 * time.Second
+	defaultReadIdleTimeout       = 25 * time.Second
+	defaultWriteTimeout          = 10 * time.Second
+	defaultReadBufferSize        = 2 * 1024 * 1024
+	defaultReadBufferWaitTimeout = 5 * time.Second
+)
+
 // A Config structure is used to configure an RLPx client or server
 // connection. After one has been passed to any function in package
 // rlpx, it must not be modified. A Config may be reused; the rlpx
@@ -49,9 +58,66 @@ type Config struct {
 	// secp256k1 curve, other curves are not supported.
 	// This field is required for both client and server connections.
 	Key *ecdsa.PrivateKey
+
+	HandshakeTimeout time.Duration // for the key negotiation handshake (default 5s)
+	ReadIdleTimeout  time.Duration // applies while waiting for a new frame (default 25s)
+	ReadTimeout      time.Duration // for reading the payload data of a single frame (default 10s)
+	WriteTimeout     time.Duration // for writing one frame of data (default 10s)
+
+	// ReadBufferSize controls how much data can be buffered for each
+	// protocol. The default is 2MB for compatibility with legacy
+	// peers.
+	//
+	// If the read buffer is full, the implementation waits for
+	// buffer space to become available. The connection is closed if
+	// no space becomes available within the timeout (default 5s).
+	ReadBufferSize        uint32
+	ReadBufferWaitTimeout time.Duration
 }
 
-// A Conn represents an rlpx connection.
+func (cfg *Config) handshakeTimeout() time.Duration {
+	if cfg.HandshakeTimeout != 0 {
+		return cfg.HandshakeTimeout
+	}
+	return defaultHandshakeTimeout
+}
+
+func (cfg *Config) readTimeout() time.Duration {
+	if cfg.ReadTimeout != 0 {
+		return cfg.ReadTimeout
+	}
+	return defaultReadTimeout
+}
+
+func (cfg *Config) readIdleTimeout() time.Duration {
+	if cfg.ReadIdleTimeout != 0 {
+		return cfg.ReadIdleTimeout
+	}
+	return defaultReadIdleTimeout
+}
+
+func (cfg *Config) writeTimeout() time.Duration {
+	if cfg.WriteTimeout != 0 {
+		return cfg.WriteTimeout
+	}
+	return defaultWriteTimeout
+}
+
+func (cfg *Config) readBufferWaitTimeout() time.Duration {
+	if cfg.ReadBufferWaitTimeout != 0 {
+		return cfg.ReadBufferWaitTimeout
+	}
+	return defaultReadBufferWaitTimeout
+}
+
+func (cfg *Config) readBufferSize() uint32 {
+	if cfg.ReadBufferSize != 0 {
+		return cfg.ReadBufferSize
+	}
+	return defaultReadBufferSize
+}
+
+// Conn represents an RLPx connection.
 type Conn struct {
 	// readonly fields
 	cfg       *Config
@@ -59,13 +125,12 @@ type Conn struct {
 	fd        net.Conn
 	handshake sync.Once
 
+	wmu      sync.Mutex // excludes writes on rw
 	mu       sync.Mutex
 	rw       *frameRW // set after handshake
 	remoteID *ecdsa.PublicKey
 	proto    map[uint16]*Protocol
 	readErr  error
-
-	wmu sync.Mutex // excludes writes on rw
 }
 
 // Client returns a new client side RLPx connection using fd as the
@@ -75,23 +140,25 @@ type Conn struct {
 // config must not be nil and must contain a
 // valid private key.
 func Client(fd net.Conn, remotePubkey *ecdsa.PublicKey, config *Config) *Conn {
-	return &Conn{
-		fd:       fd,
-		cfg:      config,
-		remoteID: remotePubkey,
-		proto:    make(map[uint16]*Protocol),
-	}
+	c := newConn(fd, config)
+	c.remoteID = remotePubkey
+	return c
 }
 
 // Server returns a new server side RLPx connection using fd as the
 // underlying transport. The configuration config must be non-nil and
 // must contain a valid private key
 func Server(fd net.Conn, config *Config) *Conn {
+	c := newConn(fd, config)
+	c.isServer = true
+	return c
+}
+
+func newConn(fd net.Conn, config *Config) *Conn {
 	return &Conn{
-		fd:       fd,
-		cfg:      config,
-		isServer: true,
-		proto:    make(map[uint16]*Protocol),
+		fd:    fd,
+		cfg:   config,
+		proto: make(map[uint16]*Protocol),
 	}
 }
 
@@ -101,6 +168,7 @@ func Server(fd net.Conn, config *Config) *Conn {
 func (c *Conn) Handshake() (err error) {
 	// TODO: check cfg.Key curve, maybe panic earlier
 	c.handshake.Do(func() {
+		c.fd.SetDeadline(time.Now().Add(c.cfg.handshakeTimeout()))
 		var sec secrets
 		if c.isServer {
 			sec, err = receiverEncHandshake(c.fd, c.cfg.Key, nil)
@@ -177,59 +245,70 @@ func (c *Conn) getProtocol(id uint16) *Protocol {
 }
 
 // Protocol is a handle for the given protocol.
-// ...
 type Protocol struct {
 	c           *Conn
 	claimed     bool
 	id          uint16
 	claimSignal chan struct{}
 
+	// for readLoop
+	xfers       map[uint16]*packetReader
+	readBufSema *bufSema
+
+	// for ReadPacket
+	readCond   *sync.Cond // unblocks ReadPacket
+	newPackets []*packetReader
+	readErr    error
+
 	// for writing
-	wmu          sync.Mutex
 	contextidSeq uint16
-
-	// for reading
-	rmu             sync.Mutex
-	xfers           map[uint16]*chunkedReader
-	newPacket       chan packet
-	readCloseSignal chan struct{}
-	readErr         error // ok to read after readCloseSignal is closed
-}
-
-type packet struct {
-	len uint32
-	r   io.Reader
 }
 
 func newProtocol(c *Conn, id uint16) *Protocol {
 	return &Protocol{
-		c:               c,
-		id:              id,
-		xfers:           make(map[uint16]*chunkedReader),
-		claimSignal:     make(chan struct{}),
-		readCloseSignal: make(chan struct{}),
-		newPacket:       make(chan packet),
+		c:           c,
+		id:          id,
+		claimSignal: make(chan struct{}),
+		xfers:       make(map[uint16]*packetReader),
+		readBufSema: newBufSema(c.cfg.readBufferSize()),
+		readCond:    sync.NewCond(new(sync.Mutex)),
 	}
 }
 
+func (p *Protocol) feedPacket(pr *packetReader) {
+	p.readCond.L.Lock()
+	p.newPackets = append(p.newPackets, pr)
+	p.readCond.Signal()
+	p.readCond.L.Unlock()
+}
+
 func (p *Protocol) readClose(err error) {
+	p.readCond.L.Lock()
 	p.readErr = err
-	close(p.readCloseSignal)
+	p.readCond.Broadcast()
+	p.readCond.L.Unlock()
 }
 
 // ReadHeader waits for a packet to appear. The content of the packet
 // can be read from r as it is received. More packets can be read
 // immediately, r does not need to be consumed before the next call.
-func (p *Protocol) ReadPacket() (len uint32, r io.Reader, err error) {
+func (p *Protocol) ReadPacket() (totalSize uint32, r io.Reader, err error) {
+	// Lazy handshake.
 	if err := p.c.Handshake(); err != nil {
 		return 0, nil, err
 	}
-	select {
-	case <-p.readCloseSignal:
-		return 0, nil, p.readErr
-	case pkt := <-p.newPacket:
-		return pkt.len, pkt.r, nil
+	// Wait for a packet or error.
+	p.readCond.L.Lock()
+	defer p.readCond.L.Unlock()
+	for len(p.newPackets) == 0 && p.readErr == nil {
+		p.readCond.Wait()
 	}
+	if p.readErr != nil {
+		return 0, nil, p.readErr
+	}
+	pr := p.newPackets[0]
+	p.newPackets = p.newPackets[:copy(p.newPackets, p.newPackets[1:])]
+	return pr.readN, pr, nil
 }
 
 // SendPacket sends len bytes from the payload reader on the connection.
@@ -267,7 +346,7 @@ func (p *Protocol) sendChunked(size uint32, payload io.Reader) error {
 			fsize = size
 		}
 		if !initial {
-			buf.reset()
+			buf.resetForWrite()
 		}
 		if n, err := io.CopyN(buf, payload, int64(fsize)); err != nil {
 			// The remote end is waiting for the rest of the packet
@@ -295,5 +374,6 @@ func (p *Protocol) nextContextID() uint16 {
 func (c *Conn) sendFrame(header interface{}, body *frameBuffer) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	c.fd.SetWriteDeadline(time.Now().Add(c.cfg.writeTimeout()))
 	return c.rw.sendFrame(header, body)
 }
