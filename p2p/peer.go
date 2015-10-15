@@ -32,32 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
-const (
-	baseProtocolVersion    = 4
-	baseProtocolLength     = uint64(16)
-	baseProtocolMaxMsgSize = 2 * 1024
-
-	pingInterval = 15 * time.Second
-)
-
-const (
-	// devp2p message codes
-	handshakeMsg = 0x00
-	discMsg      = 0x01
-	pingMsg      = 0x02
-	pongMsg      = 0x03
-	getPeersMsg  = 0x04
-	peersMsg     = 0x05
-)
-
-// protoHandshake is the RLP structure of the protocol handshake.
-type protoHandshake struct {
-	Version    uint64
-	Name       string
-	Caps       []Cap
-	ListenPort uint64
-	ID         discover.NodeID
-}
+const pingInterval = 15 * time.Second
 
 // Peer represents a connected remote node.
 type Peer struct {

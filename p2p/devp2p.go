@@ -30,6 +30,95 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
+const (
+	// devp2p message codes
+	handshakeMsg = 0x00
+	discMsg      = 0x01
+	pingMsg      = 0x02
+	pongMsg      = 0x03
+	getPeersMsg  = 0x04
+	peersMsg     = 0x05
+)
+
+const (
+	baseProtocolVersion    = 4
+	baseProtocolLength     = uint64(16)
+	baseProtocolMaxMsgSize = 2 * 1024
+)
+
+var errMsgTooBig = errors.New("encoded message size exceeds uint32")
+
+// DiscReason indicates why a connection is being disconnected.
+type DiscReason uint
+
+const (
+	DiscRequested DiscReason = iota
+	DiscNetworkError
+	DiscProtocolError
+	DiscUselessPeer
+	DiscTooManyPeers
+	DiscAlreadyConnected
+	DiscIncompatibleVersion
+	DiscInvalidIdentity
+	DiscQuitting
+	DiscUnexpectedIdentity
+	DiscSelf
+	DiscReadTimeout
+	DiscSubprotocolError = 0x10
+)
+
+var discReasonToString = [...]string{
+	DiscRequested:           "Disconnect requested",
+	DiscNetworkError:        "Network error",
+	DiscProtocolError:       "Breach of protocol",
+	DiscUselessPeer:         "Useless peer",
+	DiscTooManyPeers:        "Too many peers",
+	DiscAlreadyConnected:    "Already connected",
+	DiscIncompatibleVersion: "Incompatible P2P protocol version",
+	DiscInvalidIdentity:     "Invalid node identity",
+	DiscQuitting:            "Client quitting",
+	DiscUnexpectedIdentity:  "Unexpected identity",
+	DiscSelf:                "Connected to self",
+	DiscReadTimeout:         "Read timeout",
+	DiscSubprotocolError:    "Subprotocol error",
+}
+
+func (d DiscReason) String() string {
+	if len(discReasonToString) < int(d) {
+		return fmt.Sprintf("Unknown Reason(%d)", d)
+	}
+	return discReasonToString[d]
+}
+
+func (d DiscReason) Error() string {
+	return d.String()
+}
+
+func discReasonForError(err error) DiscReason {
+	if reason, ok := err.(DiscReason); ok {
+		return reason
+	}
+	peerError, ok := err.(*peerError)
+	if ok {
+		switch peerError.code {
+		case errInvalidMsgCode, errInvalidMsg:
+			return DiscProtocolError
+		default:
+			return DiscSubprotocolError
+		}
+	}
+	return DiscSubprotocolError
+}
+
+// protoHandshake is the RLP structure of the protocol handshake.
+type protoHandshake struct {
+	Version    uint64
+	Name       string
+	Caps       []Cap
+	ListenPort uint64
+	ID         discover.NodeID
+}
+
 // devConn implements the devp2p the messaging layer atop RLPx.
 type devConn struct {
 	*rlpx.Conn
@@ -129,8 +218,6 @@ func (t *devConn) close(err error) {
 	}
 	t.Close()
 }
-
-var errMsgTooBig = errors.New("encoded message size exceeds uint32")
 
 func (p *devProtocol) WriteMsg(msg Msg) error {
 	codelen, code, _ := rlp.EncodeToReader(msg.Code)
