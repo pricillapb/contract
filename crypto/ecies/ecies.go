@@ -161,7 +161,7 @@ func incCounter(ctr []byte) {
 }
 
 // NIST SP 800-56 Concatenation Key Derivation Function (see section 5.8.1).
-func concatKDF(hash hash.Hash, z, s1 []byte, kdLen int) (k []byte, err error) {
+func ConcatKDF(hash hash.Hash, z, s1 []byte, kdLen int) (k []byte, err error) {
 	if s1 == nil {
 		s1 = make([]byte, 0)
 	}
@@ -263,7 +263,7 @@ func Encrypt(rand io.Reader, pub *PublicKey, m, s1, s2 []byte) (ct []byte, err e
 	if err != nil {
 		return
 	}
-	K, err := concatKDF(hash, z, s1, params.KeyLen+params.KeyLen)
+	K, err := ConcatKDF(hash, z, s1, params.KeyLen+params.KeyLen)
 	if err != nil {
 		return
 	}
@@ -342,7 +342,7 @@ func (prv *PrivateKey) Decrypt(rand io.Reader, c, s1, s2 []byte) (m []byte, err 
 		return
 	}
 
-	K, err := concatKDF(hash, z, s1, params.KeyLen+params.KeyLen)
+	K, err := ConcatKDF(hash, z, s1, params.KeyLen+params.KeyLen)
 	if err != nil {
 		return
 	}
