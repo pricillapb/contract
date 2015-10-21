@@ -120,17 +120,19 @@ func (cfg *Config) readBufferSize() uint32 {
 // Conn represents an RLPx connection.
 type Conn struct {
 	// readonly fields
-	cfg       *Config
-	isServer  bool
-	fd        net.Conn
-	handshake sync.Once
+	cfg           *Config
+	isServer      bool
+	fd            net.Conn
+	handshake     sync.Once
+	handshakeRand handshakeRandSource // for testing
 
 	wmu      sync.Mutex // excludes writes on rw
-	mu       sync.Mutex
-	rw       *frameRW // set after handshake
+	rw       *frameRW   // set after handshake
 	remoteID *ecdsa.PublicKey
-	proto    map[uint16]*Protocol
-	readErr  error
+
+	mu      sync.Mutex
+	proto   map[uint16]*Protocol
+	readErr error
 }
 
 // Client returns a new client side RLPx connection using fd as the
@@ -168,18 +170,24 @@ func newConn(fd net.Conn, config *Config) *Conn {
 func (c *Conn) Handshake() (err error) {
 	// TODO: check cfg.Key curve, maybe panic earlier
 	c.handshake.Do(func() {
+		if c.handshakeRand == nil {
+			c.handshakeRand = realRandSource{}
+		}
 		c.fd.SetDeadline(time.Now().Add(c.cfg.handshakeTimeout()))
-		var sec secrets
+		var ingress, egress secrets
+		var rid *ecdsa.PublicKey
 		if c.isServer {
-			sec, err = receiverEncHandshake(c.fd, c.cfg.Key, nil)
+			rid, ingress, egress, err = c.recipientHandshake()
+			c.mu.Lock()
+			c.remoteID = rid
+			c.mu.Unlock()
 		} else {
-			sec, err = initiatorEncHandshake(c.fd, c.cfg.Key, c.remoteID, nil)
+			ingress, egress, err = c.initiatorHandshake()
 		}
 		if err != nil {
 			return
 		}
-		c.rw = newFrameRW(c.fd, sec)
-		c.remoteID = sec.RemoteID
+		c.rw = newFrameRW(c.fd, ingress, egress)
 		go readLoop(c)
 	})
 	if err == nil && c.rw == nil {

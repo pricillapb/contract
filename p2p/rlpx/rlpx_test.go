@@ -162,7 +162,7 @@ func run(t *testing.T, rig rig) {
 	var wg sync.WaitGroup
 	wg.Add(len(rig))
 	for name, fn := range rig {
-		fn := fn
+		name, fn := name, fn
 		go func() {
 			if err := fn(); err != nil {
 				t.Error(name, err)

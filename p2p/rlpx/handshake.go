@@ -21,6 +21,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"hash"
 	"io"
@@ -32,166 +33,200 @@ import (
 )
 
 const (
-	maxUint24 = ^uint32(0) >> 8
+	maxUint24           = ^uint32(0) >> 8
+	kdfSharedDataPrefix = "rlpx handshake\x05"
 
-	sskLen = 16 // ecies.MaxSharedKeyLength(pubKey) / 2
-	sigLen = 65 // elliptic S256
-	pubLen = 64 // 512 bit pubkey in uncompressed representation without format byte
-	shaLen = 32 // hash length (for nonce etc)
-
-	authMsgLen  = sigLen + shaLen + pubLen + shaLen + 1
-	authRespLen = pubLen + shaLen + 1
-
+	// Handshake Sizes
+	sskLen         = 16 // ecies.MaxSharedKeyLength(pubKey) / 2
+	sigLen         = 65 // elliptic S256
+	pubLen         = 64 // 512 bit pubkey in uncompressed representation without format byte
+	shaLen         = 32 // hash length (for nonce etc)
+	nonceLen       = 24
+	authMsgLen     = sigLen + shaLen + pubLen + shaLen + 1
+	authRespLen    = pubLen + shaLen + 1
 	eciesBytes     = 65 + 16 + 32
 	encAuthMsgLen  = authMsgLen + eciesBytes  // size of the final ECIES payload sent as initiator's handshake
 	encAuthRespLen = authRespLen + eciesBytes // size of the final ECIES payload sent as receiver's handshake
 )
 
+var zero [32]byte
+
 // encHandshake contains the state of the encryption handshake.
-type encHandshake struct {
+type handshake struct {
+	conn                 io.ReadWriter
 	initiator            bool
+	localPrivKey         *ecdsa.PrivateKey
 	remotePub            *ecies.PublicKey  // remote-pubk
 	initNonce, respNonce []byte            // nonce
 	randomPrivKey        *ecies.PrivateKey // ecdhe-random
 	remoteRandomPub      *ecies.PublicKey  // ecdhe-random-pubk
 }
 
-// secrets represents the connection secrets
-// which are negotiated during the encryption handshake.
+// secrets represents the derived secrets for authenticated encryption.
 type secrets struct {
-	RemoteID              *ecdsa.PublicKey
-	AES, MAC              []byte
-	EgressMAC, IngressMAC hash.Hash
-	Token                 []byte
+	encKey, encIV, macKey []byte
+	mac                   hash.Hash
 }
 
-// secrets is called after the handshake is completed.
-// It extracts the connection secrets from the handshake values.
-func (h *encHandshake) secrets(auth, authResp []byte) (secrets, error) {
+type handshakeRandSource interface {
+	generateNonce(b []byte) error
+	generateKey() (*ecies.PrivateKey, error)
+}
+
+type realRandSource struct{}
+
+func (realRandSource) generateNonce(b []byte) error {
+	_, err := io.ReadFull(rand.Reader, b)
+	return err
+}
+
+func (realRandSource) generateKey() (*ecies.PrivateKey, error) {
+	return ecies.GenerateKey(rand.Reader, crypto.S256(), nil)
+}
+
+func (h *handshake) deriveSecrets(auth, authResp []byte) (ingress, egress secrets, err error) {
+	remoteNonce := h.initNonce
+	if h.initiator {
+		remoteNonce = h.respNonce
+	}
+	remoteVersion := binary.BigEndian.Uint64(remoteNonce[:len(remoteNonce)-8])
+	if remoteVersion > 255 {
+		return h.deriveSecretsV4(auth, authResp)
+	}
+	return h.deriveSecretsV5()
+}
+
+func (h *handshake) deriveSecretsV4(auth, authResp []byte) (ingress, egress secrets, err error) {
 	ecdheSecret, err := h.randomPrivKey.GenerateShared(h.remoteRandomPub, sskLen, sskLen)
 	if err != nil {
-		return secrets{}, err
+		return ingress, egress, err
 	}
-
-	// derive base secrets from ephemeral key agreement
 	sharedSecret := crypto.Sha3(ecdheSecret, crypto.Sha3(h.respNonce, h.initNonce))
 	aesSecret := crypto.Sha3(ecdheSecret, sharedSecret)
-	s := secrets{
-		RemoteID: h.remotePub.ExportECDSA(),
-		AES:      aesSecret,
-		MAC:      crypto.Sha3(ecdheSecret, aesSecret),
-		Token:    crypto.Sha3(sharedSecret),
-	}
+	macSecret := crypto.Sha3(ecdheSecret, aesSecret)
 
-	// setup sha3 instances for the MACs
-	mac1 := sha3.NewKeccak256()
-	mac1.Write(xor(s.MAC, h.respNonce))
-	mac1.Write(auth)
-	mac2 := sha3.NewKeccak256()
-	mac2.Write(xor(s.MAC, h.initNonce))
-	mac2.Write(authResp)
+	ingress = secrets{encKey: aesSecret, encIV: zero[:16], macKey: macSecret}
+	ingress.mac = sha3.NewKeccak256()
+	ingress.mac.Write(xor(h.initNonce, macSecret))
+	ingress.mac.Write(authResp)
+	egress = secrets{encKey: aesSecret, encIV: zero[:16], macKey: macSecret}
+	egress.mac = sha3.NewKeccak256()
+	egress.mac.Write(xor(h.respNonce, macSecret))
+	egress.mac.Write(auth)
 	if h.initiator {
-		s.EgressMAC, s.IngressMAC = mac1, mac2
-	} else {
-		s.EgressMAC, s.IngressMAC = mac2, mac1
+		ingress, egress = egress, ingress
 	}
-
-	return s, nil
+	return ingress, egress, nil
 }
 
-func (h *encHandshake) ecdhShared(prv *ecdsa.PrivateKey) ([]byte, error) {
+func (h *handshake) deriveSecretsV5() (ingress, egress secrets, err error) {
+	ecdheSecret, err := h.randomPrivKey.GenerateShared(h.remoteRandomPub, sskLen, sskLen)
+	if err != nil {
+		return ingress, egress, err
+	}
+	initPub := exportPubkey(h.remotePub)
+	respPub := elliptic.Marshal(h.localPrivKey.Curve, h.localPrivKey.X, h.localPrivKey.Y)[1:]
+	if h.initiator {
+		initPub, respPub = respPub, initPub
+	}
+	sharedData := make([]byte, len(kdfSharedDataPrefix)+nonceLen*2+pubLen*2)
+	n := copy(sharedData, kdfSharedDataPrefix)
+	n += copy(sharedData[n:], h.initNonce[:nonceLen])
+	n += copy(sharedData[n:], h.respNonce[:nonceLen])
+	n += copy(sharedData[n:], initPub)
+	n += copy(sharedData[n:], respPub)
+	derived, err := ecies.ConcatKDF(sha3.NewKeccak256(), ecdheSecret, sharedData, 160)
+	if err != nil {
+		return ingress, egress, err
+	}
+
+	ingress = secrets{encKey: derived[0:32], encIV: derived[64:80], macKey: derived[96:128]}
+	ingress.mac = sha3.NewKeccak256()
+	ingress.mac.Write(ingress.macKey)
+	egress = secrets{encKey: derived[32:64], encIV: derived[80:96], macKey: derived[128:160]}
+	egress.mac = sha3.NewKeccak256()
+	egress.mac.Write(egress.macKey)
+	if h.initiator {
+		ingress, egress = egress, ingress
+	}
+	return ingress, egress, nil
+}
+
+func (h *handshake) ecdhShared(prv *ecdsa.PrivateKey) ([]byte, error) {
 	return ecies.ImportECDSA(prv).GenerateShared(h.remotePub, sskLen, sskLen)
 }
 
-// initiatorEncHandshake negotiates a session token on conn.
-// it should be called on the dialing side of the connection.
-//
+// initiatorHandshake negotiates connection secrets on conn.
+// it should be called on the dialing end of the connection.
 // prv is the local client's private key.
-// token is the token from a previous session with this node.
-func initiatorEncHandshake(conn io.ReadWriter, prv *ecdsa.PrivateKey, remoteID *ecdsa.PublicKey, token []byte) (s secrets, err error) {
-	h, err := newInitiatorHandshake(remoteID)
+func (c *Conn) initiatorHandshake() (ingress, egress secrets, err error) {
+	h, err := newInitiatorHandshake(c.remoteID, c.cfg.Key, c.handshakeRand)
 	if err != nil {
-		return s, err
+		return ingress, egress, err
 	}
-	auth, err := h.authMsg(prv, token)
+	auth, err := h.authMsg()
 	if err != nil {
-		return s, err
+		return ingress, egress, err
 	}
-	if _, err = conn.Write(auth); err != nil {
-		return s, err
+	if _, err := c.fd.Write(auth); err != nil {
+		return ingress, egress, err
 	}
 
 	response := make([]byte, encAuthRespLen)
-	if _, err = io.ReadFull(conn, response); err != nil {
-		return s, err
+	if _, err := io.ReadFull(c.fd, response); err != nil {
+		return ingress, egress, err
 	}
-	if err := h.decodeAuthResp(response, prv); err != nil {
-		return s, err
+	if err := h.decodeAuthResp(response); err != nil {
+		return ingress, egress, err
 	}
-	return h.secrets(auth, response)
+	return h.deriveSecrets(auth, response)
 }
 
-func newInitiatorHandshake(remoteID *ecdsa.PublicKey) (*encHandshake, error) {
-	// generate random initiator nonce
+func newInitiatorHandshake(remoteID *ecdsa.PublicKey, prv *ecdsa.PrivateKey, rnd handshakeRandSource) (*handshake, error) {
 	n := make([]byte, shaLen)
 	if _, err := rand.Read(n); err != nil {
 		return nil, err
 	}
-	// generate random keypair to use for signing
-	randpriv, err := ecies.GenerateKey(rand.Reader, crypto.S256(), nil)
+	ephemeralPrv, err := ecies.GenerateKey(rand.Reader, crypto.S256(), nil)
 	if err != nil {
 		return nil, err
 	}
-	h := &encHandshake{
+	h := &handshake{
 		initiator:     true,
+		localPrivKey:  prv,
 		remotePub:     ecies.ImportECDSAPublic(remoteID),
 		initNonce:     n,
-		randomPrivKey: randpriv,
+		randomPrivKey: ephemeralPrv,
 	}
 	return h, nil
 }
 
 // authMsg creates an encrypted initiator handshake message.
-func (h *encHandshake) authMsg(prv *ecdsa.PrivateKey, token []byte) ([]byte, error) {
-	var tokenFlag byte
-	if token == nil {
-		// no session token found means we need to generate shared secret.
-		// ecies shared secret is used as initial session token for new peers
-		// generate shared key from prv and remote pubkey
-		var err error
-		if token, err = h.ecdhShared(prv); err != nil {
-			return nil, err
-		}
-	} else {
-		// for known peers, we use stored token from the previous session
-		tokenFlag = 0x01
+func (h *handshake) authMsg() ([]byte, error) {
+	staticSharedSecret, err := h.ecdhShared(h.localPrivKey)
+	if err != nil {
+		return nil, err
 	}
-
-	// sign known message:
-	//   ecdh-shared-secret^nonce for new peers
-	//   token^nonce for old peers
-	signed := xor(token, h.initNonce)
+	// sign static-shared-secret^nonce
+	signed := xor(staticSharedSecret, h.initNonce)
 	signature, err := crypto.Sign(signed, h.randomPrivKey.ExportECDSA())
 	if err != nil {
 		return nil, err
 	}
-
-	// encode auth message
-	// signature || sha3(ecdhe-random-pubk) || pubk || nonce || token-flag
+	// encode auth message: sig || sha3(ecdhe-random-pubk) || pubk || nonce || token-flag
 	msg := make([]byte, authMsgLen)
 	n := copy(msg, signature)
 	n += copy(msg[n:], crypto.Sha3(exportPubkey(&h.randomPrivKey.PublicKey)))
-	n += copy(msg[n:], crypto.FromECDSAPub(&prv.PublicKey)[1:])
+	n += copy(msg[n:], crypto.FromECDSAPub(&h.localPrivKey.PublicKey)[1:])
 	n += copy(msg[n:], h.initNonce)
-	msg[n] = tokenFlag
-
+	msg[n] = 0
 	// encrypt auth message using remote-pubk
 	return ecies.Encrypt(rand.Reader, h.remotePub, msg, nil, nil)
 }
 
 // decodeAuthResp decode an encrypted authentication response message.
-func (h *encHandshake) decodeAuthResp(auth []byte, prv *ecdsa.PrivateKey) error {
-	msg, err := crypto.Decrypt(prv, auth)
+func (h *handshake) decodeAuthResp(auth []byte) error {
+	msg, err := crypto.Decrypt(h.localPrivKey, auth)
 	if err != nil {
 		return fmt.Errorf("could not decrypt auth response (%v)", err)
 	}
@@ -200,106 +235,91 @@ func (h *encHandshake) decodeAuthResp(auth []byte, prv *ecdsa.PrivateKey) error 
 	if err != nil {
 		return err
 	}
-	// ignore token flag for now
 	return nil
 }
 
-// receiverEncHandshake negotiates a session token on conn.
+// recipientHandshake negotiates connection secrets on conn.
 // it should be called on the listening side of the connection.
-//
 // prv is the local client's private key.
-// token is the token from a previous session with this node.
-func receiverEncHandshake(conn io.ReadWriter, prv *ecdsa.PrivateKey, token []byte) (s secrets, err error) {
-	// read remote auth sent by initiator.
+func (c *Conn) recipientHandshake() (remoteID *ecdsa.PublicKey, ingress, egress secrets, err error) {
 	auth := make([]byte, encAuthMsgLen)
-	if _, err := io.ReadFull(conn, auth); err != nil {
-		return s, err
+	if _, err := io.ReadFull(c.fd, auth); err != nil {
+		return nil, ingress, egress, err
 	}
-	h, err := decodeAuthMsg(prv, token, auth)
+	h, err := newRecipientHandshake(c.cfg.Key, c.handshakeRand)
 	if err != nil {
-		return s, err
+		return nil, ingress, egress, fmt.Errorf("can't create handshake: %v", err)
+	}
+	if err := h.decodeAuthMsg(auth); err != nil {
+		return nil, ingress, egress, fmt.Errorf("invalid auth: %v", err)
 	}
 
-	// send auth response
-	resp, err := h.authResp(prv, token)
+	resp, err := h.authResp()
 	if err != nil {
-		return s, err
+		return nil, ingress, egress, fmt.Errorf("can't create auth resp: %v", err)
 	}
-	if _, err = conn.Write(resp); err != nil {
-		return s, err
+	if _, err := c.fd.Write(resp); err != nil {
+		return nil, ingress, egress, err
 	}
-
-	return h.secrets(auth, resp)
+	ingress, egress, err = h.deriveSecrets(auth, resp)
+	if h.remotePub != nil {
+		remoteID = h.remotePub.ExportECDSA()
+	}
+	return remoteID, ingress, egress, err
 }
 
-func decodeAuthMsg(prv *ecdsa.PrivateKey, token []byte, auth []byte) (*encHandshake, error) {
+func newRecipientHandshake(prv *ecdsa.PrivateKey, rnd handshakeRandSource) (*handshake, error) {
 	var err error
-	h := new(encHandshake)
-	// generate random keypair for session
+	h := &handshake{localPrivKey: prv}
 	h.randomPrivKey, err = ecies.GenerateKey(rand.Reader, crypto.S256(), nil)
 	if err != nil {
 		return nil, err
 	}
-	// generate random nonce
 	h.respNonce = make([]byte, shaLen)
 	if _, err = rand.Read(h.respNonce); err != nil {
 		return nil, err
 	}
+	return h, err
+}
 
-	msg, err := crypto.Decrypt(prv, auth)
+func (h *handshake) decodeAuthMsg(auth []byte) error {
+	msg, err := crypto.Decrypt(h.localPrivKey, auth)
 	if err != nil {
-		return nil, fmt.Errorf("could not decrypt auth message (%v)", err)
+		return err
 	}
-
-	// decode message parameters
 	// signature || sha3(ecdhe-random-pubk) || pubk || nonce || token-flag
 	h.initNonce = msg[authMsgLen-shaLen-1 : authMsgLen-1]
 	h.remotePub, err = importPublicKey(msg[sigLen+shaLen : sigLen+shaLen+pubLen])
 	if err != nil {
-		return nil, fmt.Errorf("bad remote identity: %v", err)
+		return fmt.Errorf("invalid remote identity: %v", err)
 	}
-
 	// recover remote random pubkey from signed message.
-	if token == nil {
-		// TODO: it is an error if the initiator has a token and we don't. check that.
-
-		// no session token means we need to generate shared secret.
-		// ecies shared secret is used as initial session token for new peers.
-		// generate shared key from prv and remote pubkey.
-		if token, err = h.ecdhShared(prv); err != nil {
-			return nil, err
-		}
-	}
-	signedMsg := xor(token, h.initNonce)
-	remoteRandomPub, err := secp256k1.RecoverPubkey(signedMsg, msg[:sigLen])
+	staticSharedSecret, err := h.ecdhShared(h.localPrivKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
+	signed := xor(staticSharedSecret, h.initNonce)
+	remoteRandomPub, err := secp256k1.RecoverPubkey(signed, msg[:sigLen])
+	if err != nil {
+		return err
+	}
 	// validate the sha3 of recovered pubkey
 	remoteRandomPubMAC := msg[sigLen : sigLen+shaLen]
 	shaRemoteRandomPub := crypto.Sha3(remoteRandomPub[1:])
 	if !bytes.Equal(remoteRandomPubMAC, shaRemoteRandomPub) {
-		return nil, fmt.Errorf("sha3 of recovered ephemeral pubkey does not match checksum in auth message")
+		return fmt.Errorf("recovered pubkey hash mismatch")
 	}
-
 	h.remoteRandomPub, _ = importPublicKey(remoteRandomPub)
-	return h, nil
+	return nil
 }
 
 // authResp generates the encrypted authentication response message.
-func (h *encHandshake) authResp(prv *ecdsa.PrivateKey, token []byte) ([]byte, error) {
-	// responder auth message
-	// E(remote-pubk, ecdhe-random-pubk || nonce || 0x0)
+func (h *handshake) authResp() ([]byte, error) {
+	// E(remote-pubk, ecdhe-random-pubk || nonce || token-flag)
 	resp := make([]byte, authRespLen)
 	n := copy(resp, exportPubkey(&h.randomPrivKey.PublicKey))
 	n += copy(resp[n:], h.respNonce)
-	if token == nil {
-		resp[n] = 0
-	} else {
-		resp[n] = 1
-	}
-	// encrypt using remote-pubk
+	resp[n] = 0
 	return ecies.Encrypt(rand.Reader, h.remotePub, resp, nil, nil)
 }
 

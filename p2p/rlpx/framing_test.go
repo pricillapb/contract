@@ -17,7 +17,6 @@
 package rlpx
 
 import (
-	"bytes"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -25,8 +24,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ethereum/go-ethereum/crypto"
 )
 
 func TestPacketReader(t *testing.T) {
@@ -84,6 +81,7 @@ func randomChunk(seed uint32, maxSize uint32) frameBuffer {
 	return chunk
 }
 
+/*
 func TestFrameFakeGolden(t *testing.T) {
 	buf := new(bytes.Buffer)
 	hash := fakeHash{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
@@ -139,8 +137,11 @@ func (fakeHash) BlockSize() int              { return 0 }
 func (h fakeHash) Size() int           { return len(h) }
 func (h fakeHash) Sum(b []byte) []byte { return append(b, h...) }
 
+*/
+
 func unhex(str string) []byte {
-	b, err := hex.DecodeString(strings.Replace(str, "\n", "", -1))
+	unspace := strings.NewReplacer("\n", "", "\t", "", " ", "")
+	b, err := hex.DecodeString(unspace.Replace(str))
 	if err != nil {
 		panic(fmt.Sprintf("invalid hex string: %q", str))
 	}

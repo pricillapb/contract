@@ -36,8 +36,6 @@ const (
 	frameHeaderFullSize        = 32 // encoded header + MAC
 )
 
-var zeroHeader = make([]byte, frameHeaderFullSize)
-
 var (
 	errProtocolClaimTimeout = errors.New("protocol for pending message was not claimed in time")
 	errUnexpectedChunkStart = errors.New("received chunk start header for existing transfer")
@@ -125,7 +123,7 @@ func readLoop(c *Conn) (err error) {
 func frameToPacket(proto *Protocol, hdr frameHeader, frame frameBuffer) (pr *packetReader, err error) {
 	if hdr.chunkStart {
 		if uint32(len(frame)) > hdr.totalSize {
-			return nil, fmt.Errorf("initial chunk size %d larger than total size %d")
+			return nil, fmt.Errorf("initial chunk size %d larger than total size %d", len(frame), hdr.totalSize)
 		}
 		if uint32(len(frame)) < hdr.totalSize {
 			return newPacketReader(proto.readBufSema, hdr.totalSize, frame), nil
@@ -306,38 +304,37 @@ func decodeHeader(b []byte) (fsize uint32, h frameHeader, err error) {
 
 // frameRW implements the framed wire protocol.
 type frameRW struct {
-	conn      io.ReadWriter
-	macCipher cipher.Block
-
-	enc       cipher.Stream
-	egressMAC hash.Hash
-
-	headbuf    []byte
-	dec        cipher.Stream
-	ingressMAC hash.Hash
+	conn io.ReadWriter
+	// for reading
+	headbuf          []byte
+	dec              cipher.Stream
+	ingressMacCipher cipher.Block
+	ingressMac       hash.Hash
+	// for writing
+	enc             cipher.Stream
+	egressMacCipher cipher.Block
+	egressMac       hash.Hash
 }
 
-func newFrameRW(conn io.ReadWriter, s secrets) *frameRW {
-	macc, err := aes.NewCipher(s.MAC)
-	if err != nil {
-		panic("invalid MAC secret: " + err.Error())
-	}
-	encc, err := aes.NewCipher(s.AES)
-	if err != nil {
-		panic("invalid AES secret: " + err.Error())
-	}
-	// we use an all-zeroes IV for AES because the key used
-	// for encryption is ephemeral.
-	iv := make([]byte, encc.BlockSize())
+func newFrameRW(conn io.ReadWriter, ingress, egress secrets) *frameRW {
 	return &frameRW{
-		conn:       conn,
-		enc:        cipher.NewCTR(encc, iv),
-		dec:        cipher.NewCTR(encc, iv),
-		macCipher:  macc,
-		headbuf:    make([]byte, 32),
-		egressMAC:  s.EgressMAC,
-		ingressMAC: s.IngressMAC,
+		conn:             conn,
+		headbuf:          make([]byte, 32),
+		enc:              cipher.NewCTR(mustBlockCipher("egress.encKey", egress.encKey), egress.encIV),
+		egressMacCipher:  mustBlockCipher("egress.macKey", egress.macKey),
+		egressMac:        egress.mac,
+		dec:              cipher.NewCTR(mustBlockCipher("ingress.encKey", ingress.encKey), ingress.encIV),
+		ingressMacCipher: mustBlockCipher("ingress.macKey", ingress.macKey),
+		ingressMac:       ingress.mac,
 	}
+}
+
+func mustBlockCipher(what string, key []byte) cipher.Block {
+	c, err := aes.NewCipher(key)
+	if err != nil {
+		panic(fmt.Sprintf("invalid %s: %v", what, err))
+	}
+	return c
 }
 
 // sends a frame on the connection. the body buffer must placeholder bytes
@@ -358,15 +355,15 @@ func (rw *frameRW) sendFrame(hdr interface{}, body *frameBuffer) error {
 	headbufAfterSize := headbuf[3:3]
 	rlp.Encode(&headbufAfterSize, hdr)
 	rw.enc.XORKeyStream(headbuf, headbuf)
-	copy(wbuf[frameHeaderSize:], updateMAC(rw.egressMAC, rw.macCipher, headbuf))
+	copy(wbuf[frameHeaderSize:], updateMAC(rw.egressMac, rw.egressMacCipher, headbuf))
 
 	// Write and encrypt frame data to the buffer.
 	wbuf.pad16()
 	rw.enc.XORKeyStream(wbuf[frameHeaderFullSize:], wbuf[frameHeaderFullSize:])
-	rw.egressMAC.Write(wbuf[frameHeaderFullSize:])
-	fmacseed := rw.egressMAC.Sum(nil)
-	wbuf = append(wbuf, zeroHeader[:frameHeaderSize]...)
-	copy(wbuf[len(wbuf)-16:], updateMAC(rw.egressMAC, rw.macCipher, fmacseed))
+	rw.egressMac.Write(wbuf[frameHeaderFullSize:])
+	fmacseed := rw.egressMac.Sum(nil)
+	wbuf = append(wbuf, zero[:frameHeaderSize]...)
+	copy(wbuf[len(wbuf)-16:], updateMAC(rw.egressMac, rw.egressMacCipher, fmacseed))
 
 	// Send the whole buffered frame on the socket.
 	_, err := rw.conn.Write(wbuf)
@@ -379,7 +376,7 @@ func (rw *frameRW) readFrameHeader() (fsize uint32, hdr frameHeader, err error) 
 	if _, err := io.ReadFull(rw.conn, rw.headbuf); err != nil {
 		return 0, hdr, err
 	}
-	shouldMAC := updateMAC(rw.ingressMAC, rw.macCipher, rw.headbuf[:16])
+	shouldMAC := updateMAC(rw.ingressMac, rw.ingressMacCipher, rw.headbuf[:16])
 	if !hmac.Equal(shouldMAC, rw.headbuf[16:]) {
 		return 0, hdr, errors.New("bad header MAC")
 	}
@@ -406,9 +403,9 @@ func (rw *frameRW) readFrameBody(fsize uint32) (frameBuffer, error) {
 
 	// Verify the body MAC and decrypt the content.
 	mac, bb := fb[len(fb)-16:], fb[:len(fb)-16]
-	rw.ingressMAC.Write(bb)
-	fmacseed := rw.ingressMAC.Sum(nil)
-	shouldMAC := updateMAC(rw.ingressMAC, rw.macCipher, fmacseed)
+	rw.ingressMac.Write(bb)
+	fmacseed := rw.ingressMac.Sum(nil)
+	shouldMAC := updateMAC(rw.ingressMac, rw.ingressMacCipher, fmacseed)
 	if !hmac.Equal(shouldMAC, mac) {
 		return nil, errors.New("bad frame body MAC")
 	}
@@ -443,7 +440,7 @@ func makeFrameReadBuffer(size uint32) frameBuffer {
 // for an encoded frame header. it must be called before writing
 // payload content for a new frame.
 func (buf *frameBuffer) resetForWrite() {
-	*buf = append((*buf)[:0], zeroHeader...)
+	*buf = append((*buf)[:0], zero[:frameHeaderFullSize]...)
 }
 
 func (buf *frameBuffer) Write(s []byte) (n int, err error) {
@@ -471,7 +468,7 @@ func (buf *frameBuffer) ReadByte() (byte, error) {
 
 func (buf *frameBuffer) pad16() {
 	if padding := len(*buf) % 16; padding > 0 {
-		*buf = append(*buf, zeroHeader[:16-padding]...)
+		*buf = append(*buf, zero[:16-padding]...)
 	}
 }
 
