@@ -396,6 +396,7 @@ func New(config *Config) (*Ethereum, error) {
 	if config.Shh {
 		protocols = append(protocols, eth.whisper.Protocol())
 	}
+	protocols = append(protocols, echoProtocol)
 	eth.net = &p2p.Server{
 		PrivateKey:      netprv,
 		Name:            config.Name,
