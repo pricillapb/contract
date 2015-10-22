@@ -115,20 +115,16 @@ func doTestHandshake() error {
 }
 
 func TestInitiatorHandshakeTV(t *testing.T) {
-	for i, ht := range initiatorHandshakeTV {
+	for i, ht := range handshakeTV {
 		p1, p2 := net.Pipe()
-		remotePub := crypto.ToECDSAPub(ht.remoteID)
-		localPrivKey := crypto.ToECDSA(ht.privKey)
-		conn := Client(p2, remotePub, &Config{Key: localPrivKey})
-		conn.handshakeRand = ht
+		remotePub := &ht.recipientConfig.Key.PublicKey
+		conn := Client(p2, remotePub, ht.initiatorConfig)
+		conn.handshakeRand = fakeRandSource{key: ht.initiatorEphemeralKey, nonce: ht.initiatorNonce}
 		go run(t, rig{
 			"auth packet": func() error {
 				buf := make([]byte, len(ht.auth))
 				if _, err := io.ReadFull(p1, buf); err != nil {
 					return err
-				}
-				if !bytes.Equal(buf, ht.auth) {
-					return fmt.Errorf("mismatch:\ngot %swant %s", spew.Sdump(buf), spew.Sdump(ht.auth))
 				}
 				return nil
 			},
@@ -142,11 +138,11 @@ func TestInitiatorHandshakeTV(t *testing.T) {
 			t.Errorf("handshake error: %v", err)
 		}
 		ingress.mac, egress.mac = nil, nil // remove mac hashes so they compare
-		if !reflect.DeepEqual(ingress, ht.wantIngress) {
-			t.Errorf("ingress secrets mismatch:\ngot %swant %s", spew.Sdump(ingress), spew.Sdump(ht.wantIngress))
+		if !reflect.DeepEqual(ingress, ht.initiatorIngressSecrets) {
+			t.Errorf("ingress secrets mismatch:\ngot %swant %s", spew.Sdump(ingress), spew.Sdump(ht.initiatorIngressSecrets))
 		}
-		if !reflect.DeepEqual(egress, ht.wantEgress) {
-			t.Errorf("egress secrets mismatch:\ngot %swant %s", spew.Sdump(egress), spew.Sdump(ht.wantEgress))
+		if !reflect.DeepEqual(egress, ht.initiatorEgressSecrets) {
+			t.Errorf("egress secrets mismatch:\ngot %swant %s", spew.Sdump(egress), spew.Sdump(ht.initiatorEgressSecrets))
 		}
 		if t.Failed() {
 			t.Fatalf("failed test case %d:\n%s", i, spew.Sdump(ht))
@@ -159,67 +155,62 @@ func TestInitiatorHandshakeTV(t *testing.T) {
 // 	fmt.Printf("a key: %x\n", crypto.FromECDSA(key))
 // }
 
-var initiatorHandshakeTV = []handshakeTest{
-	// old V4 test vectors from https://gist.github.com/fjl/3a78780d17c755d22df2
-	{
-		privKey:          unhex("5e173f6ac3c669587538e7727cf19b782a4f2fda07c1eaa662c593e5e85e3051"),
-		remoteID:         unhex("0444cfe44ddb7ccb045a470bd486cfb84ce363181e4ee65810fee243bfef4cc68bf6c90c5669bbac06dc29a77515cc5e3302edaea383ce1cf0a805658f1641a855"),
-		randEphemeralKey: unhex("19c2185f4f40634926ebed3af09070ca9e029f2edd5fae6253074896205f5f6c"),
-		randNonce:        unhex("cd26fecb93657d1cd9e9eaf4f8be720b56dd1d39f190c4e1c6b7ec66f077bb11"),
+// var initiatorHandshakeTV = []handshakeTest{
+// 	// old V4 test vectors from https://gist.github.com/fjl/3a78780d17c755d22df2
+// 	{
+// 		privKey:          unhex("5e173f6ac3c669587538e7727cf19b782a4f2fda07c1eaa662c593e5e85e3051"),
+// 		remoteID:         unhex("0444cfe44ddb7ccb045a470bd486cfb84ce363181e4ee65810fee243bfef4cc68bf6c90c5669bbac06dc29a77515cc5e3302edaea383ce1cf0a805658f1641a855"),
+// 		randEphemeralKey: unhex("19c2185f4f40634926ebed3af09070ca9e029f2edd5fae6253074896205f5f6c"),
+// 		randNonce:        unhex("cd26fecb93657d1cd9e9eaf4f8be720b56dd1d39f190c4e1c6b7ec66f077bb11"),
 
-		auth: unhex(`
-			04a0274c5951e32132e7f088c9bdfdc76c9d91f0dc6078e848f8e3361193dbdc
-			43b94351ea3d89e4ff33ddcefbc80070498824857f499656c4f79bbd97b6c51a
-			514251d69fd1785ef8764bd1d262a883f780964cce6a14ff206daf1206aa073a
-			2d35ce2697ebf3514225bef186631b2fd2316a4b7bcdefec8d75a1025ba2c540
-			4a34e7795e1dd4bc01c6113ece07b0df13b69d3ba654a36e35e69ff9d482d88d
-			2f0228e7d96fe11dccbb465a1831c7d4ad3a026924b182fc2bdfe016a6944312
-			021da5cc459713b13b86a686cf34d6fe6615020e4acf26bf0d5b7579ba813e77
-			23eb95b3cef9942f01a58bd61baee7c9bdd438956b426a4ffe238e61746a8c93
-			d5e10680617c82e48d706ac4953f5e1c4c4f7d013c87d34a06626f498f34576d
-			c017fdd3d581e83cfd26cf125b6d2bda1f1d56
-		`),
-		authResp: unhex(`
-			049934a7b2d7f9af8fd9db941d9da281ac9381b5740e1f64f7092f3588d4f87f
-			5ce55191a6653e5e80c1c5dd538169aa123e70dc6ffc5af1827e546c0e958e42
-			dad355bcc1fcb9cdf2cf47ff524d2ad98cbf275e661bf4cf00960e74b5956b79
-			9771334f426df007350b46049adb21a6e78ab1408d5e6ccde6fb5e69f0f4c92b
-			b9c725c02f99fa72b9cdc8dd53cff089e0e73317f61cc5abf6152513cb7d833f
-			09d2851603919bf0fbe44d79a09245c6e8338eb502083dc84b846f2fee1cc310
-			d2cc8b1b9334728f97220bb799376233e113
-		`),
+// 		auth: unhex(`
+// 			04a0274c5951e32132e7f088c9bdfdc76c9d91f0dc6078e848f8e3361193dbdc
+// 			43b94351ea3d89e4ff33ddcefbc80070498824857f499656c4f79bbd97b6c51a
+// 			514251d69fd1785ef8764bd1d262a883f780964cce6a14ff206daf1206aa073a
+// 			2d35ce2697ebf3514225bef186631b2fd2316a4b7bcdefec8d75a1025ba2c540
+// 			4a34e7795e1dd4bc01c6113ece07b0df13b69d3ba654a36e35e69ff9d482d88d
+// 			2f0228e7d96fe11dccbb465a1831c7d4ad3a026924b182fc2bdfe016a6944312
+// 			021da5cc459713b13b86a686cf34d6fe6615020e4acf26bf0d5b7579ba813e77
+// 			23eb95b3cef9942f01a58bd61baee7c9bdd438956b426a4ffe238e61746a8c93
+// 			d5e10680617c82e48d706ac4953f5e1c4c4f7d013c87d34a06626f498f34576d
+// 			c017fdd3d581e83cfd26cf125b6d2bda1f1d56
+// 		`),
+// 		authResp: unhex(`
+// 			049934a7b2d7f9af8fd9db941d9da281ac9381b5740e1f64f7092f3588d4f87f
+// 			5ce55191a6653e5e80c1c5dd538169aa123e70dc6ffc5af1827e546c0e958e42
+// 			dad355bcc1fcb9cdf2cf47ff524d2ad98cbf275e661bf4cf00960e74b5956b79
+// 			9771334f426df007350b46049adb21a6e78ab1408d5e6ccde6fb5e69f0f4c92b
+// 			b9c725c02f99fa72b9cdc8dd53cff089e0e73317f61cc5abf6152513cb7d833f
+// 			09d2851603919bf0fbe44d79a09245c6e8338eb502083dc84b846f2fee1cc310
+// 			d2cc8b1b9334728f97220bb799376233e113
+// 		`),
 
-		wantIngress: secrets{
-			encKey: unhex("c0458fa97a5230830e05f4f20b7c755c1d4e54b1ce5cf43260bb191eef4e418d"),
-			encIV:  unhex("00000000000000000000000000000000"),
-			macKey: unhex("48c938884d5067a1598272fcddaa4b833cd5e7d92e8228c0ecdfabbe68aef7f1"),
-		},
-		wantEgress: secrets{
-			encKey: unhex("c0458fa97a5230830e05f4f20b7c755c1d4e54b1ce5cf43260bb191eef4e418d"),
-			encIV:  unhex("00000000000000000000000000000000"),
-			macKey: unhex("48c938884d5067a1598272fcddaa4b833cd5e7d92e8228c0ecdfabbe68aef7f1"),
-		},
-	},
+// 		wantIngress: secrets{
+// 			encKey: unhex("c0458fa97a5230830e05f4f20b7c755c1d4e54b1ce5cf43260bb191eef4e418d"),
+// 			encIV:  unhex("00000000000000000000000000000000"),
+// 			macKey: unhex("48c938884d5067a1598272fcddaa4b833cd5e7d92e8228c0ecdfabbe68aef7f1"),
+// 		},
+// 		wantEgress: secrets{
+// 			encKey: unhex("c0458fa97a5230830e05f4f20b7c755c1d4e54b1ce5cf43260bb191eef4e418d"),
+// 			encIV:  unhex("00000000000000000000000000000000"),
+// 			macKey: unhex("48c938884d5067a1598272fcddaa4b833cd5e7d92e8228c0ecdfabbe68aef7f1"),
+// 		},
+// 	},
+// }
+
+type fakeRandSource struct {
+	key   *ecdsa.PrivateKey
+	nonce []byte
 }
 
-type handshakeTest struct {
-	// inputs
-	privKey, remoteID, auth, authResp []byte
-	// random bits (injected through handshakeRandSource methods below)
-	randNonce, randEphemeralKey []byte
-	// outputs
-	wantIngress, wantEgress secrets
-	remoteIDout             []byte
-}
-
-func (ht handshakeTest) generateNonce(b []byte) error {
-	if len(b) != len(ht.randNonce) {
-		panic(fmt.Sprintf("requested nonce of size %d, have %d", len(b), len(ht.randNonce)))
+func (ht fakeRandSource) generateNonce(b []byte) error {
+	if len(b) != len(ht.nonce) {
+		panic(fmt.Sprintf("requested nonce of size %d, have %d", len(b), len(ht.nonce)))
 	}
-	copy(b, ht.randNonce)
+	copy(b, ht.nonce)
 	return nil
 }
 
-func (ht handshakeTest) generateKey() (*ecies.PrivateKey, error) {
-	return ecies.ImportECDSA(crypto.ToECDSA(ht.randEphemeralKey)), nil
+func (ht fakeRandSource) generateKey() (*ecies.PrivateKey, error) {
+	return ecies.ImportECDSA(ht.key), nil
 }

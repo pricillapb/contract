@@ -184,10 +184,10 @@ func (c *Conn) initiatorHandshake() (ingress, egress secrets, err error) {
 
 func newInitiatorHandshake(remoteID *ecdsa.PublicKey, prv *ecdsa.PrivateKey, rnd handshakeRandSource) (*handshake, error) {
 	n := make([]byte, shaLen)
-	if _, err := rand.Read(n); err != nil {
+	if err := rnd.generateNonce(n); err != nil {
 		return nil, err
 	}
-	ephemeralPrv, err := ecies.GenerateKey(rand.Reader, crypto.S256(), nil)
+	ephemeralPrv, err := rnd.generateKey()
 	if err != nil {
 		return nil, err
 	}
@@ -271,12 +271,12 @@ func (c *Conn) recipientHandshake() (remoteID *ecdsa.PublicKey, ingress, egress 
 func newRecipientHandshake(prv *ecdsa.PrivateKey, rnd handshakeRandSource) (*handshake, error) {
 	var err error
 	h := &handshake{localPrivKey: prv}
-	h.randomPrivKey, err = ecies.GenerateKey(rand.Reader, crypto.S256(), nil)
+	h.randomPrivKey, err = rnd.generateKey()
 	if err != nil {
 		return nil, err
 	}
 	h.respNonce = make([]byte, shaLen)
-	if _, err = rand.Read(h.respNonce); err != nil {
+	if err := rnd.generateNonce(h.respNonce); err != nil {
 		return nil, err
 	}
 	return h, err

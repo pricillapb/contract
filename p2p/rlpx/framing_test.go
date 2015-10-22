@@ -17,6 +17,7 @@
 package rlpx
 
 import (
+	"crypto/ecdsa"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -24,6 +25,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 func TestPacketReader(t *testing.T) {
@@ -92,13 +95,13 @@ func TestFrameFakeGolden(t *testing.T) {
 		EgressMAC:  hash,
 	})
 
-	golden := unhex(`
+	golden := hexb(`
 00828ddae471818bb0bfa6b551d1cb42
 01010101010101010101010101010101
 ba628a4ba590cb43f7848f41c4382885
 01010101010101010101010101010101
 `)
-	body := unhex(`08C401020304`)
+	body := hexb(`08C401020304`)
 
 	// Check sendFrame. This encodes the frame to buf.
 	fwbuf := makeFrameWriteBuffer()
@@ -139,11 +142,15 @@ func (h fakeHash) Sum(b []byte) []byte { return append(b, h...) }
 
 */
 
-func unhex(str string) []byte {
+func hexb(str string) []byte {
 	unspace := strings.NewReplacer("\n", "", "\t", "", " ", "")
 	b, err := hex.DecodeString(unspace.Replace(str))
 	if err != nil {
 		panic(fmt.Sprintf("invalid hex string: %q", str))
 	}
 	return b
+}
+
+func hexkey(str string) *ecdsa.PrivateKey {
+	return crypto.ToECDSA(hexb(str))
 }
