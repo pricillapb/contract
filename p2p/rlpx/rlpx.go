@@ -73,6 +73,9 @@ type Config struct {
 	// no space becomes available within the timeout (default 5s).
 	ReadBufferSize        uint32
 	ReadBufferWaitTimeout time.Duration
+
+	// Forces use of the version 4 handshake.
+	ForceV4 bool
 }
 
 func (cfg *Config) handshakeTimeout() time.Duration {
