@@ -144,10 +144,6 @@ func newDevConn(fd net.Conn, key *ecdsa.PrivateKey, remote *ecdsa.PublicKey) *de
 	return c
 }
 
-func (t *devConn) protocol(id uint16) *devProtocol {
-	return t.protocols[id]
-}
-
 func (t *devConn) addProtocols(n int) {
 	for i := 0; i < n; i++ {
 		p := t.Conn.Protocol(uint16(len(t.protocols)))

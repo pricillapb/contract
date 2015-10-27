@@ -66,7 +66,7 @@ func TestProtocolHandshake(t *testing.T) {
 			return
 		}
 
-		if err := ExpectMsg(conn.protocol(0), discMsg, []DiscReason{DiscQuitting}); err != nil {
+		if err := ExpectMsg(conn.protocols[0], discMsg, []DiscReason{DiscQuitting}); err != nil {
 			t.Errorf("error receiving disconnect: %v", err)
 		}
 	}()

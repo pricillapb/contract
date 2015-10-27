@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum/p2p/rlpx"
 )
 
 var discard = Protocol{
@@ -45,7 +46,7 @@ var discard = Protocol{
 	},
 }
 
-func testPeer(protos []Protocol) (*devConn, *Peer, <-chan DiscReason) {
+func testPeer(protos []Protocol, cfg *rlpx.Config) (*devConn, *Peer, <-chan DiscReason) {
 	fd1, fd2 := net.Pipe()
 	k1, k2 := newkey(), newkey()
 	c1 := &conn{transport: newDevConn(fd1, k1, &k2.PublicKey)}
@@ -84,9 +85,9 @@ func TestPeerProtoReadMsg(t *testing.T) {
 	conn, _, errc := testPeer([]Protocol{proto})
 	defer conn.Close()
 
-	Send(conn.protocol(1), 2, []uint{1})
-	Send(conn.protocol(1), 3, []uint{2})
-	Send(conn.protocol(1), 4, []uint{3})
+	Send(conn.protocols[1], 2, []uint{1})
+	Send(conn.protocols[1], 3, []uint{2})
+	Send(conn.protocols[1], 4, []uint{3})
 
 	select {
 	case <-done:
@@ -114,7 +115,7 @@ func TestPeerProtoEncodeMsg(t *testing.T) {
 	conn, _, _ := testPeer([]Protocol{proto})
 	defer conn.Close()
 
-	if err := ExpectMsg(conn.protocol(1), 1, []string{"foo", "bar"}); err != nil {
+	if err := ExpectMsg(conn.protocols[1], 1, []string{"foo", "bar"}); err != nil {
 		t.Error(err)
 	}
 }
@@ -122,10 +123,10 @@ func TestPeerProtoEncodeMsg(t *testing.T) {
 func TestPeerPing(t *testing.T) {
 	conn, _, _ := testPeer(nil)
 	defer conn.Close()
-	if err := SendItems(conn.protocol(0), pingMsg); err != nil {
+	if err := SendItems(conn.protocols[0], pingMsg); err != nil {
 		t.Fatal(err)
 	}
-	if err := ExpectMsg(conn.protocol(0), pongMsg, nil); err != nil {
+	if err := ExpectMsg(conn.protocols[0], pongMsg, nil); err != nil {
 		t.Error(err)
 	}
 }
@@ -133,7 +134,7 @@ func TestPeerPing(t *testing.T) {
 func TestPeerDisconnect(t *testing.T) {
 	conn, _, disc := testPeer(nil)
 	defer conn.Close()
-	if err := SendItems(conn.protocol(0), discMsg, DiscQuitting); err != nil {
+	if err := SendItems(conn.protocols[0], discMsg, DiscQuitting); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -168,8 +169,8 @@ func TestPeerDisconnectRace(t *testing.T) {
 		})
 
 		// Simulate incoming messages.
-		go SendItems(conn.protocol(1), 1)
-		go SendItems(conn.protocol(2), 2)
+		go SendItems(conn.protocols[1], 1)
+		go SendItems(conn.protocols[2], 2)
 		// Close the network connection.
 		go conn.Close()
 		// Make protocol "closereq" return.
@@ -182,7 +183,7 @@ func TestPeerDisconnectRace(t *testing.T) {
 		}
 		// In some cases, simulate remote requesting a disconnect.
 		if maybe() {
-			go SendItems(conn.protocol(0), discMsg, DiscQuitting)
+			go SendItems(conn.protocols[0], discMsg, DiscQuitting)
 		}
 
 		select {

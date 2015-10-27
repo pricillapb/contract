@@ -132,8 +132,6 @@ loop:
 	for {
 		select {
 		case err := <-writeErr:
-			// A write finished. Allow the next write to start if
-			// there was no error.
 			if err != nil {
 				glog.V(logger.Detail).Infof("%v: write error: %v\n", p, err)
 				reason = DiscNetworkError
@@ -273,20 +271,32 @@ outer:
 }
 
 func (p *Peer) startProtocols(dc *devConn, writeErr chan<- error) {
-	// Acknowledge the protocols on the RLPx layer. This creates
-	// *devProtocol wrappers, dc.protocols[i] contains entries for in
-	// range 1..len(p.running).
-	dc.addProtocols(len(p.running))
-
+	switch dc.Version() {
+	case 5:
+		// Acknowledge the protocols on the RLPx layer. This creates
+		// *devProtocol wrappers, dc.protocols[i] contains entries in
+		// range 1..len(p.running).
+		dc.addProtocols(len(p.running))
+		for i, proto := range p.running {
+			proto.offset = 0
+			proto.werr = writeErr
+			proto.rw = dc.protocols[i+1]
+		}
+	case 4:
+		// This is a legacy connection with offset-based dispatch.
+		for _, proto := range p.running {
+			proto.closed = p.closed
+			proto.in = make(chan Msg)
+			proto.werr = writeErr
+			proto.rw = dc.protocols[0]
+		}
+	default:
+		panic("conn has no version")
+	}
+	// Spawn Run for all protocols.
 	p.wg.Add(len(p.running))
-	for i, proto := range p.running {
-		// Initialize the channels.
+	for _, proto := range p.running {
 		proto := proto
-		proto.in = make(chan Msg)
-		proto.closed = p.closed
-		proto.werr = writeErr
-		proto.rw = dc.protocols[i+1]
-		// Launch proto.Run
 		glog.V(logger.Detail).Infof("%v: Starting protocol %s/%d\n", p, proto.Name, proto.Version)
 		go func() {
 			err := proto.Run(p, proto)
@@ -306,7 +316,7 @@ func (p *Peer) startProtocols(dc *devConn, writeErr chan<- error) {
 // the given message code.
 func (p *Peer) getProto(code uint64) (*protoRW, error) {
 	for _, proto := range p.running {
-		if code >= proto.offset && code < proto.offset+proto.Length {
+		if proto.offset > 0 && code >= proto.offset && code < proto.offset+proto.Length {
 			return proto, nil
 		}
 	}
@@ -316,38 +326,41 @@ func (p *Peer) getProto(code uint64) (*protoRW, error) {
 type protoRW struct {
 	Protocol
 	offset uint64
-	index  uint16
+	rw     MsgReadWriter
+	werr   chan<- error // for write results
 
-	rw MsgReadWriter
-
+	// for RLPx V4 offset-based dispatch
 	in     chan Msg        // receices read messages
 	closed <-chan struct{} // receives when peer is shutting down
-	werr   chan<- error    // for write results
+	index  uint16
 }
 
 func (rw *protoRW) WriteMsg(msg Msg) error {
 	if msg.Code >= rw.Length {
 		return newPeerError(errInvalidMsgCode, "not handled")
 	}
-	// TODO: assign offset-based message code for old connections.
+	msg.Code += rw.offset
 	err := rw.rw.WriteMsg(msg)
-	// Report write status back to Peer.run. It will initiate
-	// shutdown if the error is non-nil and unblock the next write
-	// otherwise. The calling protocol should exit soon after, but
-	// might not return the error correctly.
+	// Report write status back to Peer.run. It will initiate shutdown
+	// if the error is non-nil otherwise. The calling protocol should
+	// exit soon after, but might not return the error correctly.
 	if err != nil {
 		rw.werr <- err
 	}
-	// TODO: make error sticky to prevent writes after an error occurred.
+	// TODO: maybe make the error sticky to prevent further writes
 	return err
 }
 
 func (rw *protoRW) ReadMsg() (Msg, error) {
-	return rw.rw.ReadMsg()
-	// select {
-	// case msg := <-rw.in:
-	// 	return msg, nil
-	// case <-rw.closed:
-	// 	return Msg{}, io.EOF
-	// }
+	if rw.offset == 0 {
+		// RLPx version 5
+		return rw.rw.ReadMsg()
+	}
+	// RLPx version 4
+	select {
+	case msg := <-rw.in:
+		return msg, nil
+	case <-rw.closed:
+		return Msg{}, io.EOF
+	}
 }
