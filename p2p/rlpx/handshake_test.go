@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"net"
 	"reflect"
 	"testing"
@@ -53,141 +53,168 @@ func TestSharedSecret(t *testing.T) {
 	}
 }
 
+// This test does random V5 handshakes and compares the secrets.
 func TestHandshake(t *testing.T) {
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 10 && !t.Failed(); i++ {
 		start := time.Now()
-		if err := doTestHandshake(); err != nil {
-			t.Fatalf("i=%d %v", i, err)
-		}
+		doTestHandshake(t)
 		t.Logf("%d %v\n", i+1, time.Since(start))
 	}
 }
 
-func doTestHandshake() error {
+func doTestHandshake(t *testing.T) {
 	var (
-		prv0, _  = crypto.GenerateKey()
-		prv1, _  = crypto.GenerateKey()
-		fd0, fd1 = net.Pipe()
-		c0       = Server(fd0, &Config{Key: prv0})
-		c1       = Client(fd1, &prv0.PublicKey, &Config{Key: prv1})
+		prv0, _ = crypto.GenerateKey()
+		prv1, _ = crypto.GenerateKey()
+		p1, p2  = net.Pipe()
+		c1      = Server(p1, &Config{Key: prv0})
+		c2      = Client(p2, &prv0.PublicKey, &Config{Key: prv1})
 	)
-	type result struct {
-		side string
-		err  error
-	}
-	output := make(chan result)
-	shake := func(side string, conn *Conn, rkey *ecdsa.PublicKey) {
-		r := result{side: side}
-		defer func() { output <- r }()
-		if r.err = conn.Handshake(); r.err != nil {
-			return
+	defer p1.Close()
+	shake := func(conn *Conn, rkey *ecdsa.PublicKey) error {
+		if err := conn.Handshake(); err != nil {
+			return err
 		}
 		if !reflect.DeepEqual(conn.RemoteID(), rkey) {
-			r.err = fmt.Errorf("remote ID mismatch: got %v, want: %v", conn.RemoteID(), rkey)
+			return fmt.Errorf("remote ID mismatch: got %v, want: %v", conn.RemoteID(), rkey)
 		}
+		return nil
 	}
-	go shake("initiator", c0, &prv1.PublicKey)
-	go shake("recipient", c1, &prv0.PublicKey)
-
-	// wait for results from both sides
-	r1, r2 := <-output, <-output
-	if r1.err != nil {
-		return fmt.Errorf("%s side error: %v", r1.side, r1.err)
-	}
-	if r2.err != nil {
-		return fmt.Errorf("%s side error: %v", r2.side, r2.err)
-	}
+	run(t, rig{
+		"initiator": func() error { return shake(c1, &prv1.PublicKey) },
+		"recipient": func() error { return shake(c2, &prv0.PublicKey) },
+	})
 
 	// compare derived secrets
-	if !reflect.DeepEqual(c0.rw.egressMac, c1.rw.ingressMac) {
-		return fmt.Errorf("egress mac mismatch:\n c0.rw: %#v\n c1.rw: %#v", c0.rw.egressMac, c1.rw.ingressMac)
+	if !reflect.DeepEqual(c1.rw.egressMac, c2.rw.ingressMac) {
+		t.Errorf("egress mac mismatch:\n c1.rw: %#v\n c2.rw: %#v", c1.rw.egressMac, c2.rw.ingressMac)
 	}
-	if !reflect.DeepEqual(c0.rw.ingressMac, c1.rw.egressMac) {
-		return fmt.Errorf("ingress mac mismatch:\n c0.rw: %#v\n c1.rw: %#v", c0.rw.ingressMac, c1.rw.egressMac)
+	if !reflect.DeepEqual(c1.rw.ingressMac, c2.rw.egressMac) {
+		t.Errorf("ingress mac mismatch:\n c1.rw: %#v\n c2.rw: %#v", c1.rw.ingressMac, c2.rw.egressMac)
 	}
-	if !reflect.DeepEqual(c0.rw.enc, c1.rw.enc) {
-		return fmt.Errorf("enc cipher mismatch:\n c0.rw: %#v\n c1.rw: %#v", c0.rw.enc, c1.rw.enc)
+	if !reflect.DeepEqual(c1.rw.enc, c2.rw.dec) {
+		t.Errorf("enc cipher mismatch:\n c1.rw: %#v\n c2.rw: %#v", c1.rw.enc, c2.rw.dec)
 	}
-	if !reflect.DeepEqual(c0.rw.dec, c1.rw.dec) {
-		return fmt.Errorf("dec cipher mismatch:\n c0.rw: %#v\n c1.rw: %#v", c0.rw.dec, c1.rw.dec)
+	if !reflect.DeepEqual(c1.rw.dec, c2.rw.enc) {
+		t.Errorf("dec cipher mismatch:\n c1.rw: %#v\n c2.rw: %#v", c1.rw.dec, c2.rw.enc)
+	}
+}
+
+// This test runs initator/recipient against each other for each test vector.
+func TestHandshakeTV(t *testing.T) {
+	for i, ht := range handshakeTV {
+		fmt.Println("test", i)
+		p1, p2 := net.Pipe()
+		run(t, rig{
+			"initiator": func() error { return checkInitiator(p1, ht, false) },
+			"recipient": func() error { return checkRecipient(p2, ht, false) },
+		})
+		if t.Failed() {
+			t.Fatalf("failed test case %d:\n%s", i, spew.Sdump(ht))
+		}
+	}
+}
+
+// This test runs the encrypted auth packets from the test vectors against
+// the recipient code.
+func TestHandshakePacketsRecipientTV(t *testing.T) {
+	for i, ht := range handshakeTV {
+		p1, p2 := net.Pipe()
+		run(t, rig{
+			"recipient": func() error {
+				err := checkRecipient(p1, ht, true)
+				p1.Close()
+				return err
+			},
+			"auth packet send": func() error {
+				_, err := p2.Write(ht.encAuth)
+				return err
+			},
+			"authResp packet recv": func() error {
+				ioutil.ReadAll(p2)
+				return nil
+			},
+		})
+		if t.Failed() {
+			t.Fatalf("failed test case %d:\n%s", i, spew.Sdump(ht))
+		}
+	}
+}
+
+// This test runs the encrypted authResp packets from the test vectors against
+// the initiator code.
+func TestHandshakePacketsInitiatorTV(t *testing.T) {
+	for i, ht := range handshakeTV {
+		p1, p2 := net.Pipe()
+		run(t, rig{
+			"initiator": func() error {
+				err := checkInitiator(p1, ht, true)
+				p1.Close()
+				return err
+			},
+			"authResp packet send": func() error {
+				_, err := p2.Write(ht.encAuthResp)
+				return err
+			},
+			"auth packet recv": func() error {
+				ioutil.ReadAll(p2)
+				return nil
+			},
+		})
+		if t.Failed() {
+			t.Fatalf("failed test case %d:\n%s", i, spew.Sdump(ht))
+		}
+	}
+}
+
+func checkInitiator(pipe net.Conn, ht handshakeTest, checkMAC bool) error {
+	remotePub := &ht.recipient.Key.PublicKey
+	conn := Client(pipe, remotePub, ht.initiator)
+	conn.handshakeRand = fakeRandSource{key: ht.initiatorEphemeralKey, nonce: ht.initiatorNonce}
+	vsn, ingress, egress, err := conn.initiatorHandshake()
+	if err != nil {
+		return err
+	}
+	return ht.checkSecrets(vsn, nil, ingress, egress, checkMAC)
+}
+
+func checkRecipient(pipe net.Conn, ht handshakeTest, checkMAC bool) error {
+	conn := Server(pipe, ht.recipient)
+	conn.handshakeRand = fakeRandSource{key: ht.recipientEphemeralKey, nonce: ht.recipientNonce}
+	vsn, remoteID, ingress, egress, err := conn.recipientHandshake()
+	if err != nil {
+		return err
+	}
+	return ht.checkSecrets(vsn, remoteID, egress, ingress, checkMAC)
+}
+
+func (ht handshakeTest) checkSecrets(vsn uint, remoteID *ecdsa.PublicKey, ingress, egress secrets, checkMAC bool) error {
+	if remoteID != nil && !reflect.DeepEqual(remoteID, &ht.initiator.Key.PublicKey) {
+		return fmt.Errorf("remoteID mismatch:\ngot  %x\nwant %x",
+			crypto.FromECDSAPub(remoteID), crypto.FromECDSAPub(&ht.initiator.Key.PublicKey))
+	}
+	if vsn != ht.negotiatedVersion {
+		return fmt.Errorf("version mismatch: got %d, want %d", vsn, ht.negotiatedVersion)
+	}
+	if checkMAC {
+		if sum := ingress.mac.Sum(nil); !bytes.Equal(sum, ht.initiatorEgressMacDigest) {
+			return fmt.Errorf("ingress mac mismatch: got %x, want %x", sum, ht.initiatorEgressMacDigest)
+		}
+		if sum := egress.mac.Sum(nil); !bytes.Equal(sum, ht.initiatorIngressMacDigest) {
+			return fmt.Errorf("egress mac mismatch: got %x, want %x", sum, ht.initiatorIngressMacDigest)
+		}
+	}
+	// Remove the MACs so they are comparable with DeepEqual.
+	ingress.mac, egress.mac = nil, nil
+	if !reflect.DeepEqual(ingress, ht.initiatorIngressSecrets) {
+		return fmt.Errorf("initiatorIngressSecrets mismatch:\ngot %swant %s",
+			spew.Sdump(ingress), spew.Sdump(ht.initiatorEgressSecrets))
+	}
+	if !reflect.DeepEqual(egress, ht.initiatorEgressSecrets) {
+		return fmt.Errorf("initiatorEgressSecrets mismatch:\ngot %swant %s",
+			spew.Sdump(egress), spew.Sdump(ht.initiatorIngressSecrets))
 	}
 	return nil
-}
-
-func TestInitiatorHandshakeTV(t *testing.T) {
-	for i, ht := range handshakeTV {
-		p1, p2 := net.Pipe()
-		remotePub := &ht.recipientConfig.Key.PublicKey
-		conn := Client(p2, remotePub, ht.initiatorConfig)
-		conn.handshakeRand = fakeRandSource{key: ht.initiatorEphemeralKey, nonce: ht.initiatorNonce}
-		go run(t, rig{
-			"auth packet": func() error {
-				buf := make([]byte, len(ht.auth))
-				if _, err := io.ReadFull(p1, buf); err != nil {
-					return err
-				}
-				return nil
-			},
-			"authResp packet": func() error {
-				_, err := p1.Write(ht.authResp)
-				return err
-			},
-		})
-		ingress, egress, err := conn.initiatorHandshake()
-		if err != nil {
-			t.Errorf("handshake error: %v", err)
-		}
-
-		ingress.mac, egress.mac = nil, nil // remove mac hashes so they compare
-		if !reflect.DeepEqual(ingress, ht.initiatorIngressSecrets) {
-			t.Errorf("ingress secrets mismatch:\ngot %swant %s", spew.Sdump(ingress), spew.Sdump(ht.initiatorIngressSecrets))
-		}
-		if !reflect.DeepEqual(egress, ht.initiatorEgressSecrets) {
-			t.Errorf("egress secrets mismatch:\ngot %swant %s", spew.Sdump(egress), spew.Sdump(ht.initiatorEgressSecrets))
-		}
-		if t.Failed() {
-			t.Fatalf("failed test case %d:\n%s", i, spew.Sdump(ht))
-		}
-	}
-}
-
-func TestRecipientHandshakeTV(t *testing.T) {
-	for i, ht := range handshakeTV {
-		p1, p2 := net.Pipe()
-		conn := Server(p2, ht.recipientConfig)
-		conn.handshakeRand = fakeRandSource{key: ht.recipientEphemeralKey, nonce: ht.recipientNonce}
-		go run(t, rig{
-			"authResp packet": func() error {
-				buf := make([]byte, len(ht.authResp))
-				if _, err := io.ReadFull(p1, buf); err != nil {
-					return err
-				}
-				return nil
-			},
-			"auth packet": func() error {
-				_, err := p1.Write(ht.auth)
-				return err
-			},
-		})
-		remoteID, ingress, egress, err := conn.recipientHandshake()
-		if err != nil {
-			t.Errorf("handshake error: %v", err)
-		}
-
-		if !reflect.DeepEqual(remoteID, &ht.initiatorConfig.Key.PublicKey) {
-			t.Errorf("remoteID mismatch:\ngot  %x\nwant %x", crypto.FromECDSAPub(remoteID), crypto.FromECDSAPub(&ht.initiatorConfig.Key.PublicKey))
-		}
-		ingress.mac, egress.mac = nil, nil // remove mac hashes so they compare
-		if !reflect.DeepEqual(ingress, ht.initiatorEgressSecrets) {
-			t.Errorf("ingress secrets mismatch:\ngot %swant %s", spew.Sdump(ingress), spew.Sdump(ht.initiatorEgressSecrets))
-		}
-		if !reflect.DeepEqual(egress, ht.initiatorIngressSecrets) {
-			t.Errorf("egress secrets mismatch:\ngot %swant %s", spew.Sdump(egress), spew.Sdump(ht.initiatorIngressSecrets))
-		}
-		if t.Failed() {
-			t.Fatalf("failed test case %d:\n%s", i, spew.Sdump(ht))
-		}
-	}
 }
 
 type fakeRandSource struct {

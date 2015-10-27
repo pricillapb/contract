@@ -132,6 +132,7 @@ type Conn struct {
 	wmu      sync.Mutex // excludes writes on rw
 	rw       *frameRW   // set after handshake
 	remoteID *ecdsa.PublicKey
+	vsn      uint // negotiated version
 
 	mu      sync.Mutex
 	proto   map[uint16]*Protocol
@@ -176,20 +177,27 @@ func (c *Conn) Handshake() (err error) {
 		if c.handshakeRand == nil {
 			c.handshakeRand = realRandSource{}
 		}
+		var (
+			ingress, egress secrets
+			rid             *ecdsa.PublicKey
+			vsn             uint
+		)
 		c.fd.SetDeadline(time.Now().Add(c.cfg.handshakeTimeout()))
-		var ingress, egress secrets
-		var rid *ecdsa.PublicKey
 		if c.isServer {
-			rid, ingress, egress, err = c.recipientHandshake()
-			c.mu.Lock()
-			c.remoteID = rid
-			c.mu.Unlock()
+			vsn, rid, ingress, egress, err = c.recipientHandshake()
 		} else {
-			ingress, egress, err = c.initiatorHandshake()
+			vsn, ingress, egress, err = c.initiatorHandshake()
 		}
 		if err != nil {
 			return
 		}
+
+		c.mu.Lock()
+		c.vsn = vsn
+		if rid != nil {
+			c.remoteID = rid
+		}
+		c.mu.Unlock()
 		c.rw = newFrameRW(c.fd, ingress, egress)
 		go readLoop(c)
 	})
@@ -216,6 +224,16 @@ func (c *Conn) RemoteID() *ecdsa.PublicKey {
 	id := c.remoteID
 	c.mu.Unlock()
 	return id
+}
+
+// Version returns the negotiated RLPx version of the connection.
+// The return value is zero before the handshake has executed and
+// can be 4 or 5 afterwards.
+func (c *Conn) Version() uint {
+	c.mu.Lock()
+	vsn := c.vsn
+	c.mu.Unlock()
+	return vsn
 }
 
 // Close closes the connection.

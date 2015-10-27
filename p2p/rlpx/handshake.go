@@ -84,45 +84,47 @@ func (realRandSource) generateKey() (*ecies.PrivateKey, error) {
 	return ecies.GenerateKey(rand.Reader, crypto.S256(), nil)
 }
 
-func (h *handshake) deriveSecrets(auth, authResp []byte) (ingress, egress secrets, err error) {
+func (h *handshake) deriveSecrets(forceV4 bool, auth, authResp []byte) (vsn uint, ingress, egress secrets, err error) {
 	remoteNonce := h.initNonce
 	if h.initiator {
 		remoteNonce = h.respNonce
 	}
-	remoteVersion := binary.BigEndian.Uint64(remoteNonce[:len(remoteNonce)-8])
-	if remoteVersion > 255 {
+	remoteVersion := binary.BigEndian.Uint64(remoteNonce[nonceLen:])
+	if forceV4 || remoteVersion > 255 {
 		return h.deriveSecretsV4(auth, authResp)
 	}
 	return h.deriveSecretsV5()
 }
 
-func (h *handshake) deriveSecretsV4(auth, authResp []byte) (ingress, egress secrets, err error) {
+func (h *handshake) deriveSecretsV4(auth, authResp []byte) (vsn uint, ingress, egress secrets, err error) {
+	vsn = 4
 	ecdheSecret, err := h.randomPrivKey.GenerateShared(h.remoteRandomPub, sskLen, sskLen)
 	if err != nil {
-		return ingress, egress, err
+		return vsn, ingress, egress, err
 	}
 	sharedSecret := crypto.Sha3(ecdheSecret, crypto.Sha3(h.respNonce, h.initNonce))
 	aesSecret := crypto.Sha3(ecdheSecret, sharedSecret)
 	macSecret := crypto.Sha3(ecdheSecret, aesSecret)
 
-	ingress = secrets{encKey: aesSecret, encIV: zero[:16], macKey: macSecret}
-	ingress.mac = sha3.NewKeccak256()
-	ingress.mac.Write(xor(h.initNonce, macSecret))
-	ingress.mac.Write(authResp)
 	egress = secrets{encKey: aesSecret, encIV: zero[:16], macKey: macSecret}
 	egress.mac = sha3.NewKeccak256()
-	egress.mac.Write(xor(h.respNonce, macSecret))
-	egress.mac.Write(auth)
+	egress.mac.Write(xor(h.initNonce, macSecret))
+	egress.mac.Write(authResp)
+	ingress = secrets{encKey: aesSecret, encIV: zero[:16], macKey: macSecret}
+	ingress.mac = sha3.NewKeccak256()
+	ingress.mac.Write(xor(h.respNonce, macSecret))
+	ingress.mac.Write(auth)
 	if h.initiator {
 		ingress, egress = egress, ingress
 	}
-	return ingress, egress, nil
+	return vsn, ingress, egress, nil
 }
 
-func (h *handshake) deriveSecretsV5() (ingress, egress secrets, err error) {
+func (h *handshake) deriveSecretsV5() (vsn uint, ingress, egress secrets, err error) {
+	vsn = 5
 	ecdheSecret, err := h.randomPrivKey.GenerateShared(h.remoteRandomPub, sskLen, sskLen)
 	if err != nil {
-		return ingress, egress, err
+		return vsn, ingress, egress, err
 	}
 	initPub := exportPubkey(h.remotePub)
 	respPub := elliptic.Marshal(h.localPrivKey.Curve, h.localPrivKey.X, h.localPrivKey.Y)[1:]
@@ -137,7 +139,7 @@ func (h *handshake) deriveSecretsV5() (ingress, egress secrets, err error) {
 	n += copy(sharedData[n:], respPub)
 	derived, err := ecies.ConcatKDF(sha3.NewKeccak256(), ecdheSecret, sharedData, 160)
 	if err != nil {
-		return ingress, egress, err
+		return vsn, ingress, egress, err
 	}
 
 	ingress = secrets{encKey: derived[0:32], encIV: derived[64:80], macKey: derived[96:128]}
@@ -149,7 +151,7 @@ func (h *handshake) deriveSecretsV5() (ingress, egress secrets, err error) {
 	if h.initiator {
 		ingress, egress = egress, ingress
 	}
-	return ingress, egress, nil
+	return vsn, ingress, egress, nil
 }
 
 func (h *handshake) ecdhShared(prv *ecdsa.PrivateKey) ([]byte, error) {
@@ -174,27 +176,27 @@ func (c *Conn) fillHandshake(nonce *[]byte, key **ecies.PrivateKey) (err error) 
 // initiatorHandshake negotiates connection secrets on conn.
 // it should be called on the dialing end of the connection.
 // prv is the local client's private key.
-func (c *Conn) initiatorHandshake() (ingress, egress secrets, err error) {
+func (c *Conn) initiatorHandshake() (vsn uint, ingress, egress secrets, err error) {
 	h := &handshake{initiator: true, localPrivKey: c.cfg.Key, remotePub: ecies.ImportECDSAPublic(c.remoteID)}
 	if err := c.fillHandshake(&h.initNonce, &h.randomPrivKey); err != nil {
-		return ingress, egress, err
+		return 0, ingress, egress, err
 	}
 	auth, err := h.authMsg()
 	if err != nil {
-		return ingress, egress, err
+		return 0, ingress, egress, err
 	}
 	if _, err := c.fd.Write(auth); err != nil {
-		return ingress, egress, err
+		return 0, ingress, egress, err
 	}
 
 	response := make([]byte, encAuthRespLen)
 	if _, err := io.ReadFull(c.fd, response); err != nil {
-		return ingress, egress, err
+		return 0, ingress, egress, err
 	}
 	if err := h.decodeAuthResp(response); err != nil {
-		return ingress, egress, err
+		return 0, ingress, egress, err
 	}
-	return h.deriveSecrets(auth, response)
+	return h.deriveSecrets(c.cfg.ForceV4, auth, response)
 }
 
 // authMsg creates an encrypted initiator handshake message.
@@ -237,31 +239,31 @@ func (h *handshake) decodeAuthResp(auth []byte) error {
 // recipientHandshake negotiates connection secrets on conn.
 // it should be called on the listening side of the connection.
 // prv is the local client's private key.
-func (c *Conn) recipientHandshake() (remoteID *ecdsa.PublicKey, ingress, egress secrets, err error) {
+func (c *Conn) recipientHandshake() (vsn uint, remoteID *ecdsa.PublicKey, ingress, egress secrets, err error) {
 	auth := make([]byte, encAuthMsgLen)
 	if _, err := io.ReadFull(c.fd, auth); err != nil {
-		return nil, ingress, egress, err
+		return 0, nil, ingress, egress, err
 	}
 	h := &handshake{localPrivKey: c.cfg.Key}
 	if err := h.decodeAuthMsg(auth); err != nil {
-		return nil, ingress, egress, fmt.Errorf("invalid auth: %v", err)
+		return 0, nil, ingress, egress, fmt.Errorf("invalid auth: %v", err)
 	}
 	if err := c.fillHandshake(&h.respNonce, &h.randomPrivKey); err != nil {
-		return nil, ingress, egress, err
+		return 0, nil, ingress, egress, err
 	}
 
 	resp, err := h.authResp()
 	if err != nil {
-		return nil, ingress, egress, fmt.Errorf("can't create auth resp: %v", err)
+		return 0, nil, ingress, egress, fmt.Errorf("can't create auth resp: %v", err)
 	}
 	if _, err := c.fd.Write(resp); err != nil {
-		return nil, ingress, egress, err
+		return 0, nil, ingress, egress, err
 	}
-	ingress, egress, err = h.deriveSecrets(auth, resp)
+	vsn, ingress, egress, err = h.deriveSecrets(c.cfg.ForceV4, auth, resp)
 	if h.remotePub != nil {
 		remoteID = h.remotePub.ExportECDSA()
 	}
-	return remoteID, ingress, egress, err
+	return vsn, remoteID, ingress, egress, err
 }
 
 func (h *handshake) decodeAuthMsg(auth []byte) error {
