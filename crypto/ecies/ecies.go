@@ -147,6 +147,7 @@ var (
 // ConcatKDF implements the Concatenation Key Derivation Function
 // specified in NIST SP 800-56 (section 5.8.1).
 // It returns kdlen bytes of key material derived from z and s1 using hash.
+// kdlen is expected to be reasonably small.
 func ConcatKDF(hash hash.Hash, z, s1 []byte, kdlen int) ([]byte, error) {
 	hashlen := hash.Size()
 	reps := (kdlen + hashlen - 1) / hashlen
