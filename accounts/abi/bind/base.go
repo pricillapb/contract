@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"golang.org/x/net/context"
 )
 
 // SignerFn is a signer function callback when a contract requires a method to
@@ -35,6 +36,8 @@ type SignerFn func(common.Address, *types.Transaction) (*types.Transaction, erro
 // CallOpts is the collection of options to fine tune a contract call request.
 type CallOpts struct {
 	Pending bool // Whether to operate on the pending state or the last known one
+
+	Ctx context.Context // unlike usual practice, this context can be left uninitialized (nil)
 }
 
 // TransactOpts is the collection of authorization data required to create a
@@ -47,6 +50,8 @@ type TransactOpts struct {
 	Value    *big.Int // Funds to transfer along along the transaction (nil = 0 = no funds)
 	GasPrice *big.Int // Gas price to use for the transaction execution (nil = gas price oracle)
 	GasLimit *big.Int // Gas limit to set for the transaction execution (nil = estimate + 10%)
+
+	Ctx context.Context // unlike usual practice, this context can be left uninitialized (nil)
 }
 
 // BoundContract is the base wrapper object that reflects a contract on the
@@ -102,7 +107,7 @@ func (c *BoundContract) Call(opts *CallOpts, result interface{}, method string, 
 	}
 	// Make sure we have a contract to operate on, and bail out otherwise
 	if (opts.Pending && atomic.LoadUint32(&c.pendingHasCode) == 0) || (!opts.Pending && atomic.LoadUint32(&c.latestHasCode) == 0) {
-		if code, err := c.caller.HasCode(c.address, opts.Pending); err != nil {
+		if code, err := c.caller.HasCode(opts.Ctx, c.address, opts.Pending); err != nil {
 			return err
 		} else if !code {
 			return ErrNoCode
@@ -118,7 +123,7 @@ func (c *BoundContract) Call(opts *CallOpts, result interface{}, method string, 
 	if err != nil {
 		return err
 	}
-	output, err := c.caller.ContractCall(c.address, input, opts.Pending)
+	output, err := c.caller.ContractCall(opts.Ctx, c.address, input, opts.Pending)
 	if err != nil {
 		return err
 	}
@@ -153,7 +158,7 @@ func (c *BoundContract) transact(opts *TransactOpts, contract *common.Address, i
 	}
 	nonce := uint64(0)
 	if opts.Nonce == nil {
-		nonce, err = c.transactor.PendingAccountNonce(opts.From)
+		nonce, err = c.transactor.PendingAccountNonce(opts.Ctx, opts.From)
 		if err != nil {
 			return nil, fmt.Errorf("failed to retrieve account nonce: %v", err)
 		}
@@ -163,7 +168,7 @@ func (c *BoundContract) transact(opts *TransactOpts, contract *common.Address, i
 	// Figure out the gas allowance and gas price values
 	gasPrice := opts.GasPrice
 	if gasPrice == nil {
-		gasPrice, err = c.transactor.SuggestGasPrice()
+		gasPrice, err = c.transactor.SuggestGasPrice(opts.Ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to suggest gas price: %v", err)
 		}
@@ -172,7 +177,7 @@ func (c *BoundContract) transact(opts *TransactOpts, contract *common.Address, i
 	if gasLimit == nil {
 		// Gas estimation cannot succeed without code for method invocations
 		if contract != nil && atomic.LoadUint32(&c.pendingHasCode) == 0 {
-			if code, err := c.transactor.HasCode(c.address, true); err != nil {
+			if code, err := c.transactor.HasCode(opts.Ctx, c.address, true); err != nil {
 				return nil, err
 			} else if !code {
 				return nil, ErrNoCode
@@ -180,7 +185,7 @@ func (c *BoundContract) transact(opts *TransactOpts, contract *common.Address, i
 			atomic.StoreUint32(&c.pendingHasCode, 1)
 		}
 		// If the contract surely has code (or code is not needed), estimate the transaction
-		gasLimit, err = c.transactor.EstimateGasLimit(opts.From, contract, value, input)
+		gasLimit, err = c.transactor.EstimateGasLimit(opts.Ctx, opts.From, contract, value, input)
 		if err != nil {
 			return nil, fmt.Errorf("failed to exstimate gas needed: %v", err)
 		}
@@ -199,7 +204,7 @@ func (c *BoundContract) transact(opts *TransactOpts, contract *common.Address, i
 	if err != nil {
 		return nil, err
 	}
-	if err := c.transactor.SendTransaction(signedTx); err != nil {
+	if err := c.transactor.SendTransaction(opts.Ctx, signedTx); err != nil {
 		return nil, err
 	}
 	return signedTx, nil
