@@ -128,7 +128,7 @@ func genTypeInfo(typ reflect.Type, tags tags) (info *typeinfo, err error) {
 	if info.decoder, err = makeDecoder(typ, tags); err != nil {
 		return nil, err
 	}
-	if info.writer, err = makeWriter(typ); err != nil {
+	if info.writer, err = makeWriter(typ, tags); err != nil {
 		return nil, err
 	}
 	return info, nil
