@@ -980,37 +980,30 @@ func (s *PublicTransactionPoolAPI) SendTransaction(args SendTxArgs) (common.Hash
 	s.txMu.Lock()
 	defer s.txMu.Unlock()
 
-	if args.Nonce == nil {
-		args.Nonce = rpc.NewHexNumber(s.txPool.State().GetNonce(args.From))
-	}
-
-	var tx *types.Transaction
 	contractCreation := (args.To == common.Address{})
 
-	if contractCreation {
-		tx = types.NewContractCreation(args.Nonce.Uint64(), args.Value.BigInt(), args.Gas.BigInt(), args.GasPrice.BigInt(), common.FromHex(args.Data))
-	} else {
-		tx = types.NewTransaction(args.Nonce.Uint64(), args.To, args.Value.BigInt(), args.Gas.BigInt(), args.GasPrice.BigInt(), common.FromHex(args.Data))
-	}
-
-	signedTx, err := s.sign(args.From, tx)
+	tx, err := s.txPool.AddNewTx(args.From, func(autoNonce uint64) (*types.Transaction, error) {
+		if args.Nonce == nil {
+			args.Nonce = rpc.NewHexNumber(autoNonce)
+		}
+		var tx *types.Transaction
+		if contractCreation {
+			tx = types.NewContractCreation(args.Nonce.Uint64(), args.Value.BigInt(), args.Gas.BigInt(), args.GasPrice.BigInt(), common.FromHex(args.Data))
+		} else {
+			tx = types.NewTransaction(args.Nonce.Uint64(), args.To, args.Value.BigInt(), args.Gas.BigInt(), args.GasPrice.BigInt(), common.FromHex(args.Data))
+		}
+		return s.sign(args.From, tx)
+	})
 	if err != nil {
 		return common.Hash{}, err
 	}
-
-	s.txPool.SetLocal(signedTx)
-	if err := s.txPool.Add(signedTx); err != nil {
-		return common.Hash{}, nil
-	}
-
 	if contractCreation {
 		addr := crypto.CreateAddress(args.From, args.Nonce.Uint64())
-		glog.V(logger.Info).Infof("Tx(%s) created: %s\n", signedTx.Hash().Hex(), addr.Hex())
+		glog.V(logger.Info).Infof("Tx(%s) created: %s\n", tx.Hash().Hex(), addr.Hex())
 	} else {
-		glog.V(logger.Info).Infof("Tx(%s) to: %s\n", signedTx.Hash().Hex(), tx.To().Hex())
+		glog.V(logger.Info).Infof("Tx(%s) to: %s\n", tx.Hash().Hex(), tx.To().Hex())
 	}
-
-	return signedTx.Hash(), nil
+	return tx.Hash(), nil
 }
 
 // SendRawTransaction will add the signed transaction to the transaction pool.

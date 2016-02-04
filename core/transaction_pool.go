@@ -329,6 +329,26 @@ func (pool *TxPool) addTx(hash common.Hash, addr common.Address, tx *types.Trans
 	}
 }
 
+func (self *TxPool) AddNewTx(sender common.Address, fn func(nonce uint64) (*types.Transaction, error)) (*types.Transaction, error) {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	if self.pendingState == nil {
+		self.resetState() // lazy init
+	}
+	n := self.pendingState.GetNonce(sender)
+	tx, err := fn(n)
+	if err != nil {
+		return tx, err
+	}
+	self.localTx.add(tx.Hash())
+	if err = self.add(tx); err != nil {
+		return tx, err
+	}
+	self.checkQueue()
+	return tx, nil
+}
+
 // Add queues a single transaction in the pool if it is valid.
 func (self *TxPool) Add(tx *types.Transaction) error {
 	self.mu.Lock()
