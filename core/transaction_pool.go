@@ -68,14 +68,25 @@ type TxPool struct {
 	events       event.Subscription
 	localTx      *txSet
 	mu           sync.RWMutex
-	pending      map[common.Hash]*types.Transaction // processable transactions
-	queue        map[common.Address]map[common.Hash]*types.Transaction
+
+	// processable transactions, ordered by nonce.
+	pending map[common.Address][]*types.Transaction
+	// 'future' transactions, also ordered by nonce.
+	queue map[common.Address][]*types.Transaction
+	// index of all known transactions by their hash
+	all map[common.Hash]*txEntry
+}
+
+type txEntry struct {
+	*types.Transaction
+	queued bool // whether this tx is in pool.pending or pool.queue
 }
 
 func NewTxPool(eventMux *event.TypeMux, currentStateFn stateFn, gasLimitFn func() *big.Int) *TxPool {
 	pool := &TxPool{
-		pending:      make(map[common.Hash]*types.Transaction),
-		queue:        make(map[common.Address]map[common.Hash]*types.Transaction),
+		pending:      make(map[common.Address][]*types.Transaction),
+		queue:        make(map[common.Address][]*types.Transaction),
+		all:          make(map[common.Hash]*txEntry),
 		quit:         make(chan bool),
 		eventMux:     eventMux,
 		currentState: currentStateFn,
@@ -131,13 +142,11 @@ func (pool *TxPool) resetState() {
 
 	// Loop over the pending transactions and base the nonce of the new
 	// pending transaction set.
-	for _, tx := range pool.pending {
-		if addr, err := tx.From(); err == nil {
-			// Set the nonce. Transaction nonce can never be lower
-			// than the state nonce; validatePool took care of that.
-			if pool.pendingState.GetNonce(addr) <= tx.Nonce() {
-				pool.pendingState.SetNonce(addr, tx.Nonce()+1)
-			}
+	for addr, txs := range pool.pending {
+		if len(txs) == 0 {
+			pool.pending[addr] = nil
+		} else {
+			pool.pendingState.SetNonce(addr, txs[len(txs)-1].Nonce()+1)
 		}
 	}
 	// Check the queue and move transactions over to the pending if possible
@@ -243,12 +252,10 @@ func (pool *TxPool) validateTx(tx *types.Transaction) error {
 // validate and queue transactions.
 func (self *TxPool) add(tx *types.Transaction) error {
 	hash := tx.Hash()
-
-	if self.pending[hash] != nil {
-		return fmt.Errorf("Known transaction (%x)", hash[:4])
+	if self.all[hash] != nil {
+		return fmt.Errorf("Known transaction (%x)", hash[:6])
 	}
-	err := self.validateTx(tx)
-	if err != nil {
+	if err := self.validateTx(tx); err != nil {
 		return err
 	}
 	self.queueTx(hash, tx)
@@ -270,28 +277,49 @@ func (self *TxPool) add(tx *types.Transaction) error {
 	return nil
 }
 
+func insertByNonce(set []*types.Transaction, tx *types.Transaction) []*types.Transaction {
+	insertAt := sort.Search(len(set), func(i int) bool { return set[i].Nonce() >= tx.Nonce() })
+	if insertAt == len(set) {
+		return append(set, tx)
+	}
+	set = append(set, nil)
+	copy(set[insertAt+1:], set[insertAt:])
+	set[insertAt] = tx
+	return set
+}
+
+func moveTx(queue, pending []*types.Transaction) (newqueue, newpending []*types.Transaction) {
+	pending = append(pending, queue[0])
+	if len(queue) == 1 {
+		return nil, newpending
+	}
+	newqueue = queue[:copy(queue, queue[1:])]
+	queue[len(queue)-1] = nil
+	return newqueue, newpending
+}
+
 // queueTx will queue an unknown transaction
 func (self *TxPool) queueTx(hash common.Hash, tx *types.Transaction) {
 	from, _ := tx.From() // already validated
-	if self.queue[from] == nil {
-		self.queue[from] = make(map[common.Hash]*types.Transaction)
-	}
-	self.queue[from][hash] = tx
+	self.queue[from] = insertByNonce(self.queue[from], tx)
 }
 
-// addTx will add a transaction to the pending (processable queue) list of transactions
-func (pool *TxPool) addTx(hash common.Hash, addr common.Address, tx *types.Transaction) {
+// shiftToPending moves one transaction from the beginning of pool.queue to the
+// end of pool.pending.
+func (pool *TxPool) shiftToPending(addr common.Address) {
 	// init delayed since tx pool could have been started before any state sync
 	if pool.pendingState == nil {
 		pool.resetState()
 	}
+	pool.queue[addr], pool.pending[addr] = moveTx(pool.pending[addr], pool.queue[addr])
 
 	if _, ok := pool.pending[hash]; !ok {
 		pool.pending[hash] = tx
 
-		// Increment the nonce on the pending state. This can only happen if
-		// the nonce is +1 to the previous one.
-		pool.pendingState.SetNonce(addr, tx.Nonce()+1)
+		// // Increment the nonce on the pending state. This can only happen if
+		// // the nonce is +1 to the previous one.
+		// pool.pendingState.SetNonce(addr, tx.Nonce()+1)
+
 		// Notify the subscribers. This event is posted in a goroutine
 		// because it's possible that somewhere during the post "Remove transaction"
 		// gets called which will then wait for the global tx pool lock and deadlock.
@@ -300,9 +328,9 @@ func (pool *TxPool) addTx(hash common.Hash, addr common.Address, tx *types.Trans
 }
 
 // Add queues a single transaction in the pool if it is valid.
-func (self *TxPool) Add(tx *types.Transaction) error {
-	self.mu.Lock()
-	defer self.mu.Unlock()
+func (pool *TxPool) Add(tx *types.Transaction) error {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
 
 	if err := self.add(tx); err != nil {
 		return err
@@ -331,38 +359,31 @@ func (self *TxPool) AddTransactions(txs []*types.Transaction) {
 
 // GetTransaction returns a transaction if it is contained in the pool
 // and nil otherwise.
-func (tp *TxPool) GetTransaction(hash common.Hash) *types.Transaction {
-	// check the txs first
-	if tx, ok := tp.pending[hash]; ok {
-		return tx
-	}
-	// check queue
-	for _, txs := range tp.queue {
-		if tx, ok := txs[hash]; ok {
-			return tx
-		}
+func (pool *TxPool) GetTransaction(hash common.Hash) *types.Transaction {
+	pool.mu.RLock()
+	defer pool.mu.RUnlock()
+	if e := pool.all[hash]; e != nil {
+		return e.Transaction
 	}
 	return nil
 }
 
 // GetTransactions returns all currently processable transactions.
 // The returned slice may be modified by the caller.
-func (self *TxPool) GetTransactions() (txs types.Transactions) {
-	self.mu.Lock()
-	defer self.mu.Unlock()
+func (pool *TxPool) GetTransactions() types.Transactions {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
 
 	// check queue first
-	self.checkQueue()
+	pool.checkQueue()
 	// invalidate any txs
-	self.validatePool()
+	pool.validatePool()
 
-	txs = make(types.Transactions, len(self.pending))
-	i := 0
-	for _, tx := range self.pending {
-		txs[i] = tx
-		i++
+	result = make(types.Transactions, 0, len(self.pending))
+	for _, txs := range self.pending {
+		result = append(result, txs...)
 	}
-	return txs
+	return result
 }
 
 // GetQueuedTransactions returns all non-processable transactions.
@@ -381,16 +402,22 @@ func (self *TxPool) GetQueuedTransactions() types.Transactions {
 }
 
 // RemoveTransactions removes all given transactions from the pool.
-func (self *TxPool) RemoveTransactions(txs types.Transactions) {
+func (pool *TxPool) RemoveTransactions(txs types.Transactions) {
 	self.mu.Lock()
 	defer self.mu.Unlock()
 	for _, tx := range txs {
-		self.RemoveTx(tx.Hash())
+		pool.removeTx(tx.Hash())
 	}
 }
 
-// RemoveTx removes the transaction with the given hash from the pool.
 func (pool *TxPool) RemoveTx(hash common.Hash) {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+	pool.removeTx(hash)
+}
+
+// RemoveTx removes the transaction with the given hash from the pool.
+func (pool *TxPool) removeTx(hash common.Hash) {
 	// delete from pending pool
 	delete(pool.pending, hash)
 	// delete from queue
@@ -457,7 +484,7 @@ func (pool *TxPool) checkQueue() {
 				break
 			}
 			// Otherwise promote the transaction and move the guess nonce if needed
-			pool.addTx(entry.hash, address, entry.Transaction)
+			pool.shiftToPending(address)
 			delete(txs, entry.hash)
 
 			if entry.Nonce() == guessedNonce {
