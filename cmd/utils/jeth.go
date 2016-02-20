@@ -37,25 +37,6 @@ func NewJeth(re *jsre.JSRE, client rpc.Client) *Jeth {
 	return &Jeth{re, client}
 }
 
-func (self *Jeth) err(call otto.FunctionCall, code int, msg string, id *int64) (response otto.Value) {
-	m := rpc.JSONErrResponse{
-		Version: "2.0",
-		Id:      id,
-		Error: rpc.JSONError{
-			Code:    code,
-			Message: msg,
-		},
-	}
-
-	errObj, _ := json.Marshal(m.Error)
-	errRes, _ := json.Marshal(m)
-
-	call.Otto.Run("ret_error = " + string(errObj))
-	res, _ := call.Otto.Run("ret_response = " + string(errRes))
-
-	return res
-}
-
 // UnlockAccount asks the user for the password and than executes the jeth.UnlockAccount callback in the jsre
 func (self *Jeth) UnlockAccount(call otto.FunctionCall) (response otto.Value) {
 	var account, passwd string
@@ -135,76 +116,62 @@ func (self *Jeth) NewAccount(call otto.FunctionCall) (response otto.Value) {
 }
 
 func (self *Jeth) Send(call otto.FunctionCall) (response otto.Value) {
-	reqif, err := call.Argument(0).Export()
+	ro := call.Argument(0).Object()
+	if ro == nil || (ro.Class() != "Array" && ro.Class() != "Object") {
+		throwJSExeception("Internal Error: request must be an object or array")
+	}
+	reqv, err := call.Otto.Call("JSON.stringify", otto.NullValue(), ro)
 	if err != nil {
-		return self.err(call, -32700, err.Error(), nil)
+		throwJSExeception(err.Error())
 	}
+	req := json.RawMessage(reqv.String())
 
-	jsonreq, err := json.Marshal(reqif)
-	var reqs []rpc.JSONRequest
-	batch := true
-	err = json.Unmarshal(jsonreq, &reqs)
+	if cb := call.Argument(1); cb.IsFunction() {
+		// Asynchronous call: do the the communication on another goroutine, then switch
+		// back to the event loop and call cb with the response or error.
+		go self.execRequests(&req, func(resp json.RawMessage, err error) {
+			self.re.Do(func(_ *otto.Otto) {
+				var respv otto.Value
+				if err == nil {
+					respv, err = call.Otto.Call("JSON.parse", otto.NullValue(), string(resp))
+				}
+				if err != nil {
+					errv, _ := otto.ToValue(err.Error())
+					cb.Call(cb, errv, otto.NullValue())
+				} else {
+					cb.Call(cb, otto.NullValue(), respv)
+				}
+			})
+		})
+		return otto.UndefinedValue()
+	} else {
+		// Synchronous call, return responses and throw for errors.
+		var respv otto.Value
+		self.execRequests(&req, func(resp json.RawMessage, err error) {
+			if err != nil {
+				throwJSExeception(err.Error())
+			}
+			respv, err = call.Otto.Call("JSON.parse", otto.NullValue(), string(resp))
+			if err != nil {
+				throwJSExeception(err.Error())
+			}
+		})
+		return respv
+	}
+}
+
+func (self *Jeth) execRequests(req *json.RawMessage, cb func(json.RawMessage, error)) {
+	err := self.client.Send(req)
 	if err != nil {
-		reqs = make([]rpc.JSONRequest, 1)
-		err = json.Unmarshal(jsonreq, &reqs[0])
-		batch = false
+		cb(nil, fmt.Errorf("Communication Error:", err))
+		return
 	}
-
-	call.Otto.Set("response_len", len(reqs))
-	call.Otto.Run("var ret_response = new Array(response_len);")
-
-	for i, req := range reqs {
-		err := self.client.Send(&req)
-		if err != nil {
-			return self.err(call, -32603, err.Error(), req.Id)
-		}
-
-		result := make(map[string]interface{})
-		err = self.client.Recv(&result)
-		if err != nil {
-			return self.err(call, -32603, err.Error(), req.Id)
-		}
-
-		_, isSuccessResponse := result["result"]
-		_, isErrorResponse := result["error"]
-		if !isSuccessResponse && !isErrorResponse {
-			return self.err(call, -32603, fmt.Sprintf("Invalid response"), new(int64))
-		}
-
-		id, _ := result["id"]
-		call.Otto.Set("ret_id", id)
-
-		jsonver, _ := result["jsonrpc"]
-		call.Otto.Set("ret_jsonrpc", jsonver)
-
-		var payload []byte
-		if isSuccessResponse {
-			payload, _ = json.Marshal(result["result"])
-		} else if isErrorResponse {
-			payload, _ = json.Marshal(result["error"])
-		}
-		call.Otto.Set("ret_result", string(payload))
-		call.Otto.Set("response_idx", i)
-
-		response, err = call.Otto.Run(`
-		ret_response[response_idx] = { jsonrpc: ret_jsonrpc, id: ret_id, result: JSON.parse(ret_result) };
-		`)
+	var resp json.RawMessage
+	if err := self.client.Recv(&resp); err != nil {
+		cb(nil, fmt.Errorf("Communication Error:", err))
+		return
 	}
-
-	if !batch {
-		call.Otto.Run("ret_response = ret_response[0];")
-	}
-
-	if call.Argument(1).IsObject() {
-		call.Otto.Set("callback", call.Argument(1))
-		call.Otto.Run(`
-		if (Object.prototype.toString.call(callback) == '[object Function]') {
-			callback(null, ret_response);
-		}
-		`)
-	}
-
-	return
+	cb(resp, nil)
 }
 
 /*
