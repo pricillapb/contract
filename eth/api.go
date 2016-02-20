@@ -25,6 +25,7 @@ import (
 	"io/ioutil"
 	"math/big"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +46,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/syndtr/goleveldb/leveldb"
 	"gopkg.in/fatih/set.v0"
 )
 
@@ -1510,6 +1512,22 @@ type PrivateDebugAPI struct {
 // of the Ethereum service.
 func NewPrivateDebugAPI(config *core.ChainConfig, eth *Ethereum) *PrivateDebugAPI {
 	return &PrivateDebugAPI{config: config, eth: eth}
+}
+
+// ChaindbProperty returns leveldb properties of the chain database.
+func (api *PrivateDebugAPI) ChaindbProperty(property string) (string, error) {
+	ldb, ok := api.eth.chainDb.(interface {
+		LDB() *leveldb.DB
+	})
+	if !ok {
+		return "", fmt.Errorf("chaindbProperty does not work for memory databases")
+	}
+	if property == "" {
+		property = "leveldb.stats"
+	} else if !strings.HasPrefix(property, "leveldb.") {
+		property = "leveldb." + property
+	}
+	return ldb.LDB().GetProperty(property)
 }
 
 // BlockTraceResults is the returned value when replaying a block to check for
