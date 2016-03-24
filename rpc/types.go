@@ -159,6 +159,15 @@ func NewSubscriptionFiltered(sub event.Subscription, match SubscriptionMatcher) 
 	return Subscription{sub, match, defaultSubscriptionOutputFormatter}
 }
 
+func NewDummySubscription() Subscription {
+	return Subscription{sub: &emptySub{c: make(chan *event.Event)}}
+}
+
+type emptySub struct{ c chan *event.Event }
+
+func (sub *emptySub) Chan() <-chan *event.Event { return sub.c }
+func (sub *emptySub) Unsubscribe()              { close(sub.c) }
+
 // Chan returns the channel where new events will be published. It's up the user to call the matcher to
 // determine if the events are interesting for the client.
 func (s *Subscription) Chan() <-chan *event.Event {

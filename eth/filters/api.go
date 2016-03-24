@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/context"
+
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -33,8 +35,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/ethereum/go-ethereum/logger"
-	"github.com/ethereum/go-ethereum/logger/glog"
 )
 
 var (
@@ -205,7 +205,7 @@ func (s *PublicFilterAPI) NewPendingTransactionFilter() (string, error) {
 
 // newLogFilter creates a new log filter. If emit is not nil logs are published
 // over the channel, otherwise logs are queued and can be obtained on the next poll.
-func (s *PublicFilterAPI) newLogFilter(earliest, latest int64, addresses []common.Address, topics [][]common.Hash, emit chan<- *event.Event) (int, error) {
+func (s *PublicFilterAPI) newLogFilter(earliest, latest int64, addresses []common.Address, topics [][]common.Hash, externalId string, out *rpc.Notifier) (int, error) {
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
 
@@ -222,14 +222,17 @@ func (s *PublicFilterAPI) newLogFilter(earliest, latest int64, addresses []commo
 	filter.SetAddresses(addresses)
 	filter.SetTopics(topics)
 	filter.LogCallback = func(log *vm.Log, removed bool) {
-		if emit == nil { // queue logs for next poll
+		if out == nil { // queue logs for next poll
 			s.logMu.Lock()
 			defer s.logMu.Unlock()
 			if queue := s.logQueue[id]; queue != nil {
 				queue.add(vmlog{log, removed})
 			}
 		} else {
-			emit <- &event.Event{Time: time.Now(), Data: vmlog{log, removed}}
+			if err := out.Notify(vmlog{log, removed}); err != nil {
+				// Connection dropped.
+				s.UninstallFilter(externalId)
+			}
 		}
 	}
 
@@ -370,9 +373,9 @@ func (s *PublicFilterAPI) NewFilter(args NewFilterArgs) (string, error) {
 
 	var id int
 	if len(args.Addresses) > 0 {
-		id, err = s.newLogFilter(args.FromBlock.Int64(), args.ToBlock.Int64(), args.Addresses, args.Topics, nil)
+		id, err = s.newLogFilter(args.FromBlock.Int64(), args.ToBlock.Int64(), args.Addresses, args.Topics, externalId, nil)
 	} else {
-		id, err = s.newLogFilter(args.FromBlock.Int64(), args.ToBlock.Int64(), nil, args.Topics, nil)
+		id, err = s.newLogFilter(args.FromBlock.Int64(), args.ToBlock.Int64(), nil, args.Topics, externalId, nil)
 	}
 
 	if err != nil {
@@ -386,42 +389,26 @@ func (s *PublicFilterAPI) NewFilter(args NewFilterArgs) (string, error) {
 	return externalId, nil
 }
 
-// logsSubscription implements the event.Event interface and wraps a log subscription.
-type logsSubscription struct {
-	api      *PublicFilterAPI
-	filterId string
-	logs     chan *event.Event
-}
-
-// Chan returns the channel where logs are published on for this subscription.
-func (sub *logsSubscription) Chan() <-chan *event.Event {
-	return sub.logs
-}
-
-// Unsubscribe will uninstall the filter and closes the emit channel
-func (sub *logsSubscription) Unsubscribe() {
-	if sub.api.UninstallFilter(sub.filterId) {
-		close(sub.logs)
-	}
-}
-
 // Logs creates a subscription and emits logs that match the given criteria.
-func (s *PublicFilterAPI) Logs(args NewFilterArgs) (rpc.Subscription, error) {
+func (s *PublicFilterAPI) Logs(ctx context.Context, args NewFilterArgs) (rpc.Subscription, error) {
 	externalId, err := newFilterId()
 	if err != nil {
 		return rpc.Subscription{}, err
 	}
-
-	logs := make(chan *event.Event)
+	var notifier *rpc.Notifier
+	if v := ctx.Value(rpc.NotifierKey{}); v != nil {
+		notifier = v.(*rpc.Notifier)
+	} else {
+		return rpc.Subscription{}, errors.New("cannot create subscriptions on this transport")
+	}
 
 	// don't use earliest and latest since these are not applicable for subscriptions
 	var id int
 	if len(args.Addresses) > 0 {
-		id, err = s.newLogFilter(-1, -1, args.Addresses, args.Topics, logs)
+		id, err = s.newLogFilter(-1, -1, args.Addresses, args.Topics, externalId, notifier)
 	} else {
-		id, err = s.newLogFilter(-1, -1, nil, args.Topics, logs)
+		id, err = s.newLogFilter(-1, -1, nil, args.Topics, externalId, notifier)
 	}
-
 	if err != nil {
 		return rpc.Subscription{}, err
 	}
@@ -429,19 +416,7 @@ func (s *PublicFilterAPI) Logs(args NewFilterArgs) (rpc.Subscription, error) {
 	s.filterMapMu.Lock()
 	s.filterMapping[externalId] = id
 	s.filterMapMu.Unlock()
-
-	sub := &logsSubscription{s, externalId, logs}
-
-	format := func(rawLog interface{}) interface{} {
-		if log, ok := rawLog.(vmlog); ok {
-			rpcLogs := toRPCLogs(vm.Logs{log.Log}, log.Removed)
-			return &rpcLogs[0]
-		}
-		glog.V(logger.Warn).Infof("unexpected log type %T\n", rawLog)
-		return nil
-	}
-
-	return rpc.NewSubscriptionWithOutputFormat(sub, format), nil
+	return rpc.NewDummySubscription(), nil
 }
 
 // GetLogs returns the logs matching the given argument.

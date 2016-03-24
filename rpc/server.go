@@ -193,34 +193,49 @@ func (s *Server) Stop() {
 	}
 }
 
+type NotifierKey struct{}
+
+type Notifier struct {
+	codec ServerCodec
+	subid string
+}
+
+func (n Notifier) Notify(event interface{}) error {
+	return sendNotification(n.codec, n.subid, event)
+}
+
 // sendNotification will send a notification to the client when the given event
 // is not nil. It will close the codec when the subscription could not be send.
-func sendNotification(codec ServerCodec, subid string, event interface{}) {
+func sendNotification(codec ServerCodec, subid string, event interface{}) error {
+	var err error
 	if event != nil {
 		notification := codec.CreateNotification(subid, event)
-		if err := codec.Write(notification); err != nil {
+		if err = codec.Write(notification); err != nil {
 			codec.Close()
 		}
 	}
+	return err
 }
 
 // createSubscription will register a new subscription and waits for raised events. When an event is raised it will:
 // 1. test if the event is raised matches the criteria the user has (optionally) specified
 // 2. create a notification of the event and send it the client when it matches the criteria
 // It will unsubscribe the subscription when the socket is closed or the subscription is unsubscribed by the user.
-func (s *Server) createSubscription(c ServerCodec, req *serverRequest) (string, error) {
-	args := []reflect.Value{req.callb.rcvr}
-	if len(req.args) > 0 {
-		args = append(args, req.args...)
-	}
-
+func (s *Server) createSubscription(ctx context.Context, c ServerCodec, req *serverRequest) (string, error) {
 	subid, err := newSubscriptionId()
 	if err != nil {
 		return "", err
 	}
+	args := []reflect.Value{req.callb.rcvr}
+	if req.callb.hasCtx {
+		ctx = context.WithValue(ctx, NotifierKey{}, &Notifier{c, subid})
+		args = append(args, reflect.ValueOf(ctx))
+	}
+	if len(req.args) > 0 {
+		args = append(args, req.args...)
+	}
 
 	reply := req.callb.method.Func.Call(args)
-
 	if reply[1].IsNil() { // no error
 		if subscription, ok := reply[0].Interface().(Subscription); ok {
 			s.muSubcriptions.Lock()
@@ -296,7 +311,7 @@ func (s *Server) handle(ctx context.Context, codec ServerCodec, req *serverReque
 	}
 
 	if req.callb.isSubscribe {
-		subid, err := s.createSubscription(codec, req)
+		subid, err := s.createSubscription(ctx, codec, req)
 		if err != nil {
 			return codec.CreateErrorResponse(&req.id, &callbackError{err.Error()})
 		}
