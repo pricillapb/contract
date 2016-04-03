@@ -230,7 +230,7 @@ func newSubscriptionID() (string, error) {
 
 // SupportedModules returns the collection of API's that the RPC server offers
 // on which the given client connects.
-func SupportedModules(client Client) (map[string]string, error) {
+func SupportedModules(client ClientCodec) (map[string]string, error) {
 	req := JSONRequest{
 		Id:      []byte("1"),
 		Version: "2.0",
