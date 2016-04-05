@@ -22,7 +22,6 @@ import (
 	"os"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -554,20 +553,15 @@ func TestAPIGather(t *testing.T) {
 		{"multi.v2.nested_theOneMethod", "multi.v2.nested"},
 	}
 	for i, test := range tests {
-		if err := client.Send(rpc.JSONRequest{Id: []byte("1"), Version: "2.0", Method: test.Method}); err != nil {
-			t.Fatalf("test %d: failed to send API request: %v", i, err)
+		var result string
+		if err := client.Request(&result, test.Method); err != nil {
+			t.Errorf("test %d: API request failed: %v", i, err)
 		}
-		reply := new(rpc.JSONSuccessResponse)
-		if err := client.Recv(reply); err != nil {
-			t.Fatalf("test %d: failed to read API reply: %v", i, err)
+		if result != test.Result {
+			t.Errorf("test %d: result mismatch: have %s, want %s", i, result, test.Result)
 		}
-		select {
-		case result := <-calls:
-			if result != test.Result {
-				t.Errorf("test %d: result mismatch: have %s, want %s", i, result, test.Result)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("test %d: rpc execution timeout", i)
+		if method := <-calls; method != test.Result {
+			t.Errorf("test %d: wrong method %q called, want %q", i, method, test.Method)
 		}
 	}
 }

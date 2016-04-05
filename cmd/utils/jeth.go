@@ -29,11 +29,11 @@ import (
 
 type Jeth struct {
 	re     *jsre.JSRE
-	client rpc.Client
+	client *rpc.Client
 }
 
 // NewJeth create a new backend for the JSRE console
-func NewJeth(re *jsre.JSRE, client rpc.Client) *Jeth {
+func NewJeth(re *jsre.JSRE, client *rpc.Client) *Jeth {
 	return &Jeth{re, client}
 }
 
@@ -139,92 +139,67 @@ func (self *Jeth) NewAccount(call otto.FunctionCall) (response otto.Value) {
 	return otto.FalseValue()
 }
 
-// Send will serialize the first argument, send it to the node and returns the response.
-func (self *Jeth) Send(call otto.FunctionCall) (response otto.Value) {
-	// verify we got a batch request (array) or a single request (object)
-	ro := call.Argument(0).Object()
-	if ro == nil || (ro.Class() != "Array" && ro.Class() != "Object") {
-		throwJSExeception("Internal Error: request must be an object or array")
-	}
+type jsonrpcCall struct {
+	Id     int64
+	Method string
+	Params []interface{}
+}
 
-	// convert otto vm arguments to go values by JSON serialising and parsing.
-	data, err := call.Otto.Call("JSON.stringify", nil, ro)
+// Send implements the web3 provider "send" method.
+func (self *Jeth) Send(call otto.FunctionCall) (response otto.Value) {
+	// Remarshal the request into a Go value.
+	JSON, _ := call.Otto.Object("JSON")
+	reqVal, err := JSON.Call("stringify", call.Argument(0))
 	if err != nil {
 		throwJSExeception(err.Error())
 	}
-
-	jsonreq, _ := data.ToString()
-
-	// parse arguments to JSON rpc requests, either to an array (batch) or to a single request.
-	var reqs []rpc.JSONRequest
-	batch := true
-	if err = json.Unmarshal([]byte(jsonreq), &reqs); err != nil {
-		// single request?
-		reqs = make([]rpc.JSONRequest, 1)
-		if err = json.Unmarshal([]byte(jsonreq), &reqs[0]); err != nil {
-			throwJSExeception("invalid request")
-		}
+	var (
+		rawReq = []byte(reqVal.String())
+		reqs   []jsonrpcCall
+		batch  bool
+	)
+	if rawReq[0] == '[' {
+		batch = true
+		json.Unmarshal(rawReq, &reqs)
+	} else {
 		batch = false
+		reqs = make([]jsonrpcCall, 1)
+		json.Unmarshal(rawReq, &reqs[0])
 	}
 
-	call.Otto.Set("response_len", len(reqs))
-	call.Otto.Run("var ret_response = new Array(response_len);")
-
-	for i, req := range reqs {
-		if err := self.client.Send(&req); err != nil {
-			return self.err(call, -32603, err.Error(), req.Id)
+	// Execute the requests.
+	resps, _ := call.Otto.Object("new Array()")
+	for _, req := range reqs {
+		resp, _ := call.Otto.Object(`({"jsonrpc":"2.0"})`)
+		resp.Set("id", req.Id)
+		var result interface{}
+		err = self.client.Request(&result, req.Method, req.Params...)
+		switch err := err.(type) {
+		case nil:
+			resp.Set("result", result)
+		case *rpc.JSONError:
+			resp.Set("error", map[string]interface{}{
+				"code":    err.Code,
+				"message": err.Message,
+			})
+		default:
+			resp = self.err(call, -32603, err.Error(), &req.Id).Object()
 		}
-
-		result := make(map[string]interface{})
-		if err = self.client.Recv(&result); err != nil {
-			return self.err(call, -32603, err.Error(), req.Id)
-		}
-
-		id, _ := result["id"]
-		jsonver, _ := result["jsonrpc"]
-
-		call.Otto.Set("ret_id", id)
-		call.Otto.Set("ret_jsonrpc", jsonver)
-		call.Otto.Set("response_idx", i)
-
-		// call was successful
-		if res, ok := result["result"]; ok {
-			payload, _ := json.Marshal(res)
-			call.Otto.Set("ret_result", string(payload))
-			response, err = call.Otto.Run(`
-				ret_response[response_idx] = { jsonrpc: ret_jsonrpc, id: ret_id, result: JSON.parse(ret_result) };
-			`)
-			continue
-		}
-
-		// request returned an error
-		if res, ok := result["error"]; ok {
-			payload, _ := json.Marshal(res)
-			call.Otto.Set("ret_result", string(payload))
-			response, err = call.Otto.Run(`
-				ret_response[response_idx] = { jsonrpc: ret_jsonrpc, id: ret_id, error: JSON.parse(ret_result) };
-			`)
-			continue
-		}
-
-		return self.err(call, -32603, fmt.Sprintf("Invalid response"), new(int64))
+		resps.Call("push", resp)
 	}
 
-	if !batch {
-		call.Otto.Run("ret_response = ret_response[0];")
+	// Return the responses either to the callback (if supplied)
+	// or directly as the return value.
+	if batch {
+		response = resps.Value()
+	} else {
+		response, _ = resps.Get("0")
 	}
-
-	// if a callback was given execute it.
-	if call.Argument(1).IsObject() {
-		call.Otto.Set("callback", call.Argument(1))
-		call.Otto.Run(`
-		if (Object.prototype.toString.call(callback) == '[object Function]') {
-			callback(null, ret_response);
-		}
-		`)
+	if fn := call.Argument(1).Object(); fn != nil && fn.Class() == "function" {
+		fn.Call("apply", response)
+		return otto.UndefinedValue()
 	}
-
-	return
+	return response
 }
 
 // throwJSExeception panics on an otto value, the Otto VM will then throw msg as a javascript error.

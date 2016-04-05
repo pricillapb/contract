@@ -35,12 +35,12 @@ func (c *inProcClient) Close() {
 	c.cl.Close()
 }
 
-// NewInProcRPCClient creates an in-process buffer stream attachment to a given
+// NewInProcClient creates an in-process buffer stream attachment to a given
 // RPC server.
-func NewInProcRPCClient(handler *Server) ClientCodec {
+func NewInProcClient(handler *Server) *Client {
 	p1, p2 := net.Pipe()
 	go handler.ServeCodec(NewJSONCodec(p1), OptionMethodInvocation|OptionSubscriptions)
-	return &inProcClient{handler, p2, json.NewEncoder(p2), json.NewDecoder(p2)}
+	return newClient(&inProcClient{handler, p2, json.NewEncoder(p2), json.NewDecoder(p2)})
 }
 
 // Send marshals a message into a json format and injects in into the client

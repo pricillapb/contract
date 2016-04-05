@@ -53,7 +53,7 @@ type jsre struct {
 	ps1        string
 	atexit     func()
 	corsDomain string
-	client     rpc.Client
+	client     *rpc.Client
 }
 
 func makeCompleter(re *jsre) liner.WordCompleter {
@@ -77,7 +77,7 @@ func makeCompleter(re *jsre) liner.WordCompleter {
 	}
 }
 
-func newLightweightJSRE(docRoot string, client rpc.Client, datadir string, interactive bool) *jsre {
+func newLightweightJSRE(docRoot string, client *rpc.Client, datadir string, interactive bool) *jsre {
 	js := &jsre{ps1: "> "}
 	js.wait = make(chan *big.Int)
 	js.client = client
@@ -89,7 +89,7 @@ func newLightweightJSRE(docRoot string, client rpc.Client, datadir string, inter
 	return js
 }
 
-func newJSRE(stack *node.Node, docRoot, corsDomain string, client rpc.Client, interactive bool) *jsre {
+func newJSRE(stack *node.Node, docRoot, corsDomain string, client *rpc.Client, interactive bool) *jsre {
 	js := &jsre{stack: stack, ps1: "> "}
 	// set default cors domain used by startRpc from CLI flag
 	js.corsDomain = corsDomain

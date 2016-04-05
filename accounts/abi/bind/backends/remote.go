@@ -17,11 +17,7 @@
 package backends
 
 import (
-	"encoding/json"
-	"fmt"
 	"math/big"
-	"sync"
-	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -40,66 +36,13 @@ var _ bind.ContractBackend = (*rpcBackend)(nil)
 // Note: The current implementation is a blocking one. This should be replaced
 // by a proper async version when a real RPC client is created.
 type rpcBackend struct {
-	client rpc.Client // RPC client connection to interact with an API server
-	autoid uint32     // ID number to use for the next API request
-	lock   sync.Mutex // Singleton access until we get to request multiplexing
+	client *rpc.Client // RPC client connection to interact with an API server
 }
 
 // NewRPCBackend creates a new binding backend to an RPC provider that can be
 // used to interact with remote contracts.
-func NewRPCBackend(client rpc.Client) bind.ContractBackend {
-	return &rpcBackend{
-		client: client,
-	}
-}
-
-// request is a JSON RPC request package assembled internally from the client
-// method calls.
-type request struct {
-	JSONRPC string        `json:"jsonrpc"` // Version of the JSON RPC protocol, always set to 2.0
-	ID      int           `json:"id"`      // Auto incrementing ID number for this request
-	Method  string        `json:"method"`  // Remote procedure name to invoke on the server
-	Params  []interface{} `json:"params"`  // List of parameters to pass through (keep types simple)
-}
-
-// response is a JSON RPC response package sent back from the API server.
-type response struct {
-	JSONRPC string          `json:"jsonrpc"` // Version of the JSON RPC protocol, always set to 2.0
-	ID      int             `json:"id"`      // Auto incrementing ID number for this request
-	Error   json.RawMessage `json:"error"`   // Any error returned by the remote side
-	Result  json.RawMessage `json:"result"`  // Whatever the remote side sends us in reply
-}
-
-// request forwards an API request to the RPC server, and parses the response.
-//
-// This is currently painfully non-concurrent, but it will have to do until we
-// find the time for niceties like this :P
-func (b *rpcBackend) request(method string, params []interface{}) (json.RawMessage, error) {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
-	// Ugly hack to serialize an empty list properly
-	if params == nil {
-		params = []interface{}{}
-	}
-	// Assemble the request object
-	req := &request{
-		JSONRPC: "2.0",
-		ID:      int(atomic.AddUint32(&b.autoid, 1)),
-		Method:  method,
-		Params:  params,
-	}
-	if err := b.client.Send(req); err != nil {
-		return nil, err
-	}
-	res := new(response)
-	if err := b.client.Recv(res); err != nil {
-		return nil, err
-	}
-	if len(res.Error) > 0 {
-		return nil, fmt.Errorf("remote error: %s", string(res.Error))
-	}
-	return res.Result, nil
+func NewRPCBackend(client *rpc.Client) bind.ContractBackend {
+	return &rpcBackend{client: client}
 }
 
 // ContractCall implements ContractCaller.ContractCall, delegating the execution of
@@ -118,52 +61,33 @@ func (b *rpcBackend) ContractCall(contract common.Address, data []byte, pending 
 	if pending {
 		block = "pending"
 	}
-	res, err := b.request("eth_call", []interface{}{args, block})
+	var hex string
+	err := b.client.Request(&hex, "eth_call", args, block)
 	if err != nil {
 		return nil, err
 	}
-	var hex string
-	if err := json.Unmarshal(res, &hex); err != nil {
-		return nil, err
-	}
-	// Convert the response back to a Go byte slice and return
 	return common.FromHex(hex), nil
 }
 
 // PendingAccountNonce implements ContractTransactor.PendingAccountNonce, delegating
 // the current account nonce retrieval to the remote node.
 func (b *rpcBackend) PendingAccountNonce(account common.Address) (uint64, error) {
-	res, err := b.request("eth_getTransactionCount", []interface{}{account.Hex(), "pending"})
+	var hex rpc.HexNumber
+	err := b.client.Request(&hex, "eth_getTransactionCount", account.Hex(), "pending")
 	if err != nil {
 		return 0, err
 	}
-	var hex string
-	if err := json.Unmarshal(res, &hex); err != nil {
-		return 0, err
-	}
-	nonce, ok := new(big.Int).SetString(hex, 0)
-	if !ok {
-		return 0, fmt.Errorf("invalid nonce hex: %s", hex)
-	}
-	return nonce.Uint64(), nil
+	return hex.Uint64(), nil
 }
 
 // SuggestGasPrice implements ContractTransactor.SuggestGasPrice, delegating the
 // gas price oracle request to the remote node.
 func (b *rpcBackend) SuggestGasPrice() (*big.Int, error) {
-	res, err := b.request("eth_gasPrice", nil)
-	if err != nil {
+	var hex rpc.HexNumber
+	if err := b.client.Request(&hex, "eth_gasPrice"); err != nil {
 		return nil, err
 	}
-	var hex string
-	if err := json.Unmarshal(res, &hex); err != nil {
-		return nil, err
-	}
-	price, ok := new(big.Int).SetString(hex, 0)
-	if !ok {
-		return nil, fmt.Errorf("invalid price hex: %s", hex)
-	}
-	return price, nil
+	return (*big.Int)(&hex), nil
 }
 
 // EstimateGasLimit implements ContractTransactor.EstimateGasLimit, delegating
@@ -182,19 +106,12 @@ func (b *rpcBackend) EstimateGasLimit(sender common.Address, contract *common.Ad
 		Value: rpc.NewHexNumber(value),
 	}
 	// Execute the RPC call and retrieve the response
-	res, err := b.request("eth_estimateGas", []interface{}{args})
+	var hex rpc.HexNumber
+	err := b.client.Request(&hex, "eth_estimateGas", args)
 	if err != nil {
 		return nil, err
 	}
-	var hex string
-	if err := json.Unmarshal(res, &hex); err != nil {
-		return nil, err
-	}
-	estimate, ok := new(big.Int).SetString(hex, 0)
-	if !ok {
-		return nil, fmt.Errorf("invalid estimate hex: %s", hex)
-	}
-	return estimate, nil
+	return (*big.Int)(&hex), nil
 }
 
 // SendTransaction implements ContractTransactor.SendTransaction, delegating the
@@ -204,13 +121,5 @@ func (b *rpcBackend) SendTransaction(tx *types.Transaction) error {
 	if err != nil {
 		return err
 	}
-	res, err := b.request("eth_sendRawTransaction", []interface{}{common.ToHex(data)})
-	if err != nil {
-		return err
-	}
-	var hex string
-	if err := json.Unmarshal(res, &hex); err != nil {
-		return err
-	}
-	return nil
+	return b.client.Request(nil, "eth_sendRawTransaction", common.ToHex(data))
 }

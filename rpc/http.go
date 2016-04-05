@@ -42,12 +42,12 @@ type httpClient struct {
 
 // NewHTTPClient create a new RPC clients that connection to a geth RPC server
 // over HTTP.
-func NewHTTPClient(endpoint string) (ClientCodec, error) {
+func NewHTTPClient(endpoint string) (*Client, error) {
 	url, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
 	}
-	return &httpClient{endpoint: url}, nil
+	return newClient(&httpClient{endpoint: url}), nil
 }
 
 // Send will serialize the given msg to JSON and sends it to the RPC server.

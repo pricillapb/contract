@@ -311,7 +311,7 @@ func (n *Node) startIPC(apis []rpc.API) error {
 				glog.V(logger.Error).Infof("IPC accept failed: %v", err)
 				continue
 			}
-			go handler.ServeCodec(rpc.NewJSONCodec(conn), rpc.OptionMethodInvocation | rpc.OptionSubscriptions)
+			go handler.ServeCodec(rpc.NewJSONCodec(conn), rpc.OptionMethodInvocation|rpc.OptionSubscriptions)
 		}
 	}()
 	// All listeners booted successfully
@@ -507,7 +507,7 @@ func (n *Node) Restart() error {
 }
 
 // Attach creates an RPC client attached to an in-process API handler.
-func (n *Node) Attach() (rpc.Client, error) {
+func (n *Node) Attach() (*rpc.Client, error) {
 	n.lock.RLock()
 	defer n.lock.RUnlock()
 
@@ -516,7 +516,7 @@ func (n *Node) Attach() (rpc.Client, error) {
 		return nil, ErrNodeStopped
 	}
 	// Otherwise attach to the API and return
-	return rpc.NewInProcRPCClient(n.inprocHandler), nil
+	return rpc.NewInProcClient(n.inprocHandler), nil
 }
 
 // Server retrieves the currently running P2P network layer. This method is meant

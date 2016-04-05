@@ -27,7 +27,7 @@ import (
 
 // NewRemoteRPCClient returns a RPC client which connects to a running geth instance.
 // Depending on the given context this can either be a IPC or a HTTP client.
-func NewRemoteRPCClient(ctx *cli.Context) (rpc.Client, error) {
+func NewRemoteRPCClient(ctx *cli.Context) (*rpc.Client, error) {
 	if ctx.Args().Present() {
 		endpoint := ctx.Args().First()
 		return NewRemoteRPCClientFromString(endpoint)
@@ -38,7 +38,7 @@ func NewRemoteRPCClient(ctx *cli.Context) (rpc.Client, error) {
 
 // NewRemoteRPCClientFromString returns a RPC client which connects to the given
 // endpoint. It must start with either `ipc:` or `rpc:` (HTTP).
-func NewRemoteRPCClientFromString(endpoint string) (rpc.Client, error) {
+func NewRemoteRPCClientFromString(endpoint string) (*rpc.Client, error) {
 	if strings.HasPrefix(endpoint, "ipc:") {
 		return rpc.NewIPCClient(endpoint[4:])
 	}
