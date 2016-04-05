@@ -25,7 +25,10 @@ import (
 	"golang.org/x/net/context"
 )
 
-type NotificationTestService struct{}
+type NotificationTestService struct {
+	gotHangSubscriptionReq  chan struct{}
+	unblockHangSubscription chan struct{}
+}
 
 var (
 	unsubCallbackCalled = false
@@ -57,6 +60,25 @@ func (s *NotificationTestService) SomeSubscription(ctx context.Context, n, val i
 		}
 	}()
 
+	return subscription, nil
+}
+
+// HangSubscription blocks on s.unblockHangSubscription before
+// sending anything.
+func (s *NotificationTestService) HangSubscription(ctx context.Context, val int) (Subscription, error) {
+	notifier, supported := ctx.Value(NotifierContextKey).(Notifier)
+	if !supported {
+		return nil, ErrNotificationsUnsupported
+	}
+	close(s.gotHangSubscriptionReq)
+	<-s.unblockHangSubscription
+	subscription, err := notifier.NewSubscription(s.Unsubscribe)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		subscription.Notify(val)
+	}()
 	return subscription, nil
 }
 

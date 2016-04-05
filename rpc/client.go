@@ -36,7 +36,7 @@ var (
 
 const clientSubscriptionBuffer = 100
 
-type ClientCodec interface {
+type clientCodec interface {
 	Send(msg interface{}) error
 	Recv(msg interface{}) error
 	Close()
@@ -59,7 +59,7 @@ type BatchElem struct {
 // A value of this type can a JSON-RPC request, notification, successful response or
 // error response. Which one it is depends on the fields.
 type jsonrpcMessage struct {
-	Version string          `json:"version"`
+	Version string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
@@ -72,7 +72,7 @@ func (msg *jsonrpcMessage) isNotification() bool {
 }
 
 func (msg *jsonrpcMessage) isResponse() bool {
-	return msg.hasValidID() && (len(msg.Result) > 0 || msg.Error != nil)
+	return msg.hasValidID() && msg.Method == "" && len(msg.Params) == 0
 }
 
 func (msg *jsonrpcMessage) hasValidID() bool {
@@ -85,7 +85,7 @@ func (msg *jsonrpcMessage) String() string {
 }
 
 type Client struct {
-	conn      ClientCodec
+	conn      clientCodec
 	wg        sync.WaitGroup
 	idCounter uint32
 
@@ -105,14 +105,14 @@ type requestOp struct {
 	sub  *ClientSubscription  // set for subscriptions
 }
 
-func NewClient(codec ClientCodec) *Client {
+func newClient(codec clientCodec) *Client {
 	c := &Client{
 		conn:      codec,
 		didQuit:   make(chan struct{}),
 		readErr:   make(chan error),
 		readResp:  make(chan []*jsonrpcMessage),
 		requestOp: make(chan *requestOp),
-		sendDone:  make(chan error),
+		sendDone:  make(chan error, 1),
 		respWait:  make(map[string]*requestOp),
 		subs:      make(map[string]*ClientSubscription),
 	}
@@ -125,6 +125,12 @@ func NewClient(codec ClientCodec) *Client {
 func (c *Client) nextID() json.RawMessage {
 	id := atomic.AddUint32(&c.idCounter, 1)
 	return []byte(strconv.FormatUint(uint64(id), 10))
+}
+
+func (c *Client) SupportedModules() (map[string]string, error) {
+	var result map[string]string
+	err := c.Request(&result, "rpc_modules")
+	return result, err
 }
 
 // Close closes the client, aborting any in-flight requests.
@@ -151,14 +157,10 @@ func (c *Client) Request(result interface{}, method string, args ...interface{})
 	} else if resp.Error != nil {
 		return resp.Error
 	}
-	// Don't unmarshal if the caller is not interested.
-	if result == nil {
-		return nil
-	}
 	if len(resp.Result) == 0 {
 		return ErrNoResult
 	}
-	return json.Unmarshal(resp.Result, result)
+	return json.Unmarshal(resp.Result, &result)
 }
 
 // BatchRequest sends all given requests as a single batch
@@ -206,13 +208,11 @@ func (c *Client) BatchRequest(b []BatchElem) error {
 			elem.Error = resp.Error
 			continue
 		}
-		if elem.Result != nil {
-			if len(resp.Result) == 0 {
-				elem.Error = ErrNoResult
-				continue
-			}
-			elem.Error = json.Unmarshal(resp.Result, elem.Result)
+		if len(resp.Result) == 0 {
+			elem.Error = ErrNoResult
+			continue
 		}
+		elem.Error = json.Unmarshal(resp.Result, elem.Result)
 	}
 	return nil
 }
@@ -228,8 +228,8 @@ func (c *Client) BatchRequest(b []BatchElem) error {
 // Slow subscribers will block the clients ingress path eventually.
 func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*ClientSubscription, error) {
 	chanVal := reflect.ValueOf(channel)
-	if chanVal.Kind() != reflect.Chan {
-		panic("first argument to EthSubscribe must be channel-typed")
+	if chanVal.Kind() != reflect.Chan || chanVal.Type().ChanDir()&reflect.SendDir == 0 {
+		panic("first argument to EthSubscribe must be a writable channel")
 	}
 	if chanVal.IsNil() {
 		panic("channel given to EthSubscribe must not be nil")
@@ -239,7 +239,8 @@ func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*Client
 	if err != nil {
 		return nil, err
 	}
-	op := &requestOp{ids: []json.RawMessage{msg.ID}, sub: &ClientSubscription{channel: chanVal}}
+	sub := newClientSubscription(chanVal)
+	op := &requestOp{ids: []json.RawMessage{msg.ID}, sub: sub}
 	if err := c.send(op, msg); err != nil {
 		return nil, err
 	}
@@ -298,12 +299,12 @@ func (c *Client) dispatch() {
 				switch {
 				case msg.isNotification():
 					if glog.V(logger.Detail) {
-						glog.Info("<-readResp: got notification ", msg)
+						glog.Info("<-readResp: notification ", msg)
 					}
 					c.handleNotification(msg)
 				case msg.isResponse():
 					if glog.V(logger.Detail) {
-						glog.Info("<-readResp: got response ", msg)
+						glog.Info("<-readResp: response ", msg)
 					}
 					c.handleResponse(msg)
 				default:
@@ -313,6 +314,7 @@ func (c *Client) dispatch() {
 					// TODO: maybe close
 				}
 			}
+
 		// Send path.
 		case op := <-requestOpLock:
 			// Stop listening for further send ops until the current one is done.
@@ -357,15 +359,15 @@ func (c *Client) closeRequestOps(err error) {
 
 func (c *Client) handleNotification(msg *jsonrpcMessage) {
 	if msg.Method != notificationMethod {
-		glog.V(logger.Debug).Infof("dropping non-subscription notification %#v", msg)
+		glog.V(logger.Debug).Info("dropping non-subscription message: ", msg)
 		return
 	}
 	var subResult struct {
 		ID     string          `json:"subscription"`
 		Result json.RawMessage `json:"result"`
 	}
-	if err := json.Unmarshal(msg.Result, &subResult); err != nil {
-		glog.V(logger.Debug).Infof("dropping invalid subscription notification %#v", msg)
+	if err := json.Unmarshal(msg.Params, &subResult); err != nil {
+		glog.V(logger.Debug).Info("dropping invalid subscription message: ", msg)
 		return
 	}
 	if c.subs[subResult.ID] != nil {
@@ -392,7 +394,7 @@ func (c *Client) handleResponse(msg *jsonrpcMessage) {
 		op.sub.quit <- msg.Error
 		return
 	}
-	err := json.Unmarshal(msg.Result, op.sub.subid)
+	err := json.Unmarshal(msg.Result, &op.sub.subid)
 	op.sub.quit <- err
 	if err == nil {
 		go op.sub.start()
@@ -451,10 +453,22 @@ func newClientSubscription(channel reflect.Value) *ClientSubscription {
 	sub := &ClientSubscription{
 		etype:   channel.Type().Elem(),
 		channel: channel,
-		in:      make(chan json.RawMessage, clientSubscriptionBuffer),
-		quit:    make(chan error),
+		// in is buffered so dispatch can continue even if the subscriber is slow.
+		in: make(chan json.RawMessage, clientSubscriptionBuffer),
+		// quit is buffered so dispatch can progress immediately while setting up the
+		// subscription in handleResponse.
+		quit: make(chan error, 1),
 	}
 	return sub
+}
+
+// Err returns the error that lead to the closing of the subscription channel.
+// For ordinary calls to Unsubscribe, Err will be nil.
+// TODO: decide whether ErrClientQuit is returned here as well.
+func (sub *ClientSubscription) Err() error {
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	return sub.err
 }
 
 // Unsubscribe unsubscribes the notification and closes the associated channel.
@@ -465,16 +479,20 @@ func (sub *ClientSubscription) Unsubscribe() {
 	defer sub.mu.Unlock()
 	if !sub.unsubscribed {
 		close(sub.quit)
+		sub.channel.Close()
 		sub.unsubscribed = true
 	}
 }
 
-// Err returns the error that lead to the closing of the subscription channel.
-// Ordinary calls to Unsubscribe leave Err blank.
-func (sub *ClientSubscription) Err() error {
+func (sub *ClientSubscription) closeWithError(err error) {
 	sub.mu.Lock()
-	defer sub.mu.Unlock()
-	return sub.err
+	sub.err = err
+	if !sub.unsubscribed {
+		close(sub.quit)
+		sub.channel.Close()
+		sub.unsubscribed = true
+	}
+	sub.mu.Unlock()
 }
 
 func (sub *ClientSubscription) deliver(result json.RawMessage) (ok bool) {
@@ -484,16 +502,6 @@ func (sub *ClientSubscription) deliver(result json.RawMessage) (ok bool) {
 	case <-sub.quit:
 		return false
 	}
-}
-
-func (sub *ClientSubscription) closeWithError(err error) {
-	sub.mu.Lock()
-	sub.err = err
-	if !sub.unsubscribed {
-		close(sub.quit)
-		sub.unsubscribed = true
-	}
-	sub.mu.Unlock()
 }
 
 func (sub *ClientSubscription) start() {
@@ -529,5 +537,5 @@ func (sub *ClientSubscription) forward() error {
 func (sub *ClientSubscription) unmarshal(result json.RawMessage) (reflect.Value, error) {
 	val := reflect.New(sub.etype)
 	err := json.Unmarshal(result, val.Interface())
-	return val, err
+	return val.Elem(), err
 }

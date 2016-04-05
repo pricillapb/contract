@@ -19,25 +19,24 @@ package rpc
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/ethereum/go-ethereum/logger/glog"
 )
 
-func init() {
-	glog.SetToStderr(true)
-	glog.SetV(6)
+func newTestClient(t *testing.T, serviceName string, service interface{}) (*Server, *Client) {
+	server := NewServer()
+	if err := server.RegisterName(serviceName, service); err != nil {
+		t.Fatal(err)
+	}
+	return server, NewInProcClient(server)
 }
 
 func TestClientRequest(t *testing.T) {
-	server := NewServer()
+	server, client := newTestClient(t, "service", new(Service))
 	defer server.Stop()
-	if err := server.RegisterName("service", new(Service)); err != nil {
-		t.Fatal(err)
-	}
-
-	client := NewClient(NewInProcRPCClient(server))
 	defer client.Close()
+
 	var resp Result
 	if err := client.Request(&resp, "service_echo", "hello", 10, &Args{"world"}); err != nil {
 		t.Fatal(err)
@@ -48,14 +47,10 @@ func TestClientRequest(t *testing.T) {
 }
 
 func TestClientBatchRequest(t *testing.T) {
-	server := NewServer()
+	server, client := newTestClient(t, "service", new(Service))
 	defer server.Stop()
-	if err := server.RegisterName("service", new(Service)); err != nil {
-		t.Fatal(err)
-	}
-
-	client := NewClient(NewInProcRPCClient(server))
 	defer client.Close()
+
 	batch := []BatchElem{
 		{
 			Method: "service_echo",
@@ -96,5 +91,99 @@ func TestClientBatchRequest(t *testing.T) {
 	}
 	if !reflect.DeepEqual(batch, wantResult) {
 		t.Errorf("batch results mismatch:\ngot %swant %s", spew.Sdump(batch), spew.Sdump(wantResult))
+	}
+}
+
+func TestClientSubscribeInvalidArg(t *testing.T) {
+	check := func(shouldPanic bool, arg interface{}) {
+		defer func() {
+			err := recover()
+			if shouldPanic && err == nil {
+				t.Errorf("EthSubscribe should've panicked for %#v", arg)
+			}
+			if !shouldPanic && err != nil {
+				t.Errorf("EthSubscribe shouldn't have panicked for %#v", arg)
+				t.Error("message was: ", err)
+			}
+		}()
+		client, _ := NewWSClient("http://localhost:9999")
+		client.Close()
+		client.EthSubscribe(arg, "foo_bar")
+	}
+	check(true, nil)
+	check(true, 1)
+	check(true, (chan int)(nil))
+	check(true, make(<-chan int))
+	check(false, make(chan int))
+	check(false, make(chan<- int))
+}
+
+func TestClientSubscribe(t *testing.T) {
+	server, client := newTestClient(t, "eth", new(NotificationTestService))
+	defer server.Stop()
+	defer client.Close()
+
+	nc := make(chan int)
+	count := 10
+	sub, err := client.EthSubscribe(nc, "someSubscription", count, 0)
+	if err != nil {
+		t.Fatal("can't subscribe:", err)
+	}
+	for i := 0; i < count; i++ {
+		if val := <-nc; val != i {
+			t.Fatalf("value mismatch: got %, want %d", val, i)
+		}
+	}
+
+	sub.Unsubscribe()
+	select {
+	case _, ok := <-nc:
+		if ok {
+			t.Fatal("channel was not closed after unsubscribe")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("channel not closed within 1s after unsubscribe")
+	}
+	if err := sub.Err(); err != nil {
+		t.Fatalf("Err returned a non-nil error after explicit unsubscribe: %q", err)
+	}
+}
+
+// In this test, the connection drops while EthSubscribe is
+// waiting for a response.
+func TestClientSubscribeClose(t *testing.T) {
+	service := &NotificationTestService{
+		gotHangSubscriptionReq:  make(chan struct{}),
+		unblockHangSubscription: make(chan struct{}),
+	}
+	server, client := newTestClient(t, "eth", service)
+	defer server.Stop()
+	defer client.Close()
+
+	var (
+		nc   = make(chan int)
+		errc = make(chan error)
+		sub  *ClientSubscription
+		err  error
+	)
+	go func() {
+		sub, err = client.EthSubscribe(nc, "hangSubscription", 999)
+		errc <- err
+	}()
+
+	<-service.gotHangSubscriptionReq
+	client.Close()
+	close(service.unblockHangSubscription)
+
+	select {
+	case err := <-errc:
+		if err != ErrClientQuit {
+			t.Errorf("EthSubscribe error mismatch after Close: got %q, want %q", err, ErrClientQuit)
+		}
+		if sub != nil {
+			t.Error("EthSubscribe returned non-nil subscription after Close")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("EthSubscribe did not return within 1s after Close")
 	}
 }
