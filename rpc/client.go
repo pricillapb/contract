@@ -227,12 +227,17 @@ func (c *Client) BatchRequest(b []BatchElem) error {
 //
 // Slow subscribers will block the clients ingress path eventually.
 func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*ClientSubscription, error) {
+	// Check type of channel first.
 	chanVal := reflect.ValueOf(channel)
 	if chanVal.Kind() != reflect.Chan || chanVal.Type().ChanDir()&reflect.SendDir == 0 {
 		panic("first argument to EthSubscribe must be a writable channel")
 	}
 	if chanVal.IsNil() {
 		panic("channel given to EthSubscribe must not be nil")
+	}
+	// HTTP and notifications don't mix.
+	if _, ok := c.conn.(*httpClient); ok {
+		return nil, ErrNotificationsUnsupported
 	}
 
 	msg, err := c.newMessage(subscribeMethod, args...)
