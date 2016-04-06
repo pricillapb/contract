@@ -82,11 +82,7 @@ func (client *httpClient) Recv(msg interface{}) error {
 
 // Close is not necessary for httpClient
 func (client *httpClient) Close() {
-}
 
-// SupportedModules will return the collection of offered RPC modules.
-func (client *httpClient) SupportedModules() (map[string]string, error) {
-	return SupportedModules(client)
 }
 
 // httpReadWriteNopCloser wraps a io.Reader and io.Writer with a NOP Close method.

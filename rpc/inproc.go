@@ -54,8 +54,3 @@ func (c *inProcClient) Send(msg interface{}) error {
 func (c *inProcClient) Recv(msg interface{}) error {
 	return c.dec.Decode(msg)
 }
-
-// Returns the collection of modules the RPC server offers.
-func (c *inProcClient) SupportedModules() (map[string]string, error) {
-	return SupportedModules(c)
-}

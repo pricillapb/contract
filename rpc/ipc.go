@@ -78,8 +78,3 @@ func (client *ipcClient) Recv(msg interface{}) error {
 func (client *ipcClient) Close() {
 	client.conn.Close()
 }
-
-// SupportedModules will return the collection of offered RPC modules.
-func (client *ipcClient) SupportedModules() (map[string]string, error) {
-	return SupportedModules(client)
-}

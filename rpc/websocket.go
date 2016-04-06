@@ -29,26 +29,6 @@ import (
 	"gopkg.in/fatih/set.v0"
 )
 
-// wsReaderWriterCloser reads and write payloads from and to a websocket  connection.
-type wsReaderWriterCloser struct {
-	c *websocket.Conn
-}
-
-// Read will read incoming payload data into p.
-func (rw *wsReaderWriterCloser) Read(p []byte) (int, error) {
-	return rw.c.Read(p)
-}
-
-// Write writes p to the websocket.
-func (rw *wsReaderWriterCloser) Write(p []byte) (int, error) {
-	return rw.c.Write(p)
-}
-
-// Close closes the websocket connection.
-func (rw *wsReaderWriterCloser) Close() error {
-	return rw.c.Close()
-}
-
 // wsHandshakeValidator returns a handler that verifies the origin during the
 // websocket upgrade process. When a '*' is specified as an allowed origins all
 // connections are accepted.
@@ -93,7 +73,7 @@ func NewWSServer(allowedOrigins string, handler *Server) *http.Server {
 		Handler: websocket.Server{
 			Handshake: wsHandshakeValidator(strings.Split(allowedOrigins, ",")),
 			Handler: func(conn *websocket.Conn) {
-				handler.ServeCodec(NewJSONCodec(&wsReaderWriterCloser{conn}),
+				handler.ServeCodec(NewJSONCodec(conn),
 					OptionMethodInvocation|OptionSubscriptions)
 			},
 		},
@@ -130,11 +110,6 @@ func (client *wsClient) connection() (*websocket.Conn, error) {
 	client.conn, err = websocket.Dial(client.endpoint, "", origin)
 
 	return client.conn, err
-}
-
-// SupportedModules is the collection of modules the RPC server offers.
-func (client *wsClient) SupportedModules() (map[string]string, error) {
-	return SupportedModules(client)
 }
 
 // Send writes the JSON serialized msg to the websocket. It will create a new
