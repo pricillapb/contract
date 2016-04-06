@@ -239,7 +239,7 @@ func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*Client
 	if err != nil {
 		return nil, err
 	}
-	sub := newClientSubscription(chanVal)
+	sub := newClientSubscription(c, chanVal)
 	op := &requestOp{ids: []json.RawMessage{msg.ID}, sub: sub}
 	if err := c.send(op, msg); err != nil {
 		return nil, err
@@ -353,7 +353,7 @@ func (c *Client) closeRequestOps(err error) {
 		}
 	}
 	for _, sub := range c.subs {
-		sub.closeWithError(ErrClientQuit)
+		sub.quitWithError(nil, false)
 	}
 }
 
@@ -434,6 +434,7 @@ func (c *Client) readMessage(buf *json.RawMessage) (rs []*jsonrpcMessage, err er
 
 // A ClientSubscription represents a subscription established through EthSubscribe.
 type ClientSubscription struct {
+	client  *Client
 	etype   reflect.Type
 	channel reflect.Value
 	subid   string
@@ -449,8 +450,9 @@ type ClientSubscription struct {
 	err          error
 }
 
-func newClientSubscription(channel reflect.Value) *ClientSubscription {
+func newClientSubscription(c *Client, channel reflect.Value) *ClientSubscription {
 	sub := &ClientSubscription{
+		client:  c,
 		etype:   channel.Type().Elem(),
 		channel: channel,
 		// in is buffered so dispatch can continue even if the subscriber is slow.
@@ -474,20 +476,19 @@ func (sub *ClientSubscription) Err() error {
 // Unsubscribe unsubscribes the notification and closes the associated channel.
 // It can safely be called more than once.
 func (sub *ClientSubscription) Unsubscribe() {
-	// TODO: send eth_unsubscribe.
-	sub.mu.Lock()
-	defer sub.mu.Unlock()
-	if !sub.unsubscribed {
-		close(sub.quit)
-		sub.channel.Close()
-		sub.unsubscribed = true
-	}
+	sub.quitWithError(nil, true)
 }
 
-func (sub *ClientSubscription) closeWithError(err error) {
+func (sub *ClientSubscription) quitWithError(err error, unsubscribeServer bool) {
 	sub.mu.Lock()
-	sub.err = err
+	// Keep the original error around.
+	if sub.err == nil {
+		sub.err = err
+	}
 	if !sub.unsubscribed {
+		if unsubscribeServer {
+			sub.requestUnsubscribe()
+		}
 		close(sub.quit)
 		sub.channel.Close()
 		sub.unsubscribed = true
@@ -505,7 +506,7 @@ func (sub *ClientSubscription) deliver(result json.RawMessage) (ok bool) {
 }
 
 func (sub *ClientSubscription) start() {
-	sub.closeWithError(sub.forward())
+	sub.quitWithError(sub.forward(), false)
 }
 
 func (sub *ClientSubscription) forward() error {
@@ -518,7 +519,7 @@ func (sub *ClientSubscription) forward() error {
 		case result := <-sub.in:
 			val, err := sub.unmarshal(result)
 			if err != nil {
-				// TODO: send eth_unsubscribe
+				sub.requestUnsubscribe()
 				return err
 			}
 			cases[1].Send = val
@@ -538,4 +539,9 @@ func (sub *ClientSubscription) unmarshal(result json.RawMessage) (reflect.Value,
 	val := reflect.New(sub.etype)
 	err := json.Unmarshal(result, val.Interface())
 	return val.Elem(), err
+}
+
+func (sub *ClientSubscription) requestUnsubscribe() error {
+	var result interface{}
+	return sub.client.Request(&result, unsubscribeMethod, sub.subid)
 }
