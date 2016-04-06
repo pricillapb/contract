@@ -17,6 +17,7 @@
 package rpc
 
 import (
+	"net"
 	"reflect"
 	"testing"
 	"time"
@@ -185,5 +186,54 @@ func TestClientSubscribeClose(t *testing.T) {
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatalf("EthSubscribe did not return within 1s after Close")
+	}
+}
+
+func TestClientHTTP(t *testing.T) {
+	server := NewServer()
+	server.RegisterName("service", new(Service))
+	httpserver := NewHTTPServer("", server)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go httpserver.Serve(listener)
+
+	// Launch concurrent requests.
+	var (
+		client, _  = NewHTTPClient("http://" + listener.Addr().String())
+		results    = make([]Result, 200)
+		errc       = make(chan error)
+		wantResult = Result{"a", 1, new(Args)}
+	)
+	// defer client.Close()
+	for i := range results {
+		i := i
+		go func() {
+			errc <- client.Request(&results[i], "service_echo",
+				wantResult.String, wantResult.Int, wantResult.Args)
+		}()
+	}
+
+	// Wait for all of them to complete.
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for i := range results {
+		select {
+		case err := <-errc:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-timeout.C:
+			t.Fatalf("timeout (got %d/%d) results)", i+1, len(results))
+		}
+	}
+
+	// Check results.
+	for i := range results {
+		if !reflect.DeepEqual(results[i], wantResult) {
+			t.Errorf("result %d mismatch: got %#v, want %#v", results[i], wantResult)
+		}
 	}
 }

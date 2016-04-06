@@ -21,10 +21,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/rs/cors"
 )
@@ -35,54 +35,63 @@ const (
 
 // httpClient connects to a geth RPC server over HTTP.
 type httpClient struct {
-	endpoint   *url.URL    // HTTP-RPC server endpoint
-	httpClient http.Client // reuse connection
-	lastRes    []byte      // HTTP requests are synchronous, store last response
+	endpoint string // HTTP-RPC server endpoint
+	client   http.Client
+	dec      *json.Decoder
+	respW    *io.PipeWriter
+
+	// closed is locked because Close can be called concurrently with
+	// Send and Recv.
+	mu     sync.Mutex
+	closed bool
 }
 
 // NewHTTPClient create a new RPC clients that connection to a geth RPC server
 // over HTTP.
 func NewHTTPClient(endpoint string) (*Client, error) {
-	url, err := url.Parse(endpoint)
-	if err != nil {
+	if _, err := url.Parse(endpoint); err != nil {
 		return nil, err
 	}
-	return newClient(&httpClient{endpoint: url}), nil
+	respR, respW := io.Pipe()
+	hc := &httpClient{endpoint: endpoint, dec: json.NewDecoder(respR), respW: respW}
+	return newClient(hc), nil
 }
 
 // Send will serialize the given msg to JSON and sends it to the RPC server.
 // Since HTTP is synchronous the response is stored until Recv is called.
 func (client *httpClient) Send(msg interface{}) error {
-	var body []byte
-	var err error
-
-	client.lastRes = nil
-	if body, err = json.Marshal(msg); err != nil {
-		return err
+	client.mu.Lock()
+	closed := client.closed
+	client.mu.Unlock()
+	if closed {
+		return ErrClientQuit
 	}
 
-	resp, err := client.httpClient.Post(client.endpoint.String(), "application/json", bytes.NewReader(body))
+	body, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
-
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		client.lastRes, err = ioutil.ReadAll(resp.Body)
+	resp, err := client.client.Post(client.endpoint, "application/json", bytes.NewReader(body))
+	if err != nil {
 		return err
 	}
-
-	return fmt.Errorf("request failed: %s", resp.Status)
+	if _, err := io.Copy(client.respW, resp.Body); err != nil {
+		client.respW.CloseWithError(err)
+	}
+	return nil
 }
 
 // Recv will try to deserialize the last received response into the given msg.
 func (client *httpClient) Recv(msg interface{}) error {
-	return json.Unmarshal(client.lastRes, &msg)
+	return client.dec.Decode(msg)
 }
 
 // Close is not necessary for httpClient
 func (client *httpClient) Close() {
-
+	client.mu.Lock()
+	client.closed = true
+	client.respW.CloseWithError(io.EOF)
+	client.mu.Unlock()
 }
 
 // httpReadWriteNopCloser wraps a io.Reader and io.Writer with a NOP Close method.
