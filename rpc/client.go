@@ -470,8 +470,10 @@ func newClientSubscription(c *Client, channel reflect.Value) *ClientSubscription
 }
 
 // Err returns the error that lead to the closing of the subscription channel.
-// For ordinary calls to Unsubscribe, Err will be nil.
-// TODO: decide whether ErrClientQuit is returned here as well.
+//
+// The intended use of Err is to schedule resubscription when the client connection is
+// closed unexpectedly. After a call to Unsubscribe or Close on the underlying Client, Err
+// will return nil.
 func (sub *ClientSubscription) Err() error {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
