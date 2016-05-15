@@ -118,8 +118,13 @@ func (t *rlpx) doProtoHandshake(our *protoHandshake) (their *protoHandshake, err
 	// returning the handshake read error. If the remote side
 	// disconnects us early with a valid reason, we should return it
 	// as the error so it can be tracked elsewhere.
+
+	endpoint, _ := rlp.EncodeToBytes(t.fd.RemoteAddr().String())
+	cpy := *our
+	cpy.Rest = []rlp.RawValue{endpoint}
+
 	werr := make(chan error, 1)
-	go func() { werr <- Send(t.rw, handshakeMsg, our) }()
+	go func() { werr <- Send(t.rw, handshakeMsg, &cpy) }()
 	if their, err = readProtocolHandshake(t.rw, our); err != nil {
 		<-werr // make sure the write terminates too
 		return nil, err
@@ -156,6 +161,9 @@ func readProtocolHandshake(rw MsgReader, our *protoHandshake) (*protoHandshake, 
 	}
 	if (hs.ID == discover.NodeID{}) {
 		return nil, DiscInvalidIdentity
+	}
+	if len(hs.Rest) > 0 {
+		fmt.Printf("got additional devp2p handshake data: %x\n", hs.Rest)
 	}
 	return &hs, nil
 }

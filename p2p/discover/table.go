@@ -226,6 +226,12 @@ func (tab *Table) Resolve(targetID NodeID) *Node {
 	return nil
 }
 
+func (tab *Table) SetAnnouncedPort(port uint16) {
+	tab.mutex.Lock()
+	defer tab.mutex.Unlock()
+
+}
+
 // Lookup performs a network search for nodes close
 // to the given target. It approaches the target by querying
 // nodes that are closer to it on each iteration.

@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/nat"
+	"github.com/jbenet/go-reuseport"
 )
 
 const (
@@ -369,7 +370,7 @@ func (srv *Server) Start() (err error) {
 
 func (srv *Server) startListening() error {
 	// Launch the TCP listener.
-	listener, err := net.Listen("tcp", srv.ListenAddr)
+	listener, err := reuseport.Listen("tcp", srv.ListenAddr)
 	if err != nil {
 		return err
 	}

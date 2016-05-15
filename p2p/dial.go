@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/jbenet/go-reuseport"
 )
 
 const (
@@ -261,7 +262,7 @@ func (t *dialTask) resolve(srv *Server) bool {
 func (t *dialTask) dial(srv *Server, dest *discover.Node) bool {
 	addr := &net.TCPAddr{IP: dest.IP, Port: int(dest.TCP)}
 	glog.V(logger.Debug).Infof("dial tcp %v (%x)\n", addr, dest.ID[:6])
-	fd, err := srv.Dialer.Dial("tcp", addr.String())
+	fd, err := reuseport.Dial("tcp", srv.ListenAddr, addr.String())
 	if err != nil {
 		glog.V(logger.Detail).Infof("%v", err)
 		return false
