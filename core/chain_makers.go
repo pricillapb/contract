@@ -181,7 +181,7 @@ func GenerateChain(parent *types.Block, db ethdb.Database, n int, gen func(int, 
 			gen(i, b)
 		}
 		AccumulateRewards(statedb, h, b.uncles)
-		root, err := statedb.Commit()
+		root, err := statedb.CommitTo(db)
 		if err != nil {
 			panic(fmt.Sprintf("state write error: %v", err))
 		}

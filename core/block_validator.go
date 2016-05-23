@@ -72,7 +72,7 @@ func (v *BlockValidator) ValidateBlock(block *types.Block) error {
 			return &KnownBlockError{block.Number(), block.Hash()}
 		}
 	}
-	parent := v.bc.GetBlock(block.ParentHash())
+	parent := v.bc.GetBlock(v.bc.chainDb, block.ParentHash())
 	if parent == nil {
 		return ParentError(block.ParentHash())
 	}
@@ -194,7 +194,7 @@ func (v *BlockValidator) ValidateHeader(header, parent *types.Header, checkPow b
 		return ParentError(header.ParentHash)
 	}
 	// Short circuit if the header's already known or its parent missing
-	if v.bc.HasHeader(header.Hash()) {
+	if v.bc.HasHeader(v.bc.chainDb, header.Hash()) {
 		return nil
 	}
 	return ValidateHeader(v.config, v.Pow, header, parent, checkPow, false)

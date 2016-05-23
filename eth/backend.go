@@ -555,31 +555,16 @@ func upgradeChainDatabase(db ethdb.Database) error {
 			// Load the block, split and serialize (order!)
 			block := core.GetBlockByHashOld(db, common.BytesToHash(bytes.TrimPrefix(it.Key(), blockPrefix)))
 
-			if err := core.WriteTd(db, block.Hash(), block.DeprecatedTd()); err != nil {
-				return err
-			}
-			if err := core.WriteBody(db, block.Hash(), block.Body()); err != nil {
-				return err
-			}
-			if err := core.WriteHeader(db, block.Header()); err != nil {
-				return err
-			}
-			if err := db.Delete(it.Key()); err != nil {
-				return err
-			}
+			core.WriteTd(db, block.Hash(), block.DeprecatedTd())
+			core.WriteBody(db, block.Hash(), block.Body())
+			core.WriteHeader(db, block.Header())
+			db.Delete(it.Key())
 		}
 		// Lastly, upgrade the head block, disabling the upgrade mechanism
 		current := core.GetBlockByHashOld(db, head)
-
-		if err := core.WriteTd(db, current.Hash(), current.DeprecatedTd()); err != nil {
-			return err
-		}
-		if err := core.WriteBody(db, current.Hash(), current.Body()); err != nil {
-			return err
-		}
-		if err := core.WriteHeader(db, current.Header()); err != nil {
-			return err
-		}
+		core.WriteTd(db, current.Hash(), current.DeprecatedTd())
+		core.WriteBody(db, current.Hash(), current.Body())
+		core.WriteHeader(db, current.Header())
 	}
 	return nil
 }

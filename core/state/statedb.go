@@ -23,7 +23,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -40,7 +39,7 @@ var StartingNonce uint64
 // * Contracts
 // * Accounts
 type StateDB struct {
-	db   ethdb.Database
+	db   trie.Database
 	trie *trie.SecureTrie
 
 	stateObjects map[string]*StateObject
@@ -54,7 +53,7 @@ type StateDB struct {
 }
 
 // Create a new state from a given trie
-func New(root common.Hash, db ethdb.Database) (*StateDB, error) {
+func New(root common.Hash, db trie.Database) (*StateDB, error) {
 	tr, err := trie.NewSecure(root, db)
 	if err != nil {
 		return nil, err
@@ -348,22 +347,10 @@ func (s *StateDB) IntermediateRoot() common.Hash {
 	return s.trie.Hash()
 }
 
-// Commit commits all state changes to the database.
-func (s *StateDB) Commit() (root common.Hash, err error) {
-	root, batch := s.CommitBatch()
-	return root, batch.Write()
-}
-
-// CommitBatch commits all state changes to a write batch but does not
-// execute the batch. It is used to validate state changes against
-// the root hash stored in a block.
-func (s *StateDB) CommitBatch() (root common.Hash, batch ethdb.Batch) {
-	batch = s.db.NewBatch()
-	root, _ = s.commit(batch)
-	return root, batch
-}
-
-func (s *StateDB) commit(db trie.DatabaseWriter) (common.Hash, error) {
+// CommitTo writes all state changes to the given database.
+// It is used to validate state changes against the root hash
+// stored in a block.
+func (s *StateDB) CommitTo(db trie.DatabaseWriter) (common.Hash, error) {
 	s.refund = new(big.Int)
 
 	for _, stateObject := range s.stateObjects {

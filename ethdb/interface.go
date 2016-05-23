@@ -16,15 +16,43 @@
 
 package ethdb
 
-type Database interface {
-	Put(key []byte, value []byte) error
+// Reader wraps database read operations.
+type Reader interface {
 	Get(key []byte) ([]byte, error)
-	Delete(key []byte) error
-	Close()
-	NewBatch() Batch
 }
 
-type Batch interface {
+// Writer wraps database write operations.
+type Writer interface {
 	Put(key, value []byte) error
-	Write() error
+	Delete(key []byte) error
+}
+
+type Database interface {
+	Reader // Reading from a database can happen without a transaction.
+	Writer // Writing, too.
+
+	Close() // Databases must be closed after use.
+
+	// Writes to the database must be wrapped in a transaction.
+	// If a transaction is already in progress, NewTx blocks until
+	// the transaction is committed.
+	NewTx() (Tx, error)
+}
+
+type Tx interface {
+	Reader
+	Writer // Note that tx writes don't return errors.
+
+	// Commit writes all changes to the underlying database.
+	Commit() error
+	Discard()
+}
+
+func RunTx(db Database, f func(Tx)) error {
+	tx, err := db.NewTx()
+	if err != nil {
+		return err
+	}
+	f(tx)
+	return tx.Commit()
 }

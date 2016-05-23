@@ -73,8 +73,8 @@ func testFork(t *testing.T, blockchain *BlockChain, i, n int, full bool, compara
 	// Assert the chains have the same header/block at #i
 	var hash1, hash2 common.Hash
 	if full {
-		hash1 = blockchain.GetBlockByNumber(uint64(i)).Hash()
-		hash2 = blockchain2.GetBlockByNumber(uint64(i)).Hash()
+		hash1 = blockchain.GetBlockByNumber(blockchain.chainDb, uint64(i)).Hash()
+		hash2 = blockchain2.GetBlockByNumber(blockchain.chainDb, uint64(i)).Hash()
 	} else {
 		hash1 = blockchain.GetHeaderByNumber(uint64(i)).Hash()
 		hash2 = blockchain2.GetHeaderByNumber(uint64(i)).Hash()
@@ -102,17 +102,17 @@ func testFork(t *testing.T, blockchain *BlockChain, i, n int, full bool, compara
 	var tdPre, tdPost *big.Int
 
 	if full {
-		tdPre = blockchain.GetTd(blockchain.CurrentBlock().Hash())
+		tdPre = blockchain.GetTd(blockchain.chainDb, blockchain.CurrentBlock().Hash())
 		if err := testBlockChainImport(blockChainB, blockchain); err != nil {
 			t.Fatalf("failed to import forked block chain: %v", err)
 		}
-		tdPost = blockchain.GetTd(blockChainB[len(blockChainB)-1].Hash())
+		tdPost = blockchain.GetTd(blockchain.chainDb, blockChainB[len(blockChainB)-1].Hash())
 	} else {
-		tdPre = blockchain.GetTd(blockchain.CurrentHeader().Hash())
+		tdPre = blockchain.GetTd(blockchain.chainDb, blockchain.CurrentHeader().Hash())
 		if err := testHeaderChainImport(headerChainB, blockchain); err != nil {
 			t.Fatalf("failed to import forked header chain: %v", err)
 		}
-		tdPost = blockchain.GetTd(headerChainB[len(headerChainB)-1].Hash())
+		tdPost = blockchain.GetTd(blockchain.chainDb, headerChainB[len(headerChainB)-1].Hash())
 	}
 	// Compare the total difficulties of the chains
 	comparator(tdPre, tdPost)
@@ -120,7 +120,7 @@ func testFork(t *testing.T, blockchain *BlockChain, i, n int, full bool, compara
 
 func printChain(bc *BlockChain) {
 	for i := bc.CurrentBlock().Number().Uint64(); i > 0; i-- {
-		b := bc.GetBlockByNumber(uint64(i))
+		b := bc.GetBlockByNumber(bc.chainDb, uint64(i))
 		fmt.Printf("\t%x %v\n", b.Hash(), b.Difficulty())
 	}
 }
@@ -137,7 +137,7 @@ func testBlockChainImport(chain types.Blocks, blockchain *BlockChain) error {
 			}
 			return err
 		}
-		statedb, err := state.New(blockchain.GetBlock(block.ParentHash()).Root(), blockchain.chainDb)
+		statedb, err := state.New(blockchain.GetBlock(blockchain.chainDb, block.ParentHash()).Root(), blockchain.chainDb)
 		if err != nil {
 			return err
 		}
@@ -146,15 +146,15 @@ func testBlockChainImport(chain types.Blocks, blockchain *BlockChain) error {
 			reportBlock(block, err)
 			return err
 		}
-		err = blockchain.Validator().ValidateState(block, blockchain.GetBlock(block.ParentHash()), statedb, receipts, usedGas)
+		err = blockchain.Validator().ValidateState(block, blockchain.GetBlock(blockchain.chainDb, block.ParentHash()), statedb, receipts, usedGas)
 		if err != nil {
 			reportBlock(block, err)
 			return err
 		}
 		blockchain.mu.Lock()
-		WriteTd(blockchain.chainDb, block.Hash(), new(big.Int).Add(block.Difficulty(), blockchain.GetTd(block.ParentHash())))
+		WriteTd(blockchain.chainDb, block.Hash(), new(big.Int).Add(block.Difficulty(), blockchain.GetTd(blockchain.chainDb, block.ParentHash())))
 		WriteBlock(blockchain.chainDb, block)
-		statedb.Commit()
+		statedb.CommitTo(blockchain.chainDb)
 		blockchain.mu.Unlock()
 	}
 	return nil
@@ -165,12 +165,12 @@ func testBlockChainImport(chain types.Blocks, blockchain *BlockChain) error {
 func testHeaderChainImport(chain []*types.Header, blockchain *BlockChain) error {
 	for _, header := range chain {
 		// Try and validate the header
-		if err := blockchain.Validator().ValidateHeader(header, blockchain.GetHeader(header.ParentHash), false); err != nil {
+		if err := blockchain.Validator().ValidateHeader(header, blockchain.GetHeader(blockchain.chainDb, header.ParentHash), false); err != nil {
 			return err
 		}
 		// Manually insert the header into the database, but don't reorganise (allows subsequent testing)
 		blockchain.mu.Lock()
-		WriteTd(blockchain.chainDb, header.Hash(), new(big.Int).Add(header.Difficulty, blockchain.GetTd(header.ParentHash)))
+		WriteTd(blockchain.chainDb, header.Hash(), new(big.Int).Add(header.Difficulty, blockchain.GetTd(blockchain.chainDb, header.ParentHash)))
 		WriteHeader(blockchain.chainDb, header)
 		blockchain.mu.Unlock()
 	}
@@ -206,7 +206,7 @@ func TestLastBlock(t *testing.T) {
 
 	bchain := theBlockChain(db, t)
 	block := makeBlockChain(bchain.CurrentBlock(), 1, db, 0)[0]
-	bchain.insert(block)
+	bchain.insert(db, block)
 	if block.Hash() != GetHeadBlockHash(db) {
 		t.Errorf("Write/Get HeadBlockHash failed")
 	}
@@ -527,7 +527,7 @@ func testReorg(t *testing.T, first, second []int, td int64, full bool) {
 	// Check that the chain is valid number and link wise
 	if full {
 		prev := bc.CurrentBlock()
-		for block := bc.GetBlockByNumber(bc.CurrentBlock().NumberU64() - 1); block.NumberU64() != 0; prev, block = block, bc.GetBlockByNumber(block.NumberU64()-1) {
+		for block := bc.GetBlockByNumber(bc.chainDb, bc.CurrentBlock().NumberU64()-1); block.NumberU64() != 0; prev, block = block, bc.GetBlockByNumber(bc.chainDb, block.NumberU64()-1) {
 			if prev.ParentHash() != block.Hash() {
 				t.Errorf("parent block hash mismatch: have %x, want %x", prev.ParentHash(), block.Hash())
 			}
@@ -543,11 +543,11 @@ func testReorg(t *testing.T, first, second []int, td int64, full bool) {
 	// Make sure the chain total difficulty is the correct one
 	want := new(big.Int).Add(genesis.Difficulty(), big.NewInt(td))
 	if full {
-		if have := bc.GetTd(bc.CurrentBlock().Hash()); have.Cmp(want) != 0 {
+		if have := bc.GetTd(bc.chainDb, bc.CurrentBlock().Hash()); have.Cmp(want) != 0 {
 			t.Errorf("total difficulty mismatch: have %v, want %v", have, want)
 		}
 	} else {
-		if have := bc.GetTd(bc.CurrentHeader().Hash()); have.Cmp(want) != 0 {
+		if have := bc.GetTd(bc.chainDb, bc.CurrentHeader().Hash()); have.Cmp(want) != 0 {
 			t.Errorf("total difficulty mismatch: have %v, want %v", have, want)
 		}
 	}
@@ -689,7 +689,7 @@ func testInsertNonceError(t *testing.T, full bool) {
 		// Check that all no blocks after the failing block have been inserted.
 		for j := 0; j < i-failAt; j++ {
 			if full {
-				if block := blockchain.GetBlockByNumber(failNum + uint64(j)); block != nil {
+				if block := blockchain.GetBlockByNumber(blockchain.chainDb, failNum+uint64(j)); block != nil {
 					t.Errorf("test %d: invalid block in chain: %v", i, block)
 				}
 			} else {
@@ -758,13 +758,13 @@ func TestFastVsFullChains(t *testing.T) {
 	for i := 0; i < len(blocks); i++ {
 		num, hash := blocks[i].NumberU64(), blocks[i].Hash()
 
-		if ftd, atd := fast.GetTd(hash), archive.GetTd(hash); ftd.Cmp(atd) != 0 {
+		if ftd, atd := fast.GetTd(fast.chainDb, hash), archive.GetTd(archive.chainDb, hash); ftd.Cmp(atd) != 0 {
 			t.Errorf("block #%d [%x]: td mismatch: have %v, want %v", num, hash, ftd, atd)
 		}
-		if fheader, aheader := fast.GetHeader(hash), archive.GetHeader(hash); fheader.Hash() != aheader.Hash() {
+		if fheader, aheader := fast.GetHeader(fast.chainDb, hash), archive.GetHeader(archive.chainDb, hash); fheader.Hash() != aheader.Hash() {
 			t.Errorf("block #%d [%x]: header mismatch: have %v, want %v", num, hash, fheader, aheader)
 		}
-		if fblock, ablock := fast.GetBlock(hash), archive.GetBlock(hash); fblock.Hash() != ablock.Hash() {
+		if fblock, ablock := fast.GetBlock(fast.chainDb, hash), archive.GetBlock(archive.chainDb, hash); fblock.Hash() != ablock.Hash() {
 			t.Errorf("block #%d [%x]: block mismatch: have %v, want %v", num, hash, fblock, ablock)
 		} else if types.DeriveSha(fblock.Transactions()) != types.DeriveSha(ablock.Transactions()) {
 			t.Errorf("block #%d [%x]: transactions mismatch: have %v, want %v", num, hash, fblock.Transactions(), ablock.Transactions())

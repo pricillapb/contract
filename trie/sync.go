@@ -258,14 +258,7 @@ func (s *TrieSync) children(req *request) ([]*request, error) {
 // commit finalizes a retrieval request and stores it into the database. If any
 // of the referencing parent requests complete due to this commit, they are also
 // committed themselves.
-func (s *TrieSync) commit(req *request, batch ethdb.Batch) (err error) {
-	// Create a new batch if none was specified
-	if batch == nil {
-		batch = s.database.NewBatch()
-		defer func() {
-			err = batch.Write()
-		}()
-	}
+func (s *TrieSync) commit(req *request, batch DatabaseWriter) (err error) {
 	// Write the node content to disk
 	if err := batch.Put(req.hash[:], req.data); err != nil {
 		return err

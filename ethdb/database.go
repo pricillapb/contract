@@ -30,6 +30,7 @@ import (
 	"github.com/syndtr/goleveldb/leveldb/errors"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/opt"
+	"github.com/syndtr/goleveldb/leveldb/storage"
 
 	gometrics "github.com/rcrowley/go-metrics"
 )
@@ -94,10 +95,15 @@ func NewLDBDatabase(file string, cache int, handles int) (*LDBDatabase, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &LDBDatabase{
-		fn: file,
-		db: db,
-	}, nil
+	return &LDBDatabase{fn: file, db: db}, nil
+}
+
+func NewMemDatabase() (*LDBDatabase, error) {
+	db, err := leveldb.Open(storage.NewMemStorage(), nil)
+	if err != nil {
+		return nil, err
+	}
+	return &LDBDatabase{db: db, fn: "<memory>"}, nil
 }
 
 // Put puts the given key / value to the queue
@@ -279,22 +285,23 @@ func (self *LDBDatabase) meter(refresh time.Duration) {
 	}
 }
 
-// TODO: remove this stuff and expose leveldb directly
-
-func (db *LDBDatabase) NewBatch() Batch {
-	return &ldbBatch{db: db.db, b: new(leveldb.Batch)}
+type ldbTx struct {
+	*leveldb.Transaction
 }
 
-type ldbBatch struct {
-	db *leveldb.DB
-	b  *leveldb.Batch
+func (tx ldbTx) Get(key []byte) ([]byte, error) {
+	return tx.Transaction.Get(key, nil)
 }
 
-func (b *ldbBatch) Put(key, value []byte) error {
-	b.b.Put(key, value)
-	return nil
+func (tx ldbTx) Delete(key []byte) error {
+	return tx.Transaction.Delete(key, nil)
 }
 
-func (b *ldbBatch) Write() error {
-	return b.db.Write(b.b, nil)
+func (tx ldbTx) Put(key, value []byte) error {
+	return tx.Transaction.Put(key, value, nil)
+}
+
+func (db *LDBDatabase) NewTx() (Tx, error) {
+	tx, err := db.db.OpenTransaction()
+	return ldbTx{tx}, err
 }

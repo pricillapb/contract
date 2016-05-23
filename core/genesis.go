@@ -41,7 +41,6 @@ func WriteGenesisBlock(chainDb ethdb.Database, reader io.Reader) (*types.Block, 
 	if err != nil {
 		return nil, err
 	}
-
 	var genesis struct {
 		ChainConfig *ChainConfig `json:"config"`
 		Nonce       string
@@ -58,13 +57,17 @@ func WriteGenesisBlock(chainDb ethdb.Database, reader io.Reader) (*types.Block, 
 			Balance string
 		}
 	}
-
 	if err := json.Unmarshal(contents, &genesis); err != nil {
 		return nil, err
 	}
 
+	dbtx, err := chainDb.NewTx()
+	if err != nil {
+		return nil, err
+	}
+
 	// creating with empty hash always works
-	statedb, _ := state.New(common.Hash{}, chainDb)
+	statedb, _ := state.New(common.Hash{}, dbtx)
 	for addr, account := range genesis.Alloc {
 		address := common.HexToAddress(addr)
 		statedb.AddBalance(address, common.String2Big(account.Balance))
@@ -73,7 +76,7 @@ func WriteGenesisBlock(chainDb ethdb.Database, reader io.Reader) (*types.Block, 
 			statedb.SetState(address, common.HexToHash(key), common.HexToHash(value))
 		}
 	}
-	root, stateBatch := statedb.CommitBatch()
+	root, _ := statedb.CommitTo(dbtx)
 
 	difficulty := common.String2Big(genesis.Difficulty)
 	block := types.NewBlock(&types.Header{
@@ -88,37 +91,21 @@ func WriteGenesisBlock(chainDb ethdb.Database, reader io.Reader) (*types.Block, 
 		Root:       root,
 	}, nil, nil, nil)
 
-	if block := GetBlock(chainDb, block.Hash()); block != nil {
+	if existing := GetBlock(dbtx, block.Hash()); existing != nil {
 		glog.V(logger.Info).Infoln("Genesis block already in chain. Writing canonical number")
-		err := WriteCanonicalHash(chainDb, block.Hash(), block.NumberU64())
-		if err != nil {
-			return nil, err
-		}
-		return block, nil
+		WriteCanonicalHash(dbtx, block.Hash(), block.NumberU64())
+	} else {
+		WriteTd(dbtx, block.Hash(), difficulty)
+		WriteBlock(dbtx, block)
+		WriteBlockReceipts(dbtx, block.Hash(), nil)
+		WriteCanonicalHash(dbtx, block.Hash(), block.NumberU64())
+		WriteHeadBlockHash(dbtx, block.Hash())
+		WriteChainConfig(dbtx, block.Hash(), genesis.ChainConfig)
 	}
 
-	if err := stateBatch.Write(); err != nil {
-		return nil, fmt.Errorf("cannot write state: %v", err)
+	if err := dbtx.Commit(); err != nil {
+		return nil, fmt.Errorf("can't commit: %v", err)
 	}
-	if err := WriteTd(chainDb, block.Hash(), difficulty); err != nil {
-		return nil, err
-	}
-	if err := WriteBlock(chainDb, block); err != nil {
-		return nil, err
-	}
-	if err := WriteBlockReceipts(chainDb, block.Hash(), nil); err != nil {
-		return nil, err
-	}
-	if err := WriteCanonicalHash(chainDb, block.Hash(), block.NumberU64()); err != nil {
-		return nil, err
-	}
-	if err := WriteHeadBlockHash(chainDb, block.Hash()); err != nil {
-		return nil, err
-	}
-	if err := WriteChainConfig(chainDb, block.Hash(), genesis.ChainConfig); err != nil {
-		return nil, err
-	}
-
 	return block, nil
 }
 
@@ -128,7 +115,7 @@ func GenesisBlockForTesting(db ethdb.Database, addr common.Address, balance *big
 	statedb, _ := state.New(common.Hash{}, db)
 	obj := statedb.GetOrNewStateObject(addr)
 	obj.SetBalance(balance)
-	root, err := statedb.Commit()
+	root, err := statedb.CommitTo(db)
 	if err != nil {
 		panic(fmt.Sprintf("cannot write state: %v", err))
 	}

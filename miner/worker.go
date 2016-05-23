@@ -271,7 +271,7 @@ func (self *worker) wait() {
 				}
 				go self.mux.Post(core.NewMinedBlockEvent{Block: block})
 			} else {
-				work.state.Commit()
+				work.state.CommitTo(self.chainDb)
 				parent := self.chain.GetBlock(block.ParentHash())
 				if parent == nil {
 					glog.V(logger.Error).Infoln("Invalid block found during mining")
@@ -284,7 +284,7 @@ func (self *worker) wait() {
 					continue
 				}
 
-				stat, err := self.chain.WriteBlock(block)
+				stat, err := self.chain.WriteBlock(self.chainDb, block)
 				if err != nil {
 					glog.V(logger.Error).Infoln("error writing block to chain", err)
 					continue
@@ -319,9 +319,7 @@ func (self *worker) wait() {
 						self.mux.Post(core.ChainHeadEvent{Block: block})
 						self.mux.Post(logs)
 					}
-					if err := core.WriteBlockReceipts(self.chainDb, block.Hash(), receipts); err != nil {
-						glog.V(logger.Warn).Infoln("error writing block receipts:", err)
-					}
+					core.WriteBlockReceipts(self.chainDb, block.Hash(), receipts)
 				}(block, work.state.Logs(), work.receipts)
 			}
 
