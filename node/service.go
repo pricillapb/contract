@@ -22,6 +22,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -42,7 +43,13 @@ func (ctx *ServiceContext) OpenDatabase(name string, cache int, handles int) (et
 	if ctx.datadir == "" {
 		return ethdb.NewMemDatabase()
 	}
-	return ethdb.NewLDBDatabase(filepath.Join(ctx.datadir, name), cache, handles)
+	var db ethdb.Database
+	var err error
+	db, err = ethdb.NewLDBDatabase(filepath.Join(ctx.datadir, name), cache, handles)
+	if err == nil {
+		db = debug.ProfileDB(db)
+	}
+	return db, err
 }
 
 // Service retrieves a currently running service registered of a specific type.

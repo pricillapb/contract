@@ -115,4 +115,5 @@ func Setup(ctx *cli.Context) error {
 func Exit() {
 	Handler.StopCPUProfile()
 	Handler.StopGoTrace()
+	writeDBProfiles()
 }
