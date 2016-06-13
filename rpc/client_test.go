@@ -107,7 +107,7 @@ func TestClientSubscribeInvalidArg(t *testing.T) {
 				t.Error("message was: ", err)
 			}
 		}()
-		client, _ := NewWSClient("http://localhost:9999")
+		client, _ := DialWS("http://localhost:9999")
 		client.Close()
 		client.EthSubscribe(arg, "foo_bar")
 	}
@@ -202,12 +202,12 @@ func TestClientHTTP(t *testing.T) {
 
 	// Launch concurrent requests.
 	var (
-		client, _  = NewHTTPClient("http://" + listener.Addr().String())
+		client, _  = Dial("http://" + listener.Addr().String())
 		results    = make([]Result, 100)
 		errc       = make(chan error)
 		wantResult = Result{"a", 1, new(Args)}
 	)
-	// defer client.Close()
+	defer client.Close()
 	for i := range results {
 		i := i
 		go func() {

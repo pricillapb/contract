@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/rs/cors"
 )
@@ -34,14 +35,22 @@ const (
 
 type httpClient struct {
 	http.Client
-	endpoint string
-	closed   chan struct{}
+	endpoint  string
+	closeOnce sync.Once
+	closed    chan struct{}
 }
 
 // httpClient implements clientCodec, but is treated specially by Client.
-func (*httpClient) Send(msg interface{}) error    { panic("Send called") }
-func (hc *httpClient) Recv(msg interface{}) error { <-hc.closed; return nil }
-func (hc *httpClient) Close()                     { close(hc.closed) }
+func (*httpClient) Send(msg interface{}) error { panic("Send called") }
+
+func (hc *httpClient) Recv(msg interface{}) error {
+	<-hc.closed
+	return nil
+}
+
+func (hc *httpClient) Close() {
+	hc.closeOnce.Do(func() { close(hc.closed) })
+}
 
 // DialHTTP creates  a new RPC clients that connection to an RPC server over HTTP.
 func DialHTTP(endpoint string) (*Client, error) {

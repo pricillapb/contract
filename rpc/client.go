@@ -465,7 +465,7 @@ func (c *Client) readMessage(buf *json.RawMessage) (rs []*jsonrpcMessage, err er
 	if err = c.conn.Recv(buf); err != nil {
 		return nil, err
 	}
-	if len(*buf) > 0 && (*buf)[0] == '[' {
+	if isBatch(*buf) {
 		err = json.Unmarshal(*buf, &rs)
 	} else {
 		rs = make([]*jsonrpcMessage, 1)
