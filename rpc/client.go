@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"reflect"
 	"strconv"
 	"sync"
@@ -103,6 +105,31 @@ type requestOp struct {
 	ids  []json.RawMessage
 	resp chan *jsonrpcMessage // set for requests, batch requests
 	sub  *ClientSubscription  // set for subscriptions
+}
+
+// Dial creates a new client for the given URL.
+//
+// The currently supported URL schemes are "http", "https", "ws" and "wss". If rawurl is a
+// file name with no URL scheme, a local socket connection is established using UNIX
+// domain sockets on supported platforms and named pipes on Windows. If you want to
+// customize the transport, use DialHTTP, DialWS or DialIPC instead.
+//
+// The client reconnects automatically if the connection is lost.
+func Dial(rawurl string) (*Client, error) {
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return nil, err
+	}
+	switch u.Scheme {
+	case "http", "https":
+		return DialHTTP(rawurl)
+	case "ws", "wss":
+		return DialWS(rawurl)
+	case "":
+		return DialIPC(rawurl)
+	default:
+		return nil, fmt.Errorf("no known transport for URL scheme %q", u.Scheme)
+	}
 }
 
 func newClient(codec clientCodec) *Client {

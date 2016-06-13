@@ -43,8 +43,8 @@ func (*httpClient) Send(msg interface{}) error    { panic("Send called") }
 func (hc *httpClient) Recv(msg interface{}) error { <-hc.closed; return nil }
 func (hc *httpClient) Close()                     { close(hc.closed) }
 
-// NewHTTPClient create a new RPC clients that connection to an RPC server over HTTP.
-func NewHTTPClient(endpoint string) (*Client, error) {
+// DialHTTP creates  a new RPC clients that connection to an RPC server over HTTP.
+func DialHTTP(endpoint string) (*Client, error) {
 	if _, err := url.Parse(endpoint); err != nil {
 		return nil, err
 	}

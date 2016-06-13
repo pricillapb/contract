@@ -88,9 +88,9 @@ type wsClient struct {
 	conn     *websocket.Conn
 }
 
-// NewWSClient creates a new RPC client that communicates with a RPC server
-// that is listening on the given endpoint using JSON encoding.
-func NewWSClient(endpoint string) (*Client, error) {
+// DialWS creates a new RPC client that communicates with a JSON-RPC server
+// that is listening on the given endpoint.
+func DialWS(endpoint string) (*Client, error) {
 	return newClient(&wsClient{endpoint: endpoint}), nil
 }
 

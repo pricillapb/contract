@@ -44,7 +44,7 @@ type BlockNumberTracker struct {
 
 func ExampleClientSubscription() {
 	tracker := &BlockNumberTracker{subch: make(chan Block)}
-	client, _ := rpc.NewClient("ws://127.0.0.1:8485")
+	client, _ := rpc.Dial("ws://127.0.0.1:8485")
 
 	// The outer loop manages the client connection.
 	for {
