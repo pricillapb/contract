@@ -244,9 +244,9 @@ func parseBatchRequest(incomingMsg json.RawMessage) ([]rpcRequest, bool, RPCErro
 		}
 
 		if len(r.Payload) == 0 {
-			requests[i] = rpcRequest{id: r.Id, params: nil}
+			requests[i] = rpcRequest{id: id, params: nil}
 		} else {
-			requests[i] = rpcRequest{id: r.Id, params: r.Payload}
+			requests[i] = rpcRequest{id: id, params: r.Payload}
 		}
 		if elem := strings.Split(r.Method, serviceMethodSeparator); len(elem) == 2 {
 			requests[i].service, requests[i].method = elem[0], elem[1]
