@@ -281,7 +281,7 @@ func geth(ctx *cli.Context) {
 // attach will connect to a running geth instance attaching a JavaScript console and to it.
 func attach(ctx *cli.Context) {
 	// attach to a running geth instance
-	client, err := utils.NewRemoteRPCClient(ctx)
+	client, err := utils.DialRPC(ctx.Args().First())
 	if err != nil {
 		utils.Fatalf("Unable to attach to geth: %v", err)
 	}

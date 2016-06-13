@@ -74,7 +74,7 @@ func monitor(ctx *cli.Context) {
 	)
 	// Attach to an Ethereum node over IPC or RPC
 	endpoint := ctx.String(monitorCommandAttachFlag.Name)
-	if client, err = utils.NewRemoteRPCClientFromString(endpoint); err != nil {
+	if client, err = utils.DialRPC(endpoint); err != nil {
 		utils.Fatalf("Unable to attach to geth node: %v", err)
 	}
 	defer client.Close()

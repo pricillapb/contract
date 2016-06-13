@@ -17,39 +17,16 @@
 package utils
 
 import (
-	"fmt"
-	"strings"
-
-	"github.com/codegangsta/cli"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-// NewRemoteRPCClient returns a RPC client which connects to a running geth instance.
-// Depending on the given context this can either be a IPC or a HTTP client.
-func NewRemoteRPCClient(ctx *cli.Context) (*rpc.Client, error) {
-	if ctx.Args().Present() {
-		endpoint := ctx.Args().First()
-		return NewRemoteRPCClientFromString(endpoint)
+// NewRemoteRPCClient returns a RPC client which connects to the given endpoint.
+// The check for empty endpoint implements the defaulting logic
+// for "geth attach" and "geth monitor" with no argument.
+func DialRPC(endpoint string) (*rpc.Client, error) {
+	if endpoint == "" {
+		endpoint = node.DefaultIPCEndpoint()
 	}
-	// use IPC by default
-	return rpc.NewIPCClient(node.DefaultIPCEndpoint())
-}
-
-// NewRemoteRPCClientFromString returns a RPC client which connects to the given
-// endpoint. It must start with either `ipc:` or `rpc:` (HTTP).
-func NewRemoteRPCClientFromString(endpoint string) (*rpc.Client, error) {
-	if strings.HasPrefix(endpoint, "ipc:") {
-		return rpc.NewIPCClient(endpoint[4:])
-	}
-	if strings.HasPrefix(endpoint, "rpc:") {
-		return rpc.NewHTTPClient(endpoint[4:])
-	}
-	if strings.HasPrefix(endpoint, "http://") {
-		return rpc.NewHTTPClient(endpoint)
-	}
-	if strings.HasPrefix(endpoint, "ws:") {
-		return rpc.NewWSClient(endpoint)
-	}
-	return nil, fmt.Errorf("invalid endpoint")
+	return rpc.Dial(endpoint)
 }
