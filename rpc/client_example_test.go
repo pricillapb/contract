@@ -21,7 +21,6 @@ package rpc_test
 import (
 	"fmt"
 	"math/big"
-	"time"
 
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -41,33 +40,17 @@ type Block struct {
 
 type BlockNumberTracker struct {
 	latestNumber *big.Int
-	client       *rpc.Client
-	sub          *rpc.ClientSubscription
-	subch        chan Block
-}
-
-func (bt *BlockNumberTracker) reconnect() error {
-	client, err := rpc.NewClient("ws://127.0.0.1:8485")
-	if err != nil {
-		return err
-	}
-	sub, err := client.EthSubscribe(bt.subch, "blocks")
-	if err != nil {
-		return err
-	}
-	bt.client, bt.sub = client, sub
-	return nil
 }
 
 func ExampleClientSubscription() {
 	tracker := &BlockNumberTracker{subch: make(chan Block)}
+	client, _ := rpc.NewClient("ws://127.0.0.1:8485")
 
 	// The outer loop manages the client connection.
 	for {
-		if err := tracker.reconnect(); err != nil {
-			// Try reconnecting after a bit of delay.
-			fmt.Println("reconnect failed:", err)
-			time.Sleep(5 * time.Second)
+		subch := make(chan Block)
+		sub, err := client.EthSubscribe(subch, "blocks")
+		if err != nil {
 			continue
 		}
 
@@ -79,14 +62,14 @@ func ExampleClientSubscription() {
 		}
 
 		// In the inner loop, we track subscription events.
-		for event := range tracker.subch {
+		for event := range subch {
 			fmt.Println("got event: ", err)
 			tracker.latestNumber = event.Number
 		}
 
 		// The subscription channel has been closed.
 		// Stop reconnecting if the close was intentional (e.g. client.Close was called).
-		if tracker.sub.Err() == nil {
+		if sub.Err() == nil {
 			return
 		}
 	}
