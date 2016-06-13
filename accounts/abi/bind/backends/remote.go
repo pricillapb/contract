@@ -62,7 +62,7 @@ func (b *rpcBackend) ContractCall(contract common.Address, data []byte, pending 
 		block = "pending"
 	}
 	var hex string
-	err := b.client.Request(&hex, "eth_call", args, block)
+	err := b.client.Call(&hex, "eth_call", args, block)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func (b *rpcBackend) ContractCall(contract common.Address, data []byte, pending 
 // the current account nonce retrieval to the remote node.
 func (b *rpcBackend) PendingAccountNonce(account common.Address) (uint64, error) {
 	var hex rpc.HexNumber
-	err := b.client.Request(&hex, "eth_getTransactionCount", account.Hex(), "pending")
+	err := b.client.Call(&hex, "eth_getTransactionCount", account.Hex(), "pending")
 	if err != nil {
 		return 0, err
 	}
@@ -84,7 +84,7 @@ func (b *rpcBackend) PendingAccountNonce(account common.Address) (uint64, error)
 // gas price oracle request to the remote node.
 func (b *rpcBackend) SuggestGasPrice() (*big.Int, error) {
 	var hex rpc.HexNumber
-	if err := b.client.Request(&hex, "eth_gasPrice"); err != nil {
+	if err := b.client.Call(&hex, "eth_gasPrice"); err != nil {
 		return nil, err
 	}
 	return (*big.Int)(&hex), nil
@@ -107,7 +107,7 @@ func (b *rpcBackend) EstimateGasLimit(sender common.Address, contract *common.Ad
 	}
 	// Execute the RPC call and retrieve the response
 	var hex rpc.HexNumber
-	err := b.client.Request(&hex, "eth_estimateGas", args)
+	err := b.client.Call(&hex, "eth_estimateGas", args)
 	if err != nil {
 		return nil, err
 	}
@@ -121,5 +121,5 @@ func (b *rpcBackend) SendTransaction(tx *types.Transaction) error {
 	if err != nil {
 		return err
 	}
-	return b.client.Request(nil, "eth_sendRawTransaction", common.ToHex(data))
+	return b.client.Call(nil, "eth_sendRawTransaction", common.ToHex(data))
 }

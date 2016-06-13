@@ -39,7 +39,7 @@ func TestClientRequest(t *testing.T) {
 	defer client.Close()
 
 	var resp Result
-	if err := client.Request(&resp, "service_echo", "hello", 10, &Args{"world"}); err != nil {
+	if err := client.Call(&resp, "service_echo", "hello", 10, &Args{"world"}); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(resp, Result{"hello", 10, &Args{"world"}}) {
@@ -69,7 +69,7 @@ func TestClientBatchRequest(t *testing.T) {
 			Result: new(int),
 		},
 	}
-	if err := client.BatchRequest(batch); err != nil {
+	if err := client.BatchCall(batch); err != nil {
 		t.Fatal(err)
 	}
 	wantResult := []BatchElem{
@@ -211,7 +211,7 @@ func TestClientHTTP(t *testing.T) {
 	for i := range results {
 		i := i
 		go func() {
-			errc <- client.Request(&results[i], "service_echo",
+			errc <- client.Call(&results[i], "service_echo",
 				wantResult.String, wantResult.Int, wantResult.Args)
 		}()
 	}

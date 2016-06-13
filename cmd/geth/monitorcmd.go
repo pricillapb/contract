@@ -160,7 +160,7 @@ func monitor(ctx *cli.Context) {
 // of collected system metrics.
 func retrieveMetrics(client *rpc.Client) (map[string]interface{}, error) {
 	var metrics map[string]interface{}
-	err := client.Request(&metrics, "debug_metrics", true)
+	err := client.Call(&metrics, "debug_metrics", true)
 	return metrics, err
 }
 

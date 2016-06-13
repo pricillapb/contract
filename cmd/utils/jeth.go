@@ -173,7 +173,7 @@ func (self *Jeth) Send(call otto.FunctionCall) (response otto.Value) {
 		resp, _ := call.Otto.Object(`({"jsonrpc":"2.0"})`)
 		resp.Set("id", req.Id)
 		var result interface{}
-		err = self.client.Request(&result, req.Method, req.Params...)
+		err = self.client.Call(&result, req.Method, req.Params...)
 		switch err := err.(type) {
 		case nil:
 			resp.Set("result", result)

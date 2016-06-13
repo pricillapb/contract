@@ -554,7 +554,7 @@ func TestAPIGather(t *testing.T) {
 	}
 	for i, test := range tests {
 		var result string
-		if err := client.Request(&result, test.Method); err != nil {
+		if err := client.Call(&result, test.Method); err != nil {
 			t.Errorf("test %d: API request failed: %v", i, err)
 		}
 		if result != test.Result {

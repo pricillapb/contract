@@ -129,7 +129,7 @@ func (c *Client) nextID() json.RawMessage {
 
 func (c *Client) SupportedModules() (map[string]string, error) {
 	var result map[string]string
-	err := c.Request(&result, "rpc_modules")
+	err := c.Call(&result, "rpc_modules")
 	return result, err
 }
 
@@ -141,7 +141,7 @@ func (c *Client) Close() {
 
 // Request performs a JSON-RPC call with the given arguments
 // and unmarshals into result if no error occurred.
-func (c *Client) Request(result interface{}, method string, args ...interface{}) error {
+func (c *Client) Call(result interface{}, method string, args ...interface{}) error {
 	msg, err := c.newMessage(method, args...)
 	if err != nil {
 		return err
@@ -170,21 +170,13 @@ func (c *Client) Request(result interface{}, method string, args ...interface{})
 	return json.Unmarshal(resp.Result, &result)
 }
 
-func (c *Client) Call(result interface{}, method string, args ...interface{}) error {
-	return c.Request(result, method, args)
-}
-
-func (c *Client) BatchCall(b []BatchElem) error {
-	return c.BatchRequest(b)
-}
-
 // BatchRequest sends all given requests as a single batch
 // and waits for the server to return a response for all of them.
 //
 // In contrast to Request, BatchRequest only returns I/O errors.
 // Any error specific to a request is reported through the Error field
 // of the corresponding BatchElem.
-func (c *Client) BatchRequest(b []BatchElem) error {
+func (c *Client) BatchCall(b []BatchElem) error {
 	msgs := make([]*jsonrpcMessage, len(b))
 	op := &requestOp{
 		ids:  make([]json.RawMessage, len(b)),
@@ -570,5 +562,5 @@ func (sub *ClientSubscription) unmarshal(result json.RawMessage) (reflect.Value,
 
 func (sub *ClientSubscription) requestUnsubscribe() error {
 	var result interface{}
-	return sub.client.Request(&result, unsubscribeMethod, sub.subid)
+	return sub.client.Call(&result, unsubscribeMethod, sub.subid)
 }
