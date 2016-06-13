@@ -203,7 +203,7 @@ func TestClientHTTP(t *testing.T) {
 	// Launch concurrent requests.
 	var (
 		client, _  = NewHTTPClient("http://" + listener.Addr().String())
-		results    = make([]Result, 200)
+		results    = make([]Result, 100)
 		errc       = make(chan error)
 		wantResult = Result{"a", 1, new(Args)}
 	)

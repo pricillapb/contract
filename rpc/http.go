@@ -34,19 +34,16 @@ const (
 
 type httpClient struct {
 	http.Client
-
 	endpoint string
 	closed   chan struct{}
 }
 
-// httpClient implements clientCodec, but is treated
-// specially by Client.
+// httpClient implements clientCodec, but is treated specially by Client.
 func (*httpClient) Send(msg interface{}) error    { panic("Send called") }
 func (hc *httpClient) Recv(msg interface{}) error { <-hc.closed; return nil }
 func (hc *httpClient) Close()                     { close(hc.closed) }
 
-// NewHTTPClient create a new RPC clients that connection to a geth RPC server
-// over HTTP.
+// NewHTTPClient create a new RPC clients that connection to an RPC server over HTTP.
 func NewHTTPClient(endpoint string) (*Client, error) {
 	if _, err := url.Parse(endpoint); err != nil {
 		return nil, err
@@ -65,18 +62,34 @@ func (c *Client) sendHTTP(op *requestOp, msg interface{}) error {
 	if err != nil {
 		return err
 	}
-	// Inject the response into the client loop asynchronously.
-	go c.readHTTPResponse(op, resp.Body)
+	defer resp.Body.Close()
+	var respmsg jsonrpcMessage
+	if err := json.NewDecoder(resp.Body).Decode(&respmsg); err != nil {
+		return err
+	}
+	op.resp <- &respmsg
 	return nil
 }
 
-func (c *Client) readHTTPResponse(op *requestOp, body io.ReadCloser) {
-	defer body.Close()
-	var buf json.RawMessage
-	if err := c.readResponse(buf); err != nil {
-		// TODO: signal op error channel
-		op.err <- err
+func (c *Client) sendBatchHTTP(op *requestOp, msgs []*jsonrpcMessage) error {
+	hc := c.conn.(*httpClient)
+	body, err := json.Marshal(msgs)
+	if err != nil {
+		return err
 	}
+	resp, err := hc.Post(hc.endpoint, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var respmsgs []jsonrpcMessage
+	if err := json.NewDecoder(resp.Body).Decode(&respmsgs); err != nil {
+		return err
+	}
+	for _, respmsg := range respmsgs {
+		op.resp <- &respmsg
+	}
+	return nil
 }
 
 // httpReadWriteNopCloser wraps a io.Reader and io.Writer with a NOP Close method.

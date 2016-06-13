@@ -147,9 +147,16 @@ func (c *Client) Request(result interface{}, method string, args ...interface{})
 		return err
 	}
 	op := &requestOp{ids: []json.RawMessage{msg.ID}, resp: make(chan *jsonrpcMessage, 1)}
-	if err := c.send(op, msg); err != nil {
+
+	if _, ok := c.conn.(*httpClient); ok {
+		err = c.sendHTTP(op, msg)
+	} else {
+		err = c.send(op, msg)
+	}
+	if err != nil {
 		return err
 	}
+
 	// dispatch has accepted the request and will close the channel it when it quits.
 	resp, isopen := <-op.resp
 	if !isopen {
@@ -161,6 +168,14 @@ func (c *Client) Request(result interface{}, method string, args ...interface{})
 		return ErrNoResult
 	}
 	return json.Unmarshal(resp.Result, &result)
+}
+
+func (c *Client) Call(result interface{}, method string, args ...interface{}) error {
+	return c.Request(result, method, args)
+}
+
+func (c *Client) BatchCall(b []BatchElem) error {
+	return c.BatchRequest(b)
 }
 
 // BatchRequest sends all given requests as a single batch
@@ -183,16 +198,21 @@ func (c *Client) BatchRequest(b []BatchElem) error {
 		msgs[i] = msg
 		op.ids[i] = msg.ID
 	}
-	if err := c.send(op, msgs); err != nil {
-		return err
+
+	var err error
+	if _, ok := c.conn.(*httpClient); ok {
+		err = c.sendBatchHTTP(op, msgs)
+	} else {
+		err = c.send(op, msgs)
 	}
+
 	// dispatch has accepted the handlers and will close respCh when it quits.
-	for n := 0; n < len(b); n++ {
+	for n := 0; n < len(b) && err == nil; n++ {
 		resp, isopen := <-op.resp
 		if !isopen {
 			// TODO: not right. would be nicer to return the actual read error,
 			// if any, but that's not easy to get.
-			return ErrClientQuit
+			err = ErrClientQuit
 		}
 		// Find the element corresponding to this response.
 		// The element is guaranteed to be present because dispatch
@@ -214,7 +234,7 @@ func (c *Client) BatchRequest(b []BatchElem) error {
 		}
 		elem.Error = json.Unmarshal(resp.Result, elem.Result)
 	}
-	return nil
+	return err
 }
 
 // EthSubscribe calls the "eth_subscribe" method with the given arguments, registering a
