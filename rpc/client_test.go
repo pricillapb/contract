@@ -30,7 +30,7 @@ func newTestClient(t *testing.T, serviceName string, service interface{}) (*Serv
 	if err := server.RegisterName(serviceName, service); err != nil {
 		t.Fatal(err)
 	}
-	return server, NewInProcClient(server)
+	return server, DialInProc(server)
 }
 
 func TestClientRequest(t *testing.T) {
