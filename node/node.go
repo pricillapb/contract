@@ -516,7 +516,7 @@ func (n *Node) Attach() (*rpc.Client, error) {
 		return nil, ErrNodeStopped
 	}
 	// Otherwise attach to the API and return
-	return rpc.NewInProcClient(n.inprocHandler), nil
+	return rpc.DialInProc(n.inprocHandler), nil
 }
 
 // Server retrieves the currently running P2P network layer. This method is meant
