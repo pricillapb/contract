@@ -1,18 +1,18 @@
 // Copyright 2015 The go-ethereum Authors
-// This file is part of go-ethereum.
+// This file is part of the go-ethereum library.
 //
-// go-ethereum is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// The go-ethereum library is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// go-ethereum is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
+// GNU Lesser General Public License for more details.
 //
-// You should have received a copy of the GNU General Public License
-// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
+// You should have received a copy of the GNU Lesser General Public License
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package eth
 
@@ -32,7 +32,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
@@ -45,17 +44,11 @@ import (
 // information.
 type PublicFullEthereumAPI struct {
 	e   *FullNodeService
-	gpo *gasprice.GasPriceOracle
 }
 
 // NewPublicFullEthereumAPI creates a new Etheruem protocol API for full nodes.
-func NewPublicFullEthereumAPI(e *FullNodeService, gpo *gasprice.GasPriceOracle) *PublicFullEthereumAPI {
-	return &PublicFullEthereumAPI{e, gpo}
-}
-
-// GasPrice returns a suggestion for a gas price.
-func (s *PublicFullEthereumAPI) GasPrice() *big.Int {
-	return s.gpo.SuggestPrice()
+func NewPublicFullEthereumAPI(e *FullNodeService) *PublicFullEthereumAPI {
+	return &PublicFullEthereumAPI{e}
 }
 
 // Etherbase is the address that mining rewards will be send to

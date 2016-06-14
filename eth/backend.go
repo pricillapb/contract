@@ -304,7 +304,7 @@ func (s *FullNodeService) APIs() []rpc.API {
 		{
 			Namespace: "eth",
 			Version:   "1.0",
-			Service:   NewPublicFullEthereumAPI(s, s.apiBackend.gpo),
+			Service:   NewPublicFullEthereumAPI(s),
 			Public:    true,
 		}, {
 			Namespace: "eth",
