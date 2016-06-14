@@ -21,26 +21,23 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/compiler"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
-	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	rpc "github.com/ethereum/go-ethereum/rpc"
 	"golang.org/x/net/context"
 )
 
 // EthApiBackend implements ethapi.Backend for full nodes
 type EthApiBackend struct {
-	eth      *FullNodeService
-	gpo      *gasprice.GasPriceOracle
-	SolcPath string
-	solc     *compiler.Solidity
+	eth *FullNodeService
+	gpo *gasprice.GasPriceOracle
 }
 
 func (b *EthApiBackend) SetHead(number uint64) {
@@ -166,20 +163,6 @@ func (b *EthApiBackend) TxPoolContent() (map[common.Address]map[uint64][]*types.
 	defer b.eth.txMu.Unlock()
 
 	return b.eth.TxPool().Content()
-}
-
-func (b *EthApiBackend) Solc() (*compiler.Solidity, error) {
-	var err error
-	if b.solc == nil {
-		b.solc, err = compiler.New(b.SolcPath)
-	}
-	return b.solc, err
-}
-
-func (b *EthApiBackend) SetSolc(solcPath string) (*compiler.Solidity, error) {
-	b.SolcPath = solcPath
-	b.solc = nil
-	return b.Solc()
 }
 
 func (b *EthApiBackend) Downloader() *downloader.Downloader {

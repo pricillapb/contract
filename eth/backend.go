@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/ethash"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/compiler"
 	"github.com/ethereum/go-ethereum/common/httpclient"
 	"github.com/ethereum/go-ethereum/common/registrar/ethreg"
 	"github.com/ethereum/go-ethereum/core"
@@ -39,9 +40,9 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
-	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/miner"
@@ -130,6 +131,8 @@ type FullNodeService struct {
 	AutoDAG      bool
 	autodagquit  chan bool
 	etherbase    common.Address
+	solcPath     string
+	solc         *compiler.Solidity
 
 	NatSpec       bool
 	PowTest       bool
@@ -154,20 +157,21 @@ func New(ctx *node.ServiceContext, config *Config) (*FullNodeService, error) {
 	}
 
 	eth := &FullNodeService{
-		chainDb:                 chainDb,
-		dappDb:                  dappDb,
-		eventMux:                ctx.EventMux,
-		accountManager:          config.AccountManager,
-		pow:                     pow,
-		shutdownChan:            make(chan bool),
-		stopDbUpgrade:           stopDbUpgrade,
-		httpclient:              httpclient.New(config.DocRoot),
-		netVersionId:            config.NetworkId,
-		NatSpec:                 config.NatSpec,
-		PowTest:                 config.PowTest,
-		etherbase:               config.Etherbase,
-		MinerThreads:            config.MinerThreads,
-		AutoDAG:                 config.AutoDAG,
+		chainDb:        chainDb,
+		dappDb:         dappDb,
+		eventMux:       ctx.EventMux,
+		accountManager: config.AccountManager,
+		pow:            pow,
+		shutdownChan:   make(chan bool),
+		stopDbUpgrade:  stopDbUpgrade,
+		httpclient:     httpclient.New(config.DocRoot),
+		netVersionId:   config.NetworkId,
+		NatSpec:        config.NatSpec,
+		PowTest:        config.PowTest,
+		etherbase:      config.Etherbase,
+		MinerThreads:   config.MinerThreads,
+		AutoDAG:        config.AutoDAG,
+		solcPath:       config.SolcPath,
 	}
 
 	if err := upgradeChainDatabase(chainDb); err != nil {
@@ -233,7 +237,7 @@ func New(ctx *node.ServiceContext, config *Config) (*FullNodeService, error) {
 		GpobaseCorrectionFactor: config.GpobaseCorrectionFactor,
 	}
 	gpo := gasprice.NewGasPriceOracle(eth.blockchain, chainDb, eth.eventMux, gpoParams)
-	eth.apiBackend = &EthApiBackend{eth, gpo, config.SolcPath, nil}
+	eth.apiBackend = &EthApiBackend{eth, gpo}
 
 	return eth, nil
 }
@@ -300,7 +304,7 @@ func CreatePoW(config *Config) (*ethash.Ethash, error) {
 // APIs returns the collection of RPC services the ethereum package offers.
 // NOTE, some of these services probably need to be moved to somewhere else.
 func (s *FullNodeService) APIs() []rpc.API {
-	return append(ethapi.GetAPIs(s.apiBackend), []rpc.API{
+	return append(ethapi.GetAPIs(s.apiBackend, &s.solcPath, &s.solc), []rpc.API{
 		{
 			Namespace: "eth",
 			Version:   "1.0",

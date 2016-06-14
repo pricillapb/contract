@@ -43,7 +43,7 @@ import (
 // PublicFullEthereumAPI provides an API to access Ethereum full node-related
 // information.
 type PublicFullEthereumAPI struct {
-	e   *FullNodeService
+	e *FullNodeService
 }
 
 // NewPublicFullEthereumAPI creates a new Etheruem protocol API for full nodes.

@@ -37,8 +37,6 @@ import (
 // both full and light clients) with access to necessary functions.
 type Backend interface {
 	// general Ethereum API
-	Solc() (*compiler.Solidity, error)
-	SetSolc(solcPath string) (*compiler.Solidity, error)
 	Downloader() *downloader.Downloader
 	ProtocolVersion() int
 	SuggestPrice(ctx context.Context) (*big.Int, error)
@@ -72,12 +70,12 @@ type State interface {
 	GetNonce(ctx context.Context, addr common.Address) (uint64, error)
 }
 
-func GetAPIs(apiBackend Backend) []rpc.API {
+func GetAPIs(apiBackend Backend, solcPath *string, solc **compiler.Solidity) []rpc.API {
 	return []rpc.API{
 		{
 			Namespace: "eth",
 			Version:   "1.0",
-			Service:   NewPublicEthereumAPI(apiBackend),
+			Service:   NewPublicEthereumAPI(apiBackend, solcPath, solc),
 			Public:    true,
 		}, {
 			Namespace: "eth",
@@ -97,7 +95,7 @@ func GetAPIs(apiBackend Backend) []rpc.API {
 		}, {
 			Namespace: "admin",
 			Version:   "1.0",
-			Service:   NewPrivateAdminAPI(apiBackend),
+			Service:   NewPrivateAdminAPI(apiBackend, solcPath, solc),
 		}, {
 			Namespace: "debug",
 			Version:   "1.0",

@@ -51,11 +51,13 @@ const defaultGas = uint64(90000)
 // It offers only methods that operate on public data that is freely available to anyone.
 type PublicEthereumAPI struct {
 	b Backend
+	solcPath *string
+	solc     **compiler.Solidity
 }
 
 // NewPublicEthereumAPI creates a new Etheruem protocol API.
-func NewPublicEthereumAPI(b Backend) *PublicEthereumAPI {
-	return &PublicEthereumAPI{b}
+func NewPublicEthereumAPI(b Backend, solcPath *string, solc **compiler.Solidity) *PublicEthereumAPI {
+	return &PublicEthereumAPI{b, solcPath, solc}
 }
 
 // GasPrice returns a suggestion for a gas price.
@@ -63,9 +65,18 @@ func (s *PublicEthereumAPI) GasPrice(ctx context.Context) (*big.Int, error) {
 	return s.b.SuggestPrice(ctx)
 }
 
+func (s *PublicEthereumAPI) getSolc() (*compiler.Solidity, error) {
+	var err error
+	solc := *s.solc
+	if solc == nil {
+		solc, err = compiler.New(*s.solcPath)
+	}
+	return solc, err	
+}
+
 // GetCompilers returns the collection of available smart contract compilers
 func (s *PublicEthereumAPI) GetCompilers() ([]string, error) {
-	solc, err := s.b.Solc()
+	solc, err := s.getSolc()
 	if err == nil && solc != nil {
 		return []string{"Solidity"}, nil
 	}
@@ -75,7 +86,7 @@ func (s *PublicEthereumAPI) GetCompilers() ([]string, error) {
 
 // CompileSolidity compiles the given solidity source
 func (s *PublicEthereumAPI) CompileSolidity(source string) (map[string]*compiler.Contract, error) {
-	solc, err := s.b.Solc()
+	solc, err := s.getSolc()
 	if err != nil {
 		return nil, err
 	}
@@ -1408,21 +1419,25 @@ func (s *PublicTransactionPoolAPI) Resend(ctx context.Context, tx *Tx, gasPrice,
 // admin endpoint.
 type PrivateAdminAPI struct {
 	b Backend
+	solcPath *string
+	solc     **compiler.Solidity
 }
 
 // NewPrivateAdminAPI creates a new API definition for the private admin methods
 // of the Ethereum service.
-func NewPrivateAdminAPI(b Backend) *PrivateAdminAPI {
-	return &PrivateAdminAPI{b: b}
+func NewPrivateAdminAPI(b Backend, solcPath *string, solc **compiler.Solidity) *PrivateAdminAPI {
+	return &PrivateAdminAPI{b, solcPath, solc}
 }
 
 // SetSolc sets the Solidity compiler path to be used by the node.
 func (api *PrivateAdminAPI) SetSolc(path string) (string, error) {
-	solc, err := api.b.SetSolc(path)
+	var err error
+	*api.solcPath = path
+	*api.solc, err = compiler.New(path)
 	if err != nil {
 		return "", err
 	}
-	return solc.Info(), nil
+	return (*api.solc).Info(), nil
 }
 
 // PublicDebugAPI is the collection of Etheruem APIs exposed over the public
