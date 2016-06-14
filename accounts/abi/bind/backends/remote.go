@@ -115,24 +115,7 @@ func (b *rpcBackend) request(ctx context.Context, method string, params []interf
 			return nil, err
 		}
 	case <-ctx.Done():
-		// cancel RPC request
-		req := &request{
-			JSONRPC: "2.0",
-			ID:      int(atomic.AddUint32(&b.autoid, 1)),
-			Method:  "rpc_cancel",
-			Params:  []interface{}{reqID},
-		}
-		if err := b.client.Send(req); err != nil {
-			return nil, err
-		}
-		// first response is expected to come from the cancel method, throw away
-		<-errc
-
-		// wait for actual response to see if it has been canceled or succeeded
-		res = new(response)
-		if err := b.client.Recv(res); err != nil {
-			return nil, err
-		}
+		return nil, ctx.Err()
 	}
 	if res.Error != nil {
 		if res.Error.Message == bind.ErrNoCode.Error() {
