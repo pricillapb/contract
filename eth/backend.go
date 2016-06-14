@@ -314,11 +314,6 @@ func (s *FullNodeService) APIs() []rpc.API {
 			Service:   NewPublicMinerAPI(s),
 			Public:    true,
 		}, {
-			Namespace: "eth",
-			Version:   "1.0",
-			Service:   downloader.NewPublicDownloaderAPI(s.protocolManager.downloader, s.eventMux),
-			Public:    true,
-		}, {
 			Namespace: "miner",
 			Version:   "1.0",
 			Service:   NewPrivateMinerAPI(s),

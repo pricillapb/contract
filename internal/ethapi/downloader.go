@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-package downloader
+package ethapi
 
 import (
+	"context"
 	"sync"
 
-	"golang.org/x/net/context"
-
+	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -28,33 +28,30 @@ import (
 // PublicDownloaderAPI provides an API which gives information about the current synchronisation status.
 // It offers only methods that operates on data that can be available to anyone without security risks.
 type PublicDownloaderAPI struct {
-	d                   *Downloader
+	d                   *downloader.Downloader
 	mux                 *event.TypeMux
 	muSyncSubscriptions sync.Mutex
 	syncSubscriptions   map[string]rpc.Subscription
 }
 
 // NewPublicDownloaderAPI create a new PublicDownloaderAPI.
-func NewPublicDownloaderAPI(d *Downloader, m *event.TypeMux) *PublicDownloaderAPI {
+func NewPublicDownloaderAPI(d *downloader.Downloader, m *event.TypeMux) *PublicDownloaderAPI {
 	api := &PublicDownloaderAPI{d: d, mux: m, syncSubscriptions: make(map[string]rpc.Subscription)}
-
 	go api.run()
-
 	return api
 }
 
 func (api *PublicDownloaderAPI) run() {
-	sub := api.mux.Subscribe(StartEvent{}, DoneEvent{}, FailedEvent{})
-
+	sub := api.mux.Subscribe(downloader.StartEvent{}, downloader.DoneEvent{}, downloader.FailedEvent{})
 	for event := range sub.Chan() {
 		var notification interface{}
 
 		switch event.Data.(type) {
-		case StartEvent:
+		case downloader.StartEvent:
 			result := &SyncingResult{Syncing: true}
 			result.Status.Origin, result.Status.Current, result.Status.Height, result.Status.Pulled, result.Status.Known = api.d.Progress()
 			notification = result
-		case DoneEvent, FailedEvent:
+		case downloader.DoneEvent, downloader.FailedEvent:
 			notification = false
 		}
 
@@ -89,13 +86,11 @@ func (api *PublicDownloaderAPI) Syncing(ctx context.Context) (rpc.Subscription, 
 	if !supported {
 		return nil, rpc.ErrNotificationsUnsupported
 	}
-
 	subscription, err := notifier.NewSubscription(func(id string) {
 		api.muSyncSubscriptions.Lock()
 		delete(api.syncSubscriptions, id)
 		api.muSyncSubscriptions.Unlock()
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +98,5 @@ func (api *PublicDownloaderAPI) Syncing(ctx context.Context) (rpc.Subscription, 
 	api.muSyncSubscriptions.Lock()
 	api.syncSubscriptions[subscription.ID()] = subscription
 	api.muSyncSubscriptions.Unlock()
-
 	return subscription, nil
 }

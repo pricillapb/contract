@@ -75,6 +75,12 @@ func GetAPIs(apiBackend Backend, solcPath string) []rpc.API {
 		{
 			Namespace: "eth",
 			Version:   "1.0",
+			Service:   NewPublicDownloaderAPI(apiBackend.Downloader(), apiBackend.EventMux()),
+			Public:    true,
+		},
+		{
+			Namespace: "eth",
+			Version:   "1.0",
 			Service:   NewPublicEthereumAPI(apiBackend),
 			Public:    true,
 		}, {
