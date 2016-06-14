@@ -296,41 +296,6 @@ func (api *PublicFullDebugAPI) DumpBlock(number uint64) (state.World, error) {
 	return stateDb.RawDump(), nil
 }
 
-// GetBlockRlp retrieves the RLP encoded for of a single block.
-func (api *PublicFullDebugAPI) GetBlockRlp(number uint64) (string, error) {
-	block := api.eth.BlockChain().GetBlockByNumber(number)
-	if block == nil {
-		return "", fmt.Errorf("block #%d not found", number)
-	}
-	encoded, err := rlp.EncodeToBytes(block)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", encoded), nil
-}
-
-// PrintBlock retrieves a block and returns its pretty printed form.
-func (api *PublicFullDebugAPI) PrintBlock(number uint64) (string, error) {
-	block := api.eth.BlockChain().GetBlockByNumber(number)
-	if block == nil {
-		return "", fmt.Errorf("block #%d not found", number)
-	}
-	return fmt.Sprintf("%s", block), nil
-}
-
-// SeedHash retrieves the seed hash of a block.
-func (api *PublicFullDebugAPI) SeedHash(number uint64) (string, error) {
-	block := api.eth.BlockChain().GetBlockByNumber(number)
-	if block == nil {
-		return "", fmt.Errorf("block #%d not found", number)
-	}
-	hash, err := ethash.GetSeedHash(number)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("0x%x", hash), nil
-}
-
 // PrivateFullDebugAPI is the collection of Etheruem full node APIs exposed over
 // the private debugging endpoint.
 type PrivateFullDebugAPI struct {
