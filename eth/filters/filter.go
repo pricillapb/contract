@@ -17,7 +17,10 @@
 package filters
 
 import (
+	"encoding/hex"
+	"errors"
 	"math"
+	"math/rand"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -27,28 +30,61 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-type AccountChange struct {
-	Address, StateAddress []byte
-}
+// FilterType determines the type of filter and is used to put the filter in to
+// the correct bucket when added.
+type FilterType byte
+
+const (
+	ChainFilter      FilterType = iota // new block events filter
+	PendingTxFilter                    // pending transaction filter
+	LogFilter                          // new or removed log filter
+	PendingLogFilter                   // pending log filter
+)
 
 // Filtering interface
 type Filter struct {
+	// These fields are assigned once when the filter is created.
+	id      string
+	typ     FilterType
+	db      ethdb.Database
 	created time.Time
+	queue   queue // used by the API
 
-	db         ethdb.Database
+	// These fields are set by Set* before the first use.
 	begin, end int64
 	addresses  []common.Address
 	topics     [][]common.Hash
 
 	BlockCallback       func(*types.Block, vm.Logs)
 	TransactionCallback func(*types.Transaction)
-	LogCallback         func(*vm.Log, bool)
+	LogCallback         func(log *vm.Log, removed bool)
 }
 
 // Create a new filter which uses a bloom filter on blocks to figure out whether a particular block
 // is interesting or not.
-func New(db ethdb.Database) *Filter {
-	return &Filter{db: db}
+func New(typ FilterType, db ethdb.Database) *Filter {
+	// Generate a new random filter identifier that can be exposed to the outer world. By
+	// publishing random identifiers it is not feasible for DApp's to guess filter id's
+	// for other DApp's and uninstall or poll for them causing the affected DApp to miss
+	// data.
+	var subid [16]byte
+	n, _ := rand.Read(subid[:])
+	if n != 16 {
+		panic(errors.New("Unable to generate filter id"))
+	}
+
+	now := time.Now()
+	return &Filter{
+		typ:     typ,
+		db:      db,
+		id:      "0x" + hex.EncodeToString(subid[:]),
+		created: now,
+		queue:   queue{timeout: now},
+	}
+}
+
+func (self *Filter) ID() string {
+	return self.id
 }
 
 // Set the earliest and latest block for filtering.

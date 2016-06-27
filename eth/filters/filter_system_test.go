@@ -37,41 +37,36 @@ func TestCallbacks(t *testing.T) {
 		pendingLogDone = make(chan struct{})
 	)
 
-	blockFilter := &Filter{
-		BlockCallback: func(*types.Block, vm.Logs) {
-			close(blockDone)
-		},
+	blockFilter := New(ChainFilter, nil)
+	blockFilter.BlockCallback = func(*types.Block, vm.Logs) {
+		close(blockDone)
 	}
-	txFilter := &Filter{
-		TransactionCallback: func(*types.Transaction) {
-			close(txDone)
-		},
+	txFilter := New(PendingTxFilter, nil)
+	txFilter.TransactionCallback = func(*types.Transaction) {
+		close(txDone)
 	}
-	logFilter := &Filter{
-		LogCallback: func(l *vm.Log, oob bool) {
-			if !oob {
-				close(logDone)
-			}
-		},
+	logFilter := New(LogFilter, nil)
+	logFilter.LogCallback = func(l *vm.Log, removed bool) {
+		if !removed {
+			close(logDone)
+		}
 	}
-	removedLogFilter := &Filter{
-		LogCallback: func(l *vm.Log, oob bool) {
-			if oob {
-				close(removedLogDone)
-			}
-		},
+	removedLogFilter := New(LogFilter, nil)
+	removedLogFilter.LogCallback = func(l *vm.Log, removed bool) {
+		if removed {
+			close(removedLogDone)
+		}
 	}
-	pendingLogFilter := &Filter{
-		LogCallback: func(*vm.Log, bool) {
-			close(pendingLogDone)
-		},
+	pendingLogFilter := New(PendingLogFilter, nil)
+	pendingLogFilter.LogCallback = func(*vm.Log, bool) {
+		close(pendingLogDone)
 	}
 
-	fs.Add(blockFilter, ChainFilter)
-	fs.Add(txFilter, PendingTxFilter)
-	fs.Add(logFilter, LogFilter)
-	fs.Add(removedLogFilter, LogFilter)
-	fs.Add(pendingLogFilter, PendingLogFilter)
+	fs.Add(blockFilter)
+	fs.Add(txFilter)
+	fs.Add(logFilter)
+	fs.Add(removedLogFilter)
+	fs.Add(pendingLogFilter)
 
 	mux.Post(core.ChainEvent{})
 	mux.Post(core.TxPreEvent{})

@@ -20,6 +20,7 @@ import (
 	"io/ioutil"
 	"math/big"
 	"os"
+	"runtime/pprof"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -56,7 +57,7 @@ func BenchmarkMipmaps(b *testing.B) {
 	)
 	defer db.Close()
 
-	genesis := core.WriteGenesisBlockForTesting(db, core.GenesisAccount{Address: addr1, Balance: big.NewInt(1000000)})
+	genesis := core.WriteGenesisBlockForTesting(db, core.GenesisAccount{Address: addr1, Balance: big.NewInt(100000)})
 	chain, receipts := core.GenerateChain(genesis, db, 100010, func(i int, gen *core.BlockGen) {
 		var receipts types.Receipts
 		switch i {
@@ -78,7 +79,6 @@ func BenchmarkMipmaps(b *testing.B) {
 			gen.AddUncheckedReceipt(receipt)
 
 		}
-
 		// store the receipts
 		err := core.WriteReceipts(db, receipts)
 		if err != nil {
@@ -98,13 +98,22 @@ func BenchmarkMipmaps(b *testing.B) {
 			b.Fatal("error writing block receipts:", err)
 		}
 	}
-	b.ResetTimer()
 
-	filter := New(db)
+	profile, err := os.Create("cpu.out")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer profile.Close()
+	if err := pprof.StartCPUProfile(profile); err != nil {
+		b.Fatal(err)
+	}
+	defer pprof.StopCPUProfile()
+
+	b.ResetTimer()
+	filter := New(ChainFilter, db)
 	filter.SetAddresses([]common.Address{addr1, addr2, addr3, addr4})
 	filter.SetBeginBlock(0)
 	filter.SetEndBlock(-1)
-
 	for i := 0; i < b.N; i++ {
 		logs := filter.Find()
 		if len(logs) != 4 {
@@ -201,7 +210,7 @@ func TestFilters(t *testing.T) {
 		}
 	}
 
-	filter := New(db)
+	filter := New(ChainFilter, db)
 	filter.SetAddresses([]common.Address{addr})
 	filter.SetTopics([][]common.Hash{[]common.Hash{hash1, hash2, hash3, hash4}})
 	filter.SetBeginBlock(0)
@@ -212,7 +221,7 @@ func TestFilters(t *testing.T) {
 		t.Error("expected 4 log, got", len(logs))
 	}
 
-	filter = New(db)
+	filter = New(ChainFilter, db)
 	filter.SetAddresses([]common.Address{addr})
 	filter.SetTopics([][]common.Hash{[]common.Hash{hash3}})
 	filter.SetBeginBlock(900)
@@ -225,7 +234,7 @@ func TestFilters(t *testing.T) {
 		t.Errorf("expected log[0].Topics[0] to be %x, got %x", hash3, logs[0].Topics[0])
 	}
 
-	filter = New(db)
+	filter = New(ChainFilter, db)
 	filter.SetAddresses([]common.Address{addr})
 	filter.SetTopics([][]common.Hash{[]common.Hash{hash3}})
 	filter.SetBeginBlock(990)
@@ -238,7 +247,7 @@ func TestFilters(t *testing.T) {
 		t.Errorf("expected log[0].Topics[0] to be %x, got %x", hash3, logs[0].Topics[0])
 	}
 
-	filter = New(db)
+	filter = New(ChainFilter, db)
 	filter.SetTopics([][]common.Hash{[]common.Hash{hash1, hash2}})
 	filter.SetBeginBlock(1)
 	filter.SetEndBlock(10)
@@ -249,7 +258,7 @@ func TestFilters(t *testing.T) {
 	}
 
 	failHash := common.BytesToHash([]byte("fail"))
-	filter = New(db)
+	filter = New(ChainFilter, db)
 	filter.SetTopics([][]common.Hash{[]common.Hash{failHash}})
 	filter.SetBeginBlock(0)
 	filter.SetEndBlock(-1)
@@ -260,7 +269,7 @@ func TestFilters(t *testing.T) {
 	}
 
 	failAddr := common.BytesToAddress([]byte("failmenow"))
-	filter = New(db)
+	filter = New(ChainFilter, db)
 	filter.SetAddresses([]common.Address{failAddr})
 	filter.SetBeginBlock(0)
 	filter.SetEndBlock(-1)
@@ -270,7 +279,7 @@ func TestFilters(t *testing.T) {
 		t.Error("expected 0 log, got", len(logs))
 	}
 
-	filter = New(db)
+	filter = New(ChainFilter, db)
 	filter.SetTopics([][]common.Hash{[]common.Hash{failHash}, []common.Hash{hash1}})
 	filter.SetBeginBlock(0)
 	filter.SetEndBlock(-1)

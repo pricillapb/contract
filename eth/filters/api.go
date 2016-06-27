@@ -17,7 +17,6 @@
 package filters
 
 import (
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,55 +34,27 @@ import (
 	"golang.org/x/net/context"
 )
 
-var (
-	filterTickerTime = 5 * time.Minute
-)
+const filterTickerTime = 5 * time.Minute
 
-// byte will be inferred
-const (
-	unknownFilterTy = iota
-	blockFilterTy
-	transactionFilterTy
-	logFilterTy
-)
+var errNotAdded = errors.New("filter system has shut down")
 
 // PublicFilterAPI offers support to create and manage filters. This will allow external clients to retrieve various
 // information related to the Ethereum protocol such als blocks, transactions and logs.
 type PublicFilterAPI struct {
-	mux *event.TypeMux
-
-	quit    chan struct{}
-	chainDb ethdb.Database
-
+	mux           *event.TypeMux
+	quit          chan struct{}
+	chainDb       ethdb.Database
 	filterManager *FilterSystem
-
-	filterMapMu   sync.RWMutex
-	filterMapping map[string]int // maps between filter internal filter identifiers and external filter identifiers
-
-	logMu    sync.RWMutex
-	logQueue map[int]*logQueue
-
-	blockMu    sync.RWMutex
-	blockQueue map[int]*hashQueue
-
-	transactionMu    sync.RWMutex
-	transactionQueue map[int]*hashQueue
-
-	transactMu sync.Mutex
 }
 
 // NewPublicFilterAPI returns a new PublicFilterAPI instance.
 func NewPublicFilterAPI(chainDb ethdb.Database, mux *event.TypeMux) *PublicFilterAPI {
 	svc := &PublicFilterAPI{
-		mux:              mux,
-		chainDb:          chainDb,
-		filterManager:    NewFilterSystem(mux),
-		filterMapping:    make(map[string]int),
-		logQueue:         make(map[int]*logQueue),
-		blockQueue:       make(map[int]*hashQueue),
-		transactionQueue: make(map[int]*hashQueue),
+		mux:           mux,
+		chainDb:       chainDb,
+		filterManager: NewFilterSystem(mux),
 	}
-	go svc.start()
+	// go svc.start()
 	return svc
 }
 
@@ -93,144 +64,66 @@ func (s *PublicFilterAPI) Stop() {
 }
 
 // start the work loop, wait and process events.
-func (s *PublicFilterAPI) start() {
-	timer := time.NewTicker(2 * time.Second)
-	defer timer.Stop()
-done:
-	for {
-		select {
-		case <-timer.C:
-			s.logMu.Lock()
-			for id, filter := range s.logQueue {
-				if time.Since(filter.timeout) > filterTickerTime {
-					s.filterManager.Remove(id)
-					delete(s.logQueue, id)
-				}
-			}
-			s.logMu.Unlock()
-
-			s.blockMu.Lock()
-			for id, filter := range s.blockQueue {
-				if time.Since(filter.timeout) > filterTickerTime {
-					s.filterManager.Remove(id)
-					delete(s.blockQueue, id)
-				}
-			}
-			s.blockMu.Unlock()
-
-			s.transactionMu.Lock()
-			for id, filter := range s.transactionQueue {
-				if time.Since(filter.timeout) > filterTickerTime {
-					s.filterManager.Remove(id)
-					delete(s.transactionQueue, id)
-				}
-			}
-			s.transactionMu.Unlock()
-		case <-s.quit:
-			break done
-		}
-	}
-
-}
+// func (s *PublicFilterAPI) start() {
+// 	timer := time.NewTicker(2 * time.Second)
+// 	defer timer.Stop()
+// done:
+// 	for {
+// 		select {
+// 		case <-timer.C:
+// 			s.logMu.Lock()
+// 			for id, filter := range s.logQueue {
+// 				if time.Since(filter.timeout) > filterTickerTime {
+// 					s.filterManager.Remove(id)
+// 				}
+// 			}
+// 			s.logMu.Unlock()
+//
+// 			s.blockMu.Lock()
+// 			for id, filter := range s.blockQueue {
+// 				if time.Since(filter.timeout) > filterTickerTime {
+// 					s.filterManager.Remove(id)
+// 					delete(s.blockQueue, id)
+// 				}
+// 			}
+// 			s.blockMu.Unlock()
+//
+// 			s.transactionMu.Lock()
+// 			for id, filter := range s.transactionQueue {
+// 				if time.Since(filter.timeout) > filterTickerTime {
+// 					s.filterManager.Remove(id)
+// 					delete(s.transactionQueue, id)
+// 				}
+// 			}
+// 			s.transactionMu.Unlock()
+// 		case <-s.quit:
+// 			break done
+// 		}
+// 	}
+//
+// }
 
 // NewBlockFilter create a new filter that returns blocks that are included into the canonical chain.
 func (s *PublicFilterAPI) NewBlockFilter() (string, error) {
-	externalId, err := newFilterId()
-	if err != nil {
-		return "", err
-	}
-
-	s.blockMu.Lock()
-	filter := New(s.chainDb)
-	id, err := s.filterManager.Add(filter, ChainFilter)
-	if err != nil {
-		return "", err
-	}
-
-	s.blockQueue[id] = &hashQueue{timeout: time.Now()}
-
+	filter := New(ChainFilter, s.chainDb)
 	filter.BlockCallback = func(block *types.Block, logs vm.Logs) {
-		s.blockMu.Lock()
-		defer s.blockMu.Unlock()
-
-		if queue := s.blockQueue[id]; queue != nil {
-			queue.add(block.Hash())
-		}
+		filter.queue.add(block.Hash())
 	}
 
-	defer s.blockMu.Unlock()
-
-	s.filterMapMu.Lock()
-	s.filterMapping[externalId] = id
-	s.filterMapMu.Unlock()
-
-	return externalId, nil
+	s.filterManager.Add(filter)
+	return filter.ID(), nil
 }
 
 // NewPendingTransactionFilter creates a filter that returns new pending transactions.
 func (s *PublicFilterAPI) NewPendingTransactionFilter() (string, error) {
-	externalId, err := newFilterId()
-	if err != nil {
-		return "", err
-	}
-
-	s.transactionMu.Lock()
-	defer s.transactionMu.Unlock()
-
-	filter := New(s.chainDb)
-	id, err := s.filterManager.Add(filter, PendingTxFilter)
-	if err != nil {
-		return "", err
-	}
-
-	s.transactionQueue[id] = &hashQueue{timeout: time.Now()}
-
+	filter := New(PendingTxFilter, s.chainDb)
 	filter.TransactionCallback = func(tx *types.Transaction) {
-		s.transactionMu.Lock()
-		defer s.transactionMu.Unlock()
-
-		if queue := s.transactionQueue[id]; queue != nil {
-			queue.add(tx.Hash())
-		}
+		filter.queue.add(tx.Hash())
 	}
-
-	s.filterMapMu.Lock()
-	s.filterMapping[externalId] = id
-	s.filterMapMu.Unlock()
-
-	return externalId, nil
-}
-
-// newLogFilter creates a new log filter.
-func (s *PublicFilterAPI) newLogFilter(earliest, latest int64, addresses []common.Address, topics [][]common.Hash, callback func(log *vm.Log, removed bool)) (int, error) {
-	s.logMu.Lock()
-	defer s.logMu.Unlock()
-
-	filter := New(s.chainDb)
-	id, err := s.filterManager.Add(filter, LogFilter)
-	if err != nil {
-		return 0, err
+	if !s.filterManager.Add(filter) {
+		return "", errNotAdded
 	}
-
-	s.logQueue[id] = &logQueue{timeout: time.Now()}
-
-	filter.SetBeginBlock(earliest)
-	filter.SetEndBlock(latest)
-	filter.SetAddresses(addresses)
-	filter.SetTopics(topics)
-	filter.LogCallback = func(log *vm.Log, removed bool) {
-		if callback != nil {
-			callback(log, removed)
-		} else {
-			s.logMu.Lock()
-			defer s.logMu.Unlock()
-			if queue := s.logQueue[id]; queue != nil {
-				queue.add(vmlog{log, removed})
-			}
-		}
-	}
-
-	return id, nil
+	return filter.ID(), nil
 }
 
 // Logs creates a subscription that fires for all new log that match the given filter criteria.
@@ -240,47 +133,29 @@ func (s *PublicFilterAPI) Logs(ctx context.Context, args NewFilterArgs) (rpc.Sub
 		return nil, rpc.ErrNotificationsUnsupported
 	}
 
-	var (
-		externalId   string
-		subscription rpc.Subscription
-		err          error
-	)
+	// From and to block number are not used since subscriptions don't allow you to travel
+	// to "time".
+	f := New(LogFilter, s.chainDb)
+	f.SetBeginBlock(-1)
+	f.SetEndBlock(-1)
+	f.SetAddresses(args.Addresses)
+	f.SetTopics(args.Topics)
 
-	if externalId, err = newFilterId(); err != nil {
+	// Uninstall filter when subscription is unsubscribed/cancelled
+	subscription, err := notifier.NewSubscription(func(string) { s.UninstallFilter(f.ID()) })
+	if err != nil {
 		return nil, err
 	}
-
-	// uninstall filter when subscription is unsubscribed/cancelled
-	if subscription, err = notifier.NewSubscription(func(string) {
-		s.UninstallFilter(externalId)
-	}); err != nil {
-		return nil, err
-	}
-
-	notifySubscriber := func(log *vm.Log, removed bool) {
+	f.LogCallback = func(log *vm.Log, removed bool) {
 		rpcLog := toRPCLogs(vm.Logs{log}, removed)
 		if err := subscription.Notify(rpcLog); err != nil {
 			subscription.Cancel()
 		}
 	}
-
-	// from and to block number are not used since subscriptions don't allow you to travel to "time"
-	var id int
-	if len(args.Addresses) > 0 {
-		id, err = s.newLogFilter(-1, -1, args.Addresses, args.Topics, notifySubscriber)
-	} else {
-		id, err = s.newLogFilter(-1, -1, nil, args.Topics, notifySubscriber)
-	}
-
-	if err != nil {
+	if !s.filterManager.Add(f) {
 		subscription.Cancel()
-		return nil, err
+		return nil, errNotAdded
 	}
-
-	s.filterMapMu.Lock()
-	s.filterMapping[externalId] = id
-	s.filterMapMu.Unlock()
-
 	return subscription, err
 }
 
@@ -408,31 +283,24 @@ func (args *NewFilterArgs) UnmarshalJSON(data []byte) error {
 
 // NewFilter creates a new filter and returns the filter id. It can be uses to retrieve logs.
 func (s *PublicFilterAPI) NewFilter(args NewFilterArgs) (string, error) {
-	externalId, err := newFilterId()
-	if err != nil {
-		return "", err
+	f := New(LogFilter, s.chainDb)
+	f.SetBeginBlock(args.FromBlock.Int64())
+	f.SetEndBlock(args.ToBlock.Int64())
+	f.SetAddresses(args.Addresses)
+	f.SetTopics(args.Topics)
+	f.LogCallback = func(log *vm.Log, removed bool) {
+		f.queue.add(queuedLog{log, removed})
 	}
 
-	var id int
-	if len(args.Addresses) > 0 {
-		id, err = s.newLogFilter(args.FromBlock.Int64(), args.ToBlock.Int64(), args.Addresses, args.Topics, nil)
-	} else {
-		id, err = s.newLogFilter(args.FromBlock.Int64(), args.ToBlock.Int64(), nil, args.Topics, nil)
+	if !s.filterManager.Add(f) {
+		return "", errNotAdded
 	}
-	if err != nil {
-		return "", err
-	}
-
-	s.filterMapMu.Lock()
-	s.filterMapping[externalId] = id
-	s.filterMapMu.Unlock()
-
-	return externalId, nil
+	return f.ID(), nil
 }
 
 // GetLogs returns the logs matching the given argument.
-func (s *PublicFilterAPI) GetLogs(args NewFilterArgs) []vmlog {
-	filter := New(s.chainDb)
+func (s *PublicFilterAPI) GetLogs(args NewFilterArgs) []queuedLog {
+	filter := New(ChainFilter, s.chainDb)
 	filter.SetBeginBlock(args.FromBlock.Int64())
 	filter.SetEndBlock(args.ToBlock.Int64())
 	filter.SetAddresses(args.Addresses)
@@ -442,208 +310,72 @@ func (s *PublicFilterAPI) GetLogs(args NewFilterArgs) []vmlog {
 }
 
 // UninstallFilter removes the filter with the given filter id.
-func (s *PublicFilterAPI) UninstallFilter(filterId string) bool {
-	s.filterMapMu.Lock()
-	defer s.filterMapMu.Unlock()
-
-	id, ok := s.filterMapping[filterId]
-	if !ok {
+func (s *PublicFilterAPI) UninstallFilter(id string) bool {
+	f := s.filterManager.Get(id)
+	if f == nil {
 		return false
 	}
-
-	defer s.filterManager.Remove(id)
-	delete(s.filterMapping, filterId)
-
-	if _, ok := s.logQueue[id]; ok {
-		s.logMu.Lock()
-		defer s.logMu.Unlock()
-		delete(s.logQueue, id)
-		return true
-	}
-	if _, ok := s.blockQueue[id]; ok {
-		s.blockMu.Lock()
-		defer s.blockMu.Unlock()
-		delete(s.blockQueue, id)
-		return true
-	}
-	if _, ok := s.transactionQueue[id]; ok {
-		s.transactionMu.Lock()
-		defer s.transactionMu.Unlock()
-		delete(s.transactionQueue, id)
-		return true
-	}
-
-	return false
-}
-
-// getFilterType is a helper utility that determine the type of filter for the given filter id.
-func (s *PublicFilterAPI) getFilterType(id int) byte {
-	if _, ok := s.blockQueue[id]; ok {
-		return blockFilterTy
-	} else if _, ok := s.transactionQueue[id]; ok {
-		return transactionFilterTy
-	} else if _, ok := s.logQueue[id]; ok {
-		return logFilterTy
-	}
-
-	return unknownFilterTy
-}
-
-// blockFilterChanged returns a collection of block hashes for the block filter with the given id.
-func (s *PublicFilterAPI) blockFilterChanged(id int) []common.Hash {
-	s.blockMu.Lock()
-	defer s.blockMu.Unlock()
-
-	if s.blockQueue[id] != nil {
-		return s.blockQueue[id].get()
-	}
-	return nil
-}
-
-// transactionFilterChanged returns a collection of transaction hashes for the pending
-// transaction filter with the given id.
-func (s *PublicFilterAPI) transactionFilterChanged(id int) []common.Hash {
-	s.blockMu.Lock()
-	defer s.blockMu.Unlock()
-
-	if s.transactionQueue[id] != nil {
-		return s.transactionQueue[id].get()
-	}
-	return nil
-}
-
-// logFilterChanged returns a collection of logs for the log filter with the given id.
-func (s *PublicFilterAPI) logFilterChanged(id int) []vmlog {
-	s.logMu.Lock()
-	defer s.logMu.Unlock()
-
-	if s.logQueue[id] != nil {
-		return s.logQueue[id].get()
-	}
-	return nil
+	s.filterManager.Remove(f)
+	return true
 }
 
 // GetFilterLogs returns the logs for the filter with the given id.
-func (s *PublicFilterAPI) GetFilterLogs(filterId string) []vmlog {
-	id, ok := s.filterMapping[filterId]
-	if !ok {
-		return toRPCLogs(nil, false)
+func (s *PublicFilterAPI) GetFilterLogs(id string) []queuedLog {
+	if f := s.filterManager.Get(id); f != nil {
+		return toRPCLogs(f.Find(), false)
 	}
-
-	if filter := s.filterManager.Get(id); filter != nil {
-		return toRPCLogs(filter.Find(), false)
-	}
-
 	return toRPCLogs(nil, false)
 }
 
 // GetFilterChanges returns the logs for the filter with the given id since last time is was called.
 // This can be used for polling.
-func (s *PublicFilterAPI) GetFilterChanges(filterId string) interface{} {
-	s.filterMapMu.Lock()
-	id, ok := s.filterMapping[filterId]
-	s.filterMapMu.Unlock()
-
-	if !ok { // filter not found
+func (s *PublicFilterAPI) GetFilterChanges(id string) interface{} {
+	f := s.filterManager.Get(id)
+	if f == nil {
 		return []interface{}{}
 	}
-
-	switch s.getFilterType(id) {
-	case blockFilterTy:
-		return returnHashes(s.blockFilterChanged(id))
-	case transactionFilterTy:
-		return returnHashes(s.transactionFilterChanged(id))
-	case logFilterTy:
-		return s.logFilterChanged(id)
+	queued := f.queue.get()
+	if queued == nil {
+		// Ensure that nil results encode as an array.
+		queued = []interface{}{}
 	}
-
-	return []interface{}{}
+	return queued
 }
 
-type vmlog struct {
+type queuedLog struct {
 	*vm.Log
 	Removed bool `json:"removed"`
 }
 
-type logQueue struct {
-	mu sync.Mutex
-
-	logs    []vmlog
+type queue struct {
+	mu      sync.Mutex
+	elems   []interface{}
 	timeout time.Time
-	id      int
 }
 
-func (l *logQueue) add(logs ...vmlog) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.logs = append(l.logs, logs...)
+func (q *queue) add(items ...interface{}) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.elems = append(q.elems, items...)
 }
 
-func (l *logQueue) get() []vmlog {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.timeout = time.Now()
-	tmp := l.logs
-	l.logs = nil
+func (q *queue) get() []interface{} {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.timeout = time.Now()
+	tmp := q.elems
+	q.elems = nil
 	return tmp
-}
-
-type hashQueue struct {
-	mu sync.Mutex
-
-	hashes  []common.Hash
-	timeout time.Time
-	id      int
-}
-
-func (l *hashQueue) add(hashes ...common.Hash) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.hashes = append(l.hashes, hashes...)
-}
-
-func (l *hashQueue) get() []common.Hash {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.timeout = time.Now()
-	tmp := l.hashes
-	l.hashes = nil
-	return tmp
-}
-
-// newFilterId generates a new random filter identifier that can be exposed to the outer world. By publishing random
-// identifiers it is not feasible for DApp's to guess filter id's for other DApp's and uninstall or poll for them
-// causing the affected DApp to miss data.
-func newFilterId() (string, error) {
-	var subid [16]byte
-	n, _ := rand.Read(subid[:])
-	if n != 16 {
-		return "", errors.New("Unable to generate filter id")
-	}
-	return "0x" + hex.EncodeToString(subid[:]), nil
 }
 
 // toRPCLogs is a helper that will convert a vm.Logs array to an structure which
 // can hold additional information about the logs such as whether it was deleted.
 // Additionally when nil is given it will by default instead create an empty slice
 // instead. This is required by the RPC specification.
-func toRPCLogs(logs vm.Logs, removed bool) []vmlog {
-	convertedLogs := make([]vmlog, len(logs))
+func toRPCLogs(logs vm.Logs, removed bool) []queuedLog {
+	convertedLogs := make([]queuedLog, len(logs))
 	for i, log := range logs {
-		convertedLogs[i] = vmlog{Log: log, Removed: removed}
+		convertedLogs[i] = queuedLog{Log: log, Removed: removed}
 	}
 	return convertedLogs
-}
-
-// returnHashes is a helper that will return an empty hash array case the given hash array is nil, otherwise is will
-// return the given hashes. The RPC interfaces defines that always an array is returned.
-func returnHashes(hashes []common.Hash) []common.Hash {
-	if hashes == nil {
-		return []common.Hash{}
-	}
-	return hashes
 }

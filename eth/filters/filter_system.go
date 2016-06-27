@@ -19,60 +19,40 @@
 package filters
 
 import (
-	"fmt"
 	"sync"
-	"time"
 
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/event"
 )
 
-// FilterType determines the type of filter and is used to put the filter in to
-// the correct bucket when added.
-type FilterType byte
-
-const (
-	ChainFilter      FilterType = iota // new block events filter
-	PendingTxFilter                    // pending transaction filter
-	LogFilter                          // new or removed log filter
-	PendingLogFilter                   // pending log filter
-)
-
 // FilterSystem manages filters that filter specific events such as
 // block, transaction and log events. The Filtering system can be used to listen
 // for specific LOG events fired by the EVM (Ethereum Virtual Machine).
 type FilterSystem struct {
-	filterMu sync.RWMutex
-	filterId int
+	sub         event.Subscription
+	add, remove chan *Filter
+	closed      chan struct{}
 
-	chainFilters      map[int]*Filter
-	pendingTxFilters  map[int]*Filter
-	logFilters        map[int]*Filter
-	pendingLogFilters map[int]*Filter
-
-	// generic is an ugly hack for Get
-	generic map[int]*Filter
-
-	sub event.Subscription
+	mu  sync.RWMutex
+	all map[string]*Filter // all known filters
 }
 
 // NewFilterSystem returns a newly allocated filter manager
 func NewFilterSystem(mux *event.TypeMux) *FilterSystem {
 	fs := &FilterSystem{
-		chainFilters:      make(map[int]*Filter),
-		pendingTxFilters:  make(map[int]*Filter),
-		logFilters:        make(map[int]*Filter),
-		pendingLogFilters: make(map[int]*Filter),
-		generic:           make(map[int]*Filter),
+		all:    make(map[string]*Filter),
+		closed: make(chan struct{}),
+		add:    make(chan *Filter),
+		remove: make(chan *Filter),
+		sub: mux.Subscribe(
+			core.PendingLogsEvent{},
+			core.RemovedLogsEvent{},
+			core.ChainEvent{},
+			core.TxPreEvent{},
+			vm.Logs(nil),
+		),
 	}
-	fs.sub = mux.Subscribe(
-		core.PendingLogsEvent{},
-		core.RemovedLogsEvent{},
-		core.ChainEvent{},
-		core.TxPreEvent{},
-		vm.Logs(nil),
-	)
 	go fs.filterLoop()
 	return fs
 }
@@ -80,106 +60,110 @@ func NewFilterSystem(mux *event.TypeMux) *FilterSystem {
 // Stop quits the filter loop required for polling events
 func (fs *FilterSystem) Stop() {
 	fs.sub.Unsubscribe()
+	<-fs.closed
 }
 
-// Add adds a filter to the filter manager
-func (fs *FilterSystem) Add(filter *Filter, filterType FilterType) (int, error) {
-	fs.filterMu.Lock()
-	defer fs.filterMu.Unlock()
-
-	id := fs.filterId
-	filter.created = time.Now()
-
-	switch filterType {
-	case ChainFilter:
-		fs.chainFilters[id] = filter
-	case PendingTxFilter:
-		fs.pendingTxFilters[id] = filter
-	case LogFilter:
-		fs.logFilters[id] = filter
-	case PendingLogFilter:
-		fs.pendingLogFilters[id] = filter
-	default:
-		return 0, fmt.Errorf("unknown filter type %v", filterType)
+// Add starts sending updates to the given filter.
+func (fs *FilterSystem) Add(f *Filter) bool {
+	select {
+	case fs.add <- f:
+		return true
+	case <-fs.closed:
+		return false
 	}
-	fs.generic[id] = filter
-
-	fs.filterId++
-
-	return id, nil
 }
 
-// Remove removes a filter by filter id
-func (fs *FilterSystem) Remove(id int) {
-	fs.filterMu.Lock()
-	defer fs.filterMu.Unlock()
-
-	delete(fs.chainFilters, id)
-	delete(fs.pendingTxFilters, id)
-	delete(fs.logFilters, id)
-	delete(fs.pendingLogFilters, id)
-	delete(fs.generic, id)
+// Remove removes a filter. The filter will not receive
+// any updates after Remove has returned.
+func (fs *FilterSystem) Remove(f *Filter) {
+	select {
+	case fs.remove <- f:
+	case <-fs.closed:
+	}
 }
 
-func (fs *FilterSystem) Get(id int) *Filter {
-	fs.filterMu.RLock()
-	defer fs.filterMu.RUnlock()
-
-	return fs.generic[id]
+func (fs *FilterSystem) Get(id string) *Filter {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	return fs.all[id]
 }
+
+type filterIndex map[FilterType]map[string]*Filter
 
 // filterLoop waits for specific events from ethereum and fires their handlers
 // when the filter matches the requirements.
 func (fs *FilterSystem) filterLoop() {
-	for event := range fs.sub.Chan() {
-		switch ev := event.Data.(type) {
-		case core.ChainEvent:
-			fs.filterMu.RLock()
-			for _, filter := range fs.chainFilters {
-				if filter.BlockCallback != nil && !filter.created.After(event.Time) {
-					filter.BlockCallback(ev.Block, ev.Logs)
-				}
-			}
-			fs.filterMu.RUnlock()
-		case core.TxPreEvent:
-			fs.filterMu.RLock()
-			for _, filter := range fs.pendingTxFilters {
-				if filter.TransactionCallback != nil && !filter.created.After(event.Time) {
-					filter.TransactionCallback(ev.Tx)
-				}
-			}
-			fs.filterMu.RUnlock()
+	index := make(filterIndex) // per-event index of filters
 
-		case vm.Logs:
-			fs.filterMu.RLock()
-			for _, filter := range fs.logFilters {
-				if filter.LogCallback != nil && !filter.created.After(event.Time) {
-					for _, log := range filter.FilterLogs(ev) {
-						filter.LogCallback(log, false)
-					}
-				}
+	defer close(fs.closed)
+	for {
+		select {
+		case event, ok := <-fs.sub.Chan():
+			if !ok {
+				return // event mux closed
 			}
-			fs.filterMu.RUnlock()
-		case core.RemovedLogsEvent:
-			fs.filterMu.RLock()
-			for _, filter := range fs.logFilters {
-				if filter.LogCallback != nil && !filter.created.After(event.Time) {
-					for _, removedLog := range filter.FilterLogs(ev.Logs) {
-						filter.LogCallback(removedLog, true)
-					}
-				}
+			deliver(index, event)
+
+		case f := <-fs.add:
+			// Lazily initialise the index for this filter type.
+			if index[f.typ] == nil {
+				index[f.typ] = make(map[string]*Filter)
 			}
-			fs.filterMu.RUnlock()
-		case core.PendingLogsEvent:
-			fs.filterMu.RLock()
-			for _, filter := range fs.pendingLogFilters {
-				if filter.LogCallback != nil && !filter.created.After(event.Time) {
-					for _, pendingLog := range ev.Logs {
-						filter.LogCallback(pendingLog, false)
-					}
-				}
+			// Add it to the index. We need to lock for that
+			// because Get reads from the same map.
+			fs.mu.Lock()
+			if _, found := fs.all[f.ID()]; !found {
+				fs.all[f.ID()] = f
+				index[f.typ][f.ID()] = f
 			}
-			fs.filterMu.RUnlock()
+			fs.mu.Unlock()
+
+		case f := <-fs.remove:
+			if index[f.typ] != nil {
+				delete(index[f.typ], f.id)
+			}
+			fs.mu.Lock()
+			delete(fs.all, f.ID())
+			fs.mu.Unlock()
 		}
+	}
+}
+
+func deliver(index filterIndex, event *event.Event) {
+	iterFilters := func(typ FilterType, cb func(*Filter)) {
+		for _, f := range index[typ] {
+			if !f.created.After(event.Time) {
+				cb(f)
+			}
+		}
+	}
+
+	switch ev := event.Data.(type) {
+	case core.ChainEvent:
+		iterFilters(ChainFilter, func(f *Filter) {
+			f.BlockCallback(ev.Block, ev.Logs)
+		})
+	case core.TxPreEvent:
+		iterFilters(PendingTxFilter, func(f *Filter) {
+			f.TransactionCallback(ev.Tx)
+		})
+	case vm.Logs:
+		iterFilters(LogFilter, func(f *Filter) {
+			for _, log := range f.FilterLogs(ev) {
+				f.LogCallback(log, false)
+			}
+		})
+	case core.RemovedLogsEvent:
+		iterFilters(LogFilter, func(f *Filter) {
+			for _, log := range f.FilterLogs(ev.Logs) {
+				f.LogCallback(log, true)
+			}
+		})
+	case core.PendingLogsEvent:
+		iterFilters(PendingLogFilter, func(f *Filter) {
+			for _, log := range f.FilterLogs(ev.Logs) {
+				f.LogCallback(log, false)
+			}
+		})
 	}
 }
