@@ -18,9 +18,11 @@ package rpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -91,6 +93,8 @@ type Client struct {
 	wg        sync.WaitGroup
 	idCounter uint32
 
+	connectFunc func() (net.Conn, error)
+
 	// for dispatch
 	didQuit   chan struct{}                  // closed when client quits
 	readErr   chan error                     // errors from read
@@ -102,9 +106,21 @@ type Client struct {
 }
 
 type requestOp struct {
-	ids  []json.RawMessage
-	resp chan *jsonrpcMessage // set for requests, batch requests
-	sub  *ClientSubscription  // set for subscriptions
+	ids []json.RawMessage
+	// set for requests, batch requests
+	err  error
+	resp chan *jsonrpcMessage
+	// set for subscriptions
+	sub *ClientSubscription
+}
+
+func (op *requestOp) wait(ctx context.Context) (*jsonrpcMessage, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case resp := <-op.resp:
+		return resp, op.err
+	}
 }
 
 // Dial creates a new client for the given URL.
@@ -185,16 +201,16 @@ func (c *Client) Call(result interface{}, method string, args ...interface{}) er
 	}
 
 	// dispatch has accepted the request and will close the channel it when it quits.
-	resp, isopen := <-op.resp
-	if !isopen {
-		return ErrClientQuit
-	} else if resp.Error != nil {
+	switch resp, err := op.wait(context.TODO()); {
+	case err != nil:
+		return err
+	case resp.Error != nil:
 		return resp.Error
-	}
-	if len(resp.Result) == 0 {
+	case len(resp.Result) == 0:
 		return ErrNoResult
+	default:
+		return json.Unmarshal(resp.Result, &result)
 	}
-	return json.Unmarshal(resp.Result, &result)
 }
 
 // BatchRequest sends all given requests as a single batch
@@ -225,13 +241,12 @@ func (c *Client) BatchCall(b []BatchElem) error {
 		err = c.send(op, msgs)
 	}
 
-	// dispatch has accepted the handlers and will close respCh when it quits.
+	// wait for all responses to come back.
 	for n := 0; n < len(b) && err == nil; n++ {
-		resp, isopen := <-op.resp
-		if !isopen {
-			// TODO: not right. would be nicer to return the actual read error,
-			// if any, but that's not easy to get.
-			err = ErrClientQuit
+		var resp *jsonrpcMessage
+		resp, err = op.wait(context.TODO())
+		if err != nil {
+			break
 		}
 		// Find the element corresponding to this response.
 		// The element is guaranteed to be present because dispatch
@@ -331,13 +346,15 @@ func (c *Client) dispatch() {
 	var (
 		lastOp        *requestOp
 		requestOpLock = c.requestOp // nil while the send lock is held
+		disconnected  = true
 	)
 	for {
 		select {
 		// Read path.
 		case err := <-c.readErr:
-			glog.V(logger.Debug).Infof("<-readErr: shutting down (%v)", err)
-			return
+			glog.V(logger.Debug).Infof("<-readErr: %v", err)
+			disconnected = true
+			c.closeRequestOps(err)
 		case batch := <-c.readResp:
 			for _, msg := range batch {
 				switch {
@@ -361,16 +378,25 @@ func (c *Client) dispatch() {
 
 		// Send path.
 		case op := <-requestOpLock:
+			// Establish the connection.
+			// TODO: shit. It's too late to connect here because
+			// we have already accepted the connection.
+			var connectErr error
+			if disconnected {
+				connectErr = c.connectFunc()
+			}
 			// Stop listening for further send ops until the current one is done.
 			requestOpLock = nil
 			lastOp = op
 			for _, id := range op.ids {
 				c.respWait[string(id)] = op
 			}
+
 		case err := <-c.sendDone:
 			if err != nil {
 				// Remove response handlers for the last send. We'll probably exit soon
-				// since a write failed.
+				// since a write failed. We remove those here because the error is already
+				// handled in Call or BatchCall.
 				for _, id := range lastOp.ids {
 					delete(c.respWait, string(id))
 				}
@@ -382,22 +408,30 @@ func (c *Client) dispatch() {
 	}
 }
 
-// closeRequestOps unblocks pending send ops and active subscriptions on exit.
+// closeRequestOps unblocks pending send ops and active subscriptions.
 func (c *Client) closeRequestOps(err error) {
+	suberr := err
+	if err == ErrClientQuit {
+		// For subscriptions the close error is nil if the client was quit,
+		// as documented for ClientSubscription.Err. This is because nil
+		// is easier to handle as "don't re-establish".
+		suberr = nil
+	}
+
 	didClose := make(map[*requestOp]bool)
 	for _, op := range c.respWait {
 		if !didClose[op] {
-			// TODO: maybe assign error instead of sending it.
 			if op.sub != nil {
 				op.sub.quit <- err
 			} else {
+				op.err = err
 				close(op.resp)
 			}
 			didClose[op] = true
 		}
 	}
 	for _, sub := range c.subs {
-		sub.quitWithError(nil, false)
+		sub.quitWithError(suberr, false)
 	}
 }
 

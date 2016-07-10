@@ -189,6 +189,8 @@ func TestClientSubscribeClose(t *testing.T) {
 	}
 }
 
+// TODO: test subscribing the same channel multiple times
+
 func TestClientHTTP(t *testing.T) {
 	server := NewServer()
 	server.RegisterName("service", new(Service))
