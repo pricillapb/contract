@@ -108,12 +108,10 @@ type Client struct {
 }
 
 type requestOp struct {
-	ids []json.RawMessage
-	// set for requests, batch requests
+	ids  []json.RawMessage
 	err  error
 	resp chan *jsonrpcMessage
-	// set for subscriptions
-	sub *ClientSubscription
+	sub  *ClientSubscription // only set for EthSubscribe requests
 }
 
 func (op *requestOp) wait(ctx context.Context) (*jsonrpcMessage, error) {
@@ -330,8 +328,11 @@ func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*Client
 	if err != nil {
 		return nil, err
 	}
-	sub := newClientSubscription(c, chanVal)
-	op := &requestOp{ids: []json.RawMessage{msg.ID}, sub: sub}
+	op := &requestOp{
+		ids:  []json.RawMessage{msg.ID},
+		resp: make(chan *jsonrpcMessage),
+		sub:  newClientSubscription(c, chanVal),
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), subscribeTimeout)
 	defer cancel()
 
@@ -340,10 +341,10 @@ func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*Client
 	if err := c.send(ctx, op, msg); err != nil {
 		return nil, err
 	}
-	if err := op.wait(ctx); err != nil {
+	if _, err := op.wait(ctx); err != nil {
 		return nil, err
 	}
-	return op.sub, op.err
+	return op.sub, nil
 }
 
 func (c *Client) newMessage(method string, paramsIn ...interface{}) (*jsonrpcMessage, error) {
@@ -407,7 +408,7 @@ func (c *Client) reconnect(ctx context.Context) error {
 }
 
 // dispatch is the main loop of the client.
-// It sends read messages to waiting calls to Request and BatchRequest
+// It sends read messages to waiting calls to Call and BatchCall
 // and subscription notifications to registered subscriptions.
 func (c *Client) dispatch(conn net.Conn) {
 	// Spawn the initial read loop.
@@ -416,13 +417,13 @@ func (c *Client) dispatch(conn net.Conn) {
 	var (
 		lastOp        *requestOp    // tracks last send operation
 		requestOpLock = c.requestOp // nil while the send lock is held
-		disconnected  = false       // if true, no read loop is running
+		reading       = false       // if true, no read loop is running
 	)
 	defer close(c.didQuit)
 	defer func() {
 		c.closeRequestOps(ErrClientQuit)
 		conn.Close()
-		if !disconnected {
+		if reading {
 			// Empty read channels until read is dead.
 			for {
 				select {
@@ -437,7 +438,6 @@ func (c *Client) dispatch(conn net.Conn) {
 	for {
 		select {
 		case <-c.close:
-			fmt.Println("closed")
 			return
 
 		// Read path.
@@ -466,16 +466,17 @@ func (c *Client) dispatch(conn net.Conn) {
 			glog.V(logger.Debug).Infof("<-readErr: %v", err)
 			c.closeRequestOps(err)
 			conn.Close()
-			disconnected = true
+			reading = false
 
 		case conn = <-c.reconnected:
-			glog.V(logger.Debug).Infof("<-reconnected: (disconnected=%t) %v", disconnected, conn.RemoteAddr())
-			if !disconnected {
+			glog.V(logger.Debug).Infof("<-reconnected: (reading=%t) %v", reading, conn.RemoteAddr())
+			if reading {
+				// Wait for the previous read loop to exit. This is a rare case.
 				conn.Close()
 				<-c.readErr
 			}
 			go c.read(conn)
-			disconnected = false
+			reading = true
 
 		// Send path.
 		case op := <-requestOpLock:
@@ -558,20 +559,20 @@ func (c *Client) handleResponse(msg *jsonrpcMessage) {
 		return
 	}
 	delete(c.respWait, string(msg.ID))
-	// For normal responses, just forward the reply to Request/BatchRequest.
+	// For normal responses, just forward the reply to Call/BatchCall.
 	if op.sub == nil {
 		op.resp <- msg
 		return
 	}
 	// For subscription responses, start the subscription if the server
 	// indicates success. EthSubscribe gets unblocked in either case through
-	// the quit channel.
+	// the op.resp channel.
 	defer close(op.resp)
 	if msg.Error != nil {
 		op.err = msg.Error
 		return
 	}
-	if op.err = json.Unmarshal(msg.Result, &op.sub.subid); err == nil {
+	if op.err = json.Unmarshal(msg.Result, &op.sub.subid); op.err == nil {
 		go op.sub.start()
 		c.subs[op.sub.subid] = op.sub
 	}
@@ -616,11 +617,7 @@ type ClientSubscription struct {
 	channel reflect.Value
 	subid   string
 	in      chan json.RawMessage
-	// quit is dual-purpose. It is used to carry the response
-	// status from dispatch to EthSubscribe before the subscription is
-	// active. After it has been started, quit will be closed when the subscription
-	// exits.
-	quit chan error
+	quit    chan error // quit is closed when the subscription exits
 
 	mu           sync.Mutex
 	unsubscribed bool
@@ -636,7 +633,7 @@ func newClientSubscription(c *Client, channel reflect.Value) *ClientSubscription
 		in: make(chan json.RawMessage, clientSubscriptionBuffer),
 		// quit is buffered so dispatch can progress immediately while setting up the
 		// subscription in handleResponse.
-		quit: make(chan error, 1),
+		quit: make(chan error),
 	}
 	return sub
 }

@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/ethereum/go-ethereum/logger/glog"
 )
 
 func newTestClient(t *testing.T, serviceName string, service interface{}) (*Server, *Client) {
@@ -168,9 +167,6 @@ func TestClientSubscribeClose(t *testing.T) {
 	defer server.Stop()
 	defer client.Close()
 
-	glog.SetV(6)
-	glog.SetToStderr(true)
-
 	var (
 		nc   = make(chan int)
 		errc = make(chan error)
@@ -188,8 +184,8 @@ func TestClientSubscribeClose(t *testing.T) {
 
 	select {
 	case err := <-errc:
-		if err != ErrClientQuit {
-			t.Errorf("EthSubscribe error mismatch after Close: got %q, want %q", err, ErrClientQuit)
+		if err == nil {
+			t.Errorf("EthSubscribe returned nil error after Close")
 		}
 		if sub != nil {
 			t.Error("EthSubscribe returned non-nil subscription after Close")
