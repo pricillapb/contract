@@ -16,7 +16,11 @@
 
 package rpc
 
-import "net"
+import (
+	"net"
+
+	"golang.org/x/net/context"
+)
 
 // CreateIPCListener creates an listener, on Unix platforms this is a unix socket, on Windows this is a named pipe
 func CreateIPCListener(endpoint string) (net.Listener, error) {
@@ -27,7 +31,7 @@ func CreateIPCListener(endpoint string) (net.Listener, error) {
 // On Unix it assumes the endpoint is the full path to a unix socket, and Windows the endpoint is an identifier for a
 // named pipe.
 func DialIPC(endpoint string) (*Client, error) {
-	return newClient(func() (net.Conn, error) {
-		return newIPCConnection(endpoint)
+	return newClient(func(ctx context.Context) (net.Conn, error) {
+		return newIPCConnection(ctx, endpoint)
 	})
 }

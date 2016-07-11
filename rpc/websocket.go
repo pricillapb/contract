@@ -17,14 +17,17 @@
 package rpc
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
+	"golang.org/x/net/context"
 	"golang.org/x/net/websocket"
 	"gopkg.in/fatih/set.v0"
 )
@@ -89,21 +92,60 @@ func ListenWS(s *Server, addr, allowedOrigins string) (net.Listener, error) {
 	return listener, nil
 }
 
-// DialWS creates a new RPC client that communicates with a JSON-RPC server
+// DialWebsocket creates a new RPC client that communicates with a JSON-RPC server
 // that is listening on the given endpoint.
-func DialWS(endpoint, origin string) (*Client, error) {
-	return newClient(func() (net.Conn, error) {
-		if origin == "" {
-			var err error
-			if origin, err = os.Hostname(); err != nil {
-				return nil, err
-			}
-			if strings.HasPrefix(endpoint, "wss") {
-				origin = "https://" + origin
-			} else {
-				origin = "http://" + origin
-			}
+func DialWebsocket(endpoint, origin string) (*Client, error) {
+	if origin == "" {
+		var err error
+		if origin, err = os.Hostname(); err != nil {
+			return nil, err
 		}
-		return websocket.Dial(endpoint, "", origin)
+		if strings.HasPrefix(endpoint, "wss") {
+			origin = "https://" + origin
+		} else {
+			origin = "http://" + origin
+		}
+	}
+	config, err := websocket.NewConfig(endpoint, origin)
+	if err != nil {
+		return nil, err
+	}
+
+	return newClient(func(ctx context.Context) (net.Conn, error) {
+		return wsDialContext(ctx, config)
 	})
+}
+
+func wsDialContext(ctx context.Context, config *websocket.Config) (*websocket.Conn, error) {
+	var conn net.Conn
+	var err error
+	switch config.Location.Scheme {
+	case "ws":
+		conn, err = dialContext(ctx, "tcp", parseAuthority(config.Location))
+	case "wss":
+		dialer := contextDialer(ctx)
+		conn, err = tls.DialWithDialer(dialer, "tcp", parseAuthority(config.Location), config.TlsConfig)
+	default:
+		err = websocket.ErrBadScheme
+	}
+	if err != nil {
+		return nil, err
+	}
+	ws, err := websocket.NewClient(config, conn)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return ws, err
+}
+
+var wsPortMap = map[string]string{"ws": "80", "wss": "443"}
+
+func parseAuthority(location *url.URL) string {
+	if _, ok := wsPortMap[location.Scheme]; ok {
+		if _, _, err := net.SplitHostPort(location.Host); err != nil {
+			return net.JoinHostPort(location.Host, wsPortMap[location.Scheme])
+		}
+	}
+	return location.Host
 }

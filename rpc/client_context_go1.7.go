@@ -14,20 +14,22 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
+// +build go1.7
+
 package rpc
 
 import (
+	"context"
 	"net"
-
-	"golang.org/x/net/context"
+	"net/http"
 )
 
-// NewInProcClient attaches an in-process connection to the given RPC server.
-func DialInProc(handler *Server) *Client {
-	c, _ := newClient(func(context.Context) (net.Conn, error) {
-		p1, p2 := net.Pipe()
-		go handler.ServeCodec(NewJSONCodec(p1), OptionMethodInvocation|OptionSubscriptions)
-		return p2, nil
-	})
-	return c
+// dialContext connects to the given address, aborting the dial if ctx is canceled.
+func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return contextDialer(ctx).DialContext(ctx, network, addr)
+}
+
+// requestWithContext copies req and adds the cancelation channel from the context.
+func requestWithContext(req *http.Request, ctx context.Context) *http.Request {
+	return req.WithContext(ctx)
 }

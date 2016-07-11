@@ -21,7 +21,6 @@ import (
 	"reflect"
 	"runtime"
 	"sync/atomic"
-	"time"
 
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
@@ -30,8 +29,6 @@ import (
 )
 
 const (
-	stopPendingRequestTimeout = 3 * time.Second // give pending requests stopPendingRequestTimeout the time to finish when the server is stopped
-
 	// NotifierContextKey is the key where the notifier associated with the codec is stored in the context
 	NotifierContextKey = 1
 

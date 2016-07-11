@@ -17,14 +17,15 @@
 package rpc
 
 import (
-	"context"
 	"net"
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"golang.org/x/net/context"
 )
 
 func newTestClient(t *testing.T, serviceName string, service interface{}) (*Server, *Client) {
@@ -283,12 +284,25 @@ func TestClientReconnect(t *testing.T) {
 	// Allow for some cool down time so we can listen on the same address again.
 	time.Sleep(2 * time.Second)
 
-	// Start it up again and call one more time. The connection should be reestablished.
+	// Start it up again and call again. The connection should be reestablished.
+	// We spawn multiple calls here to check whether this hangs somehow.
 	s2, l2 := startServer(l1.Addr().String())
 	defer l2.Close()
 	defer s2.Stop()
 
-	if err := client.CallContext(ctx, &resp, "service_echo", "", 3, nil); err != nil {
-		t.Fatal("call with reconnect failed:", err)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var resp Result
+			if err := client.CallContext(ctx, &resp, "service_echo", "", 3, nil); err != nil {
+				t.Error("call with reconnect failed:", err)
+			}
+		}()
 	}
+	close(start)
+	wg.Wait()
 }

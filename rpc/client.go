@@ -18,7 +18,6 @@ package rpc
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +31,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
+	"golang.org/x/net/context"
 )
 
 var (
@@ -42,10 +42,14 @@ var (
 const (
 	// How many notifications to buffer before the ingress path gets blocked.
 	clientSubscriptionBuffer = 100
+	// This timeout is used for the first dial attempt.
+	initialDialTimeout = 10 * time.Second
 	// This timeout is used if the caller context has no deadline.
 	defaultWriteTimeout = 10 * time.Second
 	// Timeout for eth_subscribe and rpc_modules calls.
 	subscribeTimeout = 5 * time.Second
+
+	tcpKeepAliveInterval = 30 * time.Second
 )
 
 // BatchElem is an element in a batch request.
@@ -92,8 +96,8 @@ func (msg *jsonrpcMessage) String() string {
 
 type Client struct {
 	idCounter   uint32
-	connectFunc func() (net.Conn, error)
 	writeConn   net.Conn
+	connectFunc func(ctx context.Context) (net.Conn, error)
 
 	// for dispatch
 	close       chan struct{}
@@ -140,7 +144,7 @@ func Dial(rawurl string) (*Client, error) {
 	case "http", "https":
 		return DialHTTP(rawurl)
 	case "ws", "wss":
-		return DialWS(rawurl, "")
+		return DialWebsocket(rawurl, "")
 	case "":
 		return DialIPC(rawurl)
 	default:
@@ -148,11 +152,26 @@ func Dial(rawurl string) (*Client, error) {
 	}
 }
 
-func newClient(connectFunc func() (net.Conn, error)) (*Client, error) {
-	conn, err := connectFunc()
+// contextDialer returns a dialer that applies the deadline
+// value from the given context.
+func contextDialer(ctx context.Context) *net.Dialer {
+	dialer := &net.Dialer{Cancel: ctx.Done(), KeepAlive: tcpKeepAliveInterval}
+	if deadline, ok := ctx.Deadline(); ok {
+		dialer.Deadline = deadline
+	} else {
+		dialer.Deadline = time.Now().Add(initialDialTimeout)
+	}
+	return dialer
+}
+
+func newClient(connectFunc func(context.Context) (net.Conn, error)) (*Client, error) {
+	initctx, cancel := context.WithTimeout(context.Background(), initialDialTimeout)
+	defer cancel()
+	conn, err := connectFunc(initctx)
 	if err != nil {
 		return nil, err
 	}
+
 	c := &Client{
 		writeConn:   conn,
 		connectFunc: connectFunc,
@@ -376,23 +395,23 @@ func (c *Client) write(ctx context.Context, msg interface{}) error {
 	if !ok {
 		deadline = time.Now().Add(defaultWriteTimeout)
 	}
+	var err error
 	for try := 0; try <= 1; try++ {
 		c.writeConn.SetWriteDeadline(deadline)
-		err := json.NewEncoder(c.writeConn).Encode(msg)
+		err = json.NewEncoder(c.writeConn).Encode(msg)
+		if err == nil {
+			return nil
+		}
 		if err != nil && try == 0 {
 			// The write failed. Establish a new connection on the first try.
 			err = c.reconnect(ctx)
 		}
-		if err != nil {
-			return err
-		}
 	}
-	return nil
+	return err
 }
 
 func (c *Client) reconnect(ctx context.Context) error {
-	// TODO: use context
-	newconn, err := c.connectFunc()
+	newconn, err := c.connectFunc(ctx)
 	if err != nil {
 		glog.V(logger.Detail).Infof("reconnect failed: %v", err)
 		return err
@@ -417,7 +436,7 @@ func (c *Client) dispatch(conn net.Conn) {
 	var (
 		lastOp        *requestOp    // tracks last send operation
 		requestOpLock = c.requestOp // nil while the send lock is held
-		reading       = false       // if true, no read loop is running
+		reading       = true        // if true, a read loop is running
 	)
 	defer close(c.didQuit)
 	defer func() {
@@ -495,9 +514,6 @@ func (c *Client) dispatch(conn net.Conn) {
 				for _, id := range lastOp.ids {
 					delete(c.respWait, string(id))
 				}
-				// Terminate the read goroutine. The next request will bring up a new
-				// connection and spawn a new read loop.
-				conn.Close()
 			}
 			// Listen for send ops again.
 			requestOpLock = c.requestOp
@@ -555,7 +571,7 @@ func (c *Client) handleNotification(msg *jsonrpcMessage) {
 func (c *Client) handleResponse(msg *jsonrpcMessage) {
 	op := c.respWait[string(msg.ID)]
 	if op == nil {
-		glog.V(logger.Debug).Infof("unsolicited response %#v", msg)
+		glog.V(logger.Debug).Infof("unsolicited response %v", msg)
 		return
 	}
 	delete(c.respWait, string(msg.ID))
@@ -586,6 +602,7 @@ func (c *Client) read(conn net.Conn) error {
 		dec = json.NewDecoder(conn)
 	)
 	readMessage := func() (rs []*jsonrpcMessage, err error) {
+		buf = buf[:0]
 		if err = dec.Decode(&buf); err != nil {
 			return nil, err
 		}

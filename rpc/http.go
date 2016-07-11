@@ -18,18 +18,18 @@ package rpc
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/cors"
+	"golang.org/x/net/context"
 )
 
 const (
@@ -40,7 +40,7 @@ var nullAddr, _ = net.ResolveTCPAddr("tcp", "127.0.0.1:0")
 
 type httpConn struct {
 	http.Client
-	endpoint  string
+	req       *http.Request
 	closeOnce sync.Once
 	closed    chan struct{}
 }
@@ -65,29 +65,27 @@ func (hc *httpConn) Close() error {
 
 // DialHTTP creates  a new RPC clients that connection to an RPC server over HTTP.
 func DialHTTP(endpoint string) (*Client, error) {
-	return newClient(func() (net.Conn, error) {
-		if _, err := url.Parse(endpoint); err != nil {
-			return nil, err
-		}
-		return &httpConn{endpoint: endpoint, closed: make(chan struct{})}, nil
+	req, err := http.NewRequest("POST", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	return newClient(func(context.Context) (net.Conn, error) {
+		return &httpConn{req: req, closed: make(chan struct{})}, nil
 	})
 }
 
 func (c *Client) sendHTTP(ctx context.Context, op *requestOp, msg interface{}) error {
-	// TODO: use context
-
 	hc := c.writeConn.(*httpConn)
-	body, err := json.Marshal(msg)
+	respBody, err := hc.doRequest(ctx, msg)
 	if err != nil {
 		return err
 	}
-	resp, err := hc.Post(hc.endpoint, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+	defer respBody.Close()
 	var respmsg jsonrpcMessage
-	if err := json.NewDecoder(resp.Body).Decode(&respmsg); err != nil {
+	if err := json.NewDecoder(respBody).Decode(&respmsg); err != nil {
 		return err
 	}
 	op.resp <- &respmsg
@@ -95,26 +93,36 @@ func (c *Client) sendHTTP(ctx context.Context, op *requestOp, msg interface{}) e
 }
 
 func (c *Client) sendBatchHTTP(ctx context.Context, op *requestOp, msgs []*jsonrpcMessage) error {
-	// TODO: use context
-
 	hc := c.writeConn.(*httpConn)
-	body, err := json.Marshal(msgs)
+	respBody, err := hc.doRequest(ctx, msgs)
 	if err != nil {
 		return err
 	}
-	resp, err := hc.Post(hc.endpoint, "application/json", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+	defer respBody.Close()
 	var respmsgs []jsonrpcMessage
-	if err := json.NewDecoder(resp.Body).Decode(&respmsgs); err != nil {
+	if err := json.NewDecoder(respBody).Decode(&respmsgs); err != nil {
 		return err
 	}
 	for _, respmsg := range respmsgs {
 		op.resp <- &respmsg
 	}
 	return nil
+}
+
+func (hc *httpConn) doRequest(ctx context.Context, msg interface{}) (io.ReadCloser, error) {
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	req := requestWithContext(hc.req, ctx)
+	req.Body = ioutil.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
 }
 
 // httpReadWriteNopCloser wraps a io.Reader and io.Writer with a NOP Close method.
