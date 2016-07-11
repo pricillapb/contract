@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
@@ -38,13 +39,14 @@ var (
 	ErrNoResult   = errors.New("no result in JSON-RPC response")
 )
 
-const clientSubscriptionBuffer = 100
-
-type clientCodec interface {
-	Send(msg interface{}) error
-	Recv(msg interface{}) error
-	Close()
-}
+const (
+	// How many notifications to buffer before the ingress path gets blocked.
+	clientSubscriptionBuffer = 100
+	// This timeout is used if the caller context has no deadline.
+	defaultWriteTimeout = 10 * time.Second
+	// Timeout for eth_subscribe and rpc_modules calls.
+	subscribeTimeout = 5 * time.Second
+)
 
 // BatchElem is an element in a batch request.
 type BatchElem struct {
@@ -89,20 +91,20 @@ func (msg *jsonrpcMessage) String() string {
 }
 
 type Client struct {
-	conn      clientCodec
-	wg        sync.WaitGroup
-	idCounter uint32
-
+	idCounter   uint32
 	connectFunc func() (net.Conn, error)
+	writeConn   net.Conn
 
 	// for dispatch
-	didQuit   chan struct{}                  // closed when client quits
-	readErr   chan error                     // errors from read
-	readResp  chan []*jsonrpcMessage         // valid messages from read
-	requestOp chan *requestOp                // for registering response IDs
-	sendDone  chan error                     // signals write completion, releases write lock
-	respWait  map[string]*requestOp          // active requests
-	subs      map[string]*ClientSubscription // active subscriptions
+	close       chan struct{}
+	didQuit     chan struct{}                  // closed when client quits
+	reconnected chan net.Conn                  // where write/reconnect sends the new connection
+	readErr     chan error                     // errors from read
+	readResp    chan []*jsonrpcMessage         // valid messages from read
+	requestOp   chan *requestOp                // for registering response IDs
+	sendDone    chan error                     // signals write completion, releases write lock
+	respWait    map[string]*requestOp          // active requests
+	subs        map[string]*ClientSubscription // active subscriptions
 }
 
 type requestOp struct {
@@ -140,7 +142,7 @@ func Dial(rawurl string) (*Client, error) {
 	case "http", "https":
 		return DialHTTP(rawurl)
 	case "ws", "wss":
-		return DialWS(rawurl)
+		return DialWS(rawurl, "")
 	case "":
 		return DialIPC(rawurl)
 	default:
@@ -148,21 +150,26 @@ func Dial(rawurl string) (*Client, error) {
 	}
 }
 
-func newClient(codec clientCodec) *Client {
-	c := &Client{
-		conn:      codec,
-		didQuit:   make(chan struct{}),
-		readErr:   make(chan error),
-		readResp:  make(chan []*jsonrpcMessage),
-		requestOp: make(chan *requestOp),
-		sendDone:  make(chan error, 1),
-		respWait:  make(map[string]*requestOp),
-		subs:      make(map[string]*ClientSubscription),
+func newClient(connectFunc func() (net.Conn, error)) (*Client, error) {
+	conn, err := connectFunc()
+	if err != nil {
+		return nil, err
 	}
-	c.wg.Add(2)
-	go c.read()
-	go c.dispatch()
-	return c
+	c := &Client{
+		writeConn:   conn,
+		connectFunc: connectFunc,
+		close:       make(chan struct{}),
+		didQuit:     make(chan struct{}),
+		reconnected: make(chan net.Conn),
+		readErr:     make(chan error),
+		readResp:    make(chan []*jsonrpcMessage),
+		requestOp:   make(chan *requestOp),
+		sendDone:    make(chan error, 1),
+		respWait:    make(map[string]*requestOp),
+		subs:        make(map[string]*ClientSubscription),
+	}
+	go c.dispatch(conn)
+	return c, nil
 }
 
 func (c *Client) nextID() json.RawMessage {
@@ -172,36 +179,49 @@ func (c *Client) nextID() json.RawMessage {
 
 func (c *Client) SupportedModules() (map[string]string, error) {
 	var result map[string]string
-	err := c.Call(&result, "rpc_modules")
+	ctx, cancel := context.WithTimeout(context.Background(), subscribeTimeout)
+	defer cancel()
+	err := c.CallContext(ctx, &result, "rpc_modules")
 	return result, err
 }
 
 // Close closes the client, aborting any in-flight requests.
 func (c *Client) Close() {
-	c.conn.Close()
-	c.wg.Wait()
+	select {
+	case c.close <- struct{}{}:
+		<-c.didQuit
+	case <-c.didQuit:
+	}
 }
 
-// Request performs a JSON-RPC call with the given arguments
+// Call performs a JSON-RPC call with the given arguments
 // and unmarshals into result if no error occurred.
 func (c *Client) Call(result interface{}, method string, args ...interface{}) error {
+	ctx := context.Background()
+	return c.CallContext(ctx, result, method, args...)
+}
+
+// CallContext performs a JSON-RPC call with the given arguments.
+// If the call does not complete within the context deadline,
+// CallContext returns ctx.Err().
+func (c *Client) CallContext(ctx context.Context, result interface{}, method string, args ...interface{}) error {
 	msg, err := c.newMessage(method, args...)
 	if err != nil {
 		return err
 	}
 	op := &requestOp{ids: []json.RawMessage{msg.ID}, resp: make(chan *jsonrpcMessage, 1)}
 
-	if _, ok := c.conn.(*httpClient); ok {
-		err = c.sendHTTP(op, msg)
+	if _, ok := c.writeConn.(*httpConn); ok {
+		err = c.sendHTTP(ctx, op, msg)
 	} else {
-		err = c.send(op, msg)
+		err = c.send(ctx, op, msg)
 	}
 	if err != nil {
 		return err
 	}
 
 	// dispatch has accepted the request and will close the channel it when it quits.
-	switch resp, err := op.wait(context.TODO()); {
+	switch resp, err := op.wait(ctx); {
 	case err != nil:
 		return err
 	case resp.Error != nil:
@@ -213,13 +233,25 @@ func (c *Client) Call(result interface{}, method string, args ...interface{}) er
 	}
 }
 
-// BatchRequest sends all given requests as a single batch
+// BatchCall sends all given requests as a single batch
 // and waits for the server to return a response for all of them.
 //
-// In contrast to Request, BatchRequest only returns I/O errors.
+// In contrast to Call, BatchCall only returns I/O errors.
 // Any error specific to a request is reported through the Error field
 // of the corresponding BatchElem.
 func (c *Client) BatchCall(b []BatchElem) error {
+	ctx := context.Background()
+	return c.BatchCallContext(ctx, b)
+}
+
+// BatchCall sends all given requests as a single batch
+// and waits for the server to return a response for all of them.
+// The wait duration is bounded by the context's deadline.
+//
+// In contrast to CallContext, BatchCallContext only returns I/O errors.
+// Any error specific to a request is reported through the Error field
+// of the corresponding BatchElem.
+func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 	msgs := make([]*jsonrpcMessage, len(b))
 	op := &requestOp{
 		ids:  make([]json.RawMessage, len(b)),
@@ -235,16 +267,16 @@ func (c *Client) BatchCall(b []BatchElem) error {
 	}
 
 	var err error
-	if _, ok := c.conn.(*httpClient); ok {
-		err = c.sendBatchHTTP(op, msgs)
+	if _, ok := c.writeConn.(*httpConn); ok {
+		err = c.sendBatchHTTP(ctx, op, msgs)
 	} else {
-		err = c.send(op, msgs)
+		err = c.send(ctx, op, msgs)
 	}
 
-	// wait for all responses to come back.
+	// Wait for all responses to come back.
 	for n := 0; n < len(b) && err == nil; n++ {
 		var resp *jsonrpcMessage
-		resp, err = op.wait(context.TODO())
+		resp, err = op.wait(ctx)
 		if err != nil {
 			break
 		}
@@ -290,7 +322,7 @@ func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*Client
 		panic("channel given to EthSubscribe must not be nil")
 	}
 	// HTTP and notifications don't mix.
-	if _, ok := c.conn.(*httpClient); ok {
+	if _, ok := c.writeConn.(*httpConn); ok {
 		return nil, ErrNotificationsUnsupported
 	}
 
@@ -300,14 +332,18 @@ func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*Client
 	}
 	sub := newClientSubscription(c, chanVal)
 	op := &requestOp{ids: []json.RawMessage{msg.ID}, sub: sub}
-	if err := c.send(op, msg); err != nil {
-		return nil, err
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), subscribeTimeout)
+	defer cancel()
+
+	// Send the subscription request.
 	// The arrival and validity of the response is signaled on sub.quit.
-	if err := <-op.sub.quit; err != nil {
+	if err := c.send(ctx, op, msg); err != nil {
 		return nil, err
 	}
-	return op.sub, nil
+	if err := op.wait(ctx); err != nil {
+		return nil, err
+	}
+	return op.sub, op.err
 }
 
 func (c *Client) newMessage(method string, paramsIn ...interface{}) (*jsonrpcMessage, error) {
@@ -320,13 +356,13 @@ func (c *Client) newMessage(method string, paramsIn ...interface{}) (*jsonrpcMes
 
 // send registers op with the dispatch loop, then sends msg on the connection.
 // if sending fails, op is deregistered.
-func (c *Client) send(op *requestOp, msg interface{}) error {
+func (c *Client) send(ctx context.Context, op *requestOp, msg interface{}) error {
 	select {
 	case c.requestOp <- op:
 		if glog.V(logger.Detail) {
 			glog.Info("sending ", msg)
 		}
-		err := c.conn.Send(msg)
+		err := c.write(ctx, msg)
 		c.sendDone <- err
 		return err
 	case <-c.didQuit:
@@ -334,27 +370,77 @@ func (c *Client) send(op *requestOp, msg interface{}) error {
 	}
 }
 
+func (c *Client) write(ctx context.Context, msg interface{}) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(defaultWriteTimeout)
+	}
+	for try := 0; try <= 1; try++ {
+		c.writeConn.SetWriteDeadline(deadline)
+		err := json.NewEncoder(c.writeConn).Encode(msg)
+		if err != nil && try == 0 {
+			// The write failed. Establish a new connection on the first try.
+			err = c.reconnect(ctx)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) reconnect(ctx context.Context) error {
+	// TODO: use context
+	newconn, err := c.connectFunc()
+	if err != nil {
+		glog.V(logger.Detail).Infof("reconnect failed: %v", err)
+		return err
+	}
+	select {
+	case c.reconnected <- newconn:
+		c.writeConn = newconn
+		return nil
+	case <-c.didQuit:
+		newconn.Close()
+		return ErrClientQuit
+	}
+}
+
 // dispatch is the main loop of the client.
 // It sends read messages to waiting calls to Request and BatchRequest
 // and subscription notifications to registered subscriptions.
-func (c *Client) dispatch() {
-	defer c.wg.Done()
-	defer c.conn.Close()
-	defer close(c.didQuit)
-	defer c.closeRequestOps(ErrClientQuit)
+func (c *Client) dispatch(conn net.Conn) {
+	// Spawn the initial read loop.
+	go c.read(conn)
 
 	var (
-		lastOp        *requestOp
+		lastOp        *requestOp    // tracks last send operation
 		requestOpLock = c.requestOp // nil while the send lock is held
-		disconnected  = true
+		disconnected  = false       // if true, no read loop is running
 	)
+	defer close(c.didQuit)
+	defer func() {
+		c.closeRequestOps(ErrClientQuit)
+		conn.Close()
+		if !disconnected {
+			// Empty read channels until read is dead.
+			for {
+				select {
+				case <-c.readResp:
+				case <-c.readErr:
+					return
+				}
+			}
+		}
+	}()
+
 	for {
 		select {
+		case <-c.close:
+			fmt.Println("closed")
+			return
+
 		// Read path.
-		case err := <-c.readErr:
-			glog.V(logger.Debug).Infof("<-readErr: %v", err)
-			disconnected = true
-			c.closeRequestOps(err)
 		case batch := <-c.readResp:
 			for _, msg := range batch {
 				switch {
@@ -376,15 +462,23 @@ func (c *Client) dispatch() {
 				}
 			}
 
+		case err := <-c.readErr:
+			glog.V(logger.Debug).Infof("<-readErr: %v", err)
+			c.closeRequestOps(err)
+			conn.Close()
+			disconnected = true
+
+		case conn = <-c.reconnected:
+			glog.V(logger.Debug).Infof("<-reconnected: (disconnected=%t) %v", disconnected, conn.RemoteAddr())
+			if !disconnected {
+				conn.Close()
+				<-c.readErr
+			}
+			go c.read(conn)
+			disconnected = false
+
 		// Send path.
 		case op := <-requestOpLock:
-			// Establish the connection.
-			// TODO: shit. It's too late to connect here because
-			// we have already accepted the connection.
-			var connectErr error
-			if disconnected {
-				connectErr = c.connectFunc()
-			}
 			// Stop listening for further send ops until the current one is done.
 			requestOpLock = nil
 			lastOp = op
@@ -394,12 +488,15 @@ func (c *Client) dispatch() {
 
 		case err := <-c.sendDone:
 			if err != nil {
-				// Remove response handlers for the last send. We'll probably exit soon
-				// since a write failed. We remove those here because the error is already
-				// handled in Call or BatchCall.
+				// Remove response handlers for the last send. We remove those here
+				// because the error is already handled in Call or BatchCall. When the
+				// read loop goes down, it will signal all other current operations.
 				for _, id := range lastOp.ids {
 					delete(c.respWait, string(id))
 				}
+				// Terminate the read goroutine. The next request will bring up a new
+				// connection and spawn a new read loop.
+				conn.Close()
 			}
 			// Listen for send ops again.
 			requestOpLock = c.requestOp
@@ -410,27 +507,28 @@ func (c *Client) dispatch() {
 
 // closeRequestOps unblocks pending send ops and active subscriptions.
 func (c *Client) closeRequestOps(err error) {
+	didClose := make(map[*requestOp]bool)
+
+	for id, op := range c.respWait {
+		// Remove the op so that later calls will not close op.resp again.
+		delete(c.respWait, id)
+
+		if !didClose[op] {
+			op.err = err
+			close(op.resp)
+			didClose[op] = true
+		}
+	}
+
 	suberr := err
 	if err == ErrClientQuit {
 		// For subscriptions the close error is nil if the client was quit,
 		// as documented for ClientSubscription.Err. This is because nil
-		// is easier to handle as "don't re-establish".
+		// is easier to handle as a "don't re-establish connection" signal.
 		suberr = nil
 	}
-
-	didClose := make(map[*requestOp]bool)
-	for _, op := range c.respWait {
-		if !didClose[op] {
-			if op.sub != nil {
-				op.sub.quit <- err
-			} else {
-				op.err = err
-				close(op.resp)
-			}
-			didClose[op] = true
-		}
-	}
-	for _, sub := range c.subs {
+	for id, sub := range c.subs {
+		delete(c.subs, id)
 		sub.quitWithError(suberr, false)
 	}
 }
@@ -468,13 +566,12 @@ func (c *Client) handleResponse(msg *jsonrpcMessage) {
 	// For subscription responses, start the subscription if the server
 	// indicates success. EthSubscribe gets unblocked in either case through
 	// the quit channel.
+	defer close(op.resp)
 	if msg.Error != nil {
-		op.sub.quit <- msg.Error
+		op.err = msg.Error
 		return
 	}
-	err := json.Unmarshal(msg.Result, &op.sub.subid)
-	op.sub.quit <- err
-	if err == nil {
+	if op.err = json.Unmarshal(msg.Result, &op.sub.subid); err == nil {
 		go op.sub.start()
 		c.subs[op.sub.subid] = op.sub
 	}
@@ -482,30 +579,32 @@ func (c *Client) handleResponse(msg *jsonrpcMessage) {
 
 // Reading happens on a dedicated goroutine.
 
-func (c *Client) read() error {
-	defer c.wg.Done()
-	var buf json.RawMessage
+func (c *Client) read(conn net.Conn) error {
+	var (
+		buf json.RawMessage
+		dec = json.NewDecoder(conn)
+	)
+	readMessage := func() (rs []*jsonrpcMessage, err error) {
+		if err = dec.Decode(&buf); err != nil {
+			return nil, err
+		}
+		if isBatch(buf) {
+			err = json.Unmarshal(buf, &rs)
+		} else {
+			rs = make([]*jsonrpcMessage, 1)
+			err = json.Unmarshal(buf, &rs[0])
+		}
+		return rs, err
+	}
+
 	for {
-		resp, err := c.readMessage(&buf)
+		resp, err := readMessage()
 		if err != nil {
 			c.readErr <- err
 			return err
 		}
 		c.readResp <- resp
 	}
-}
-
-func (c *Client) readMessage(buf *json.RawMessage) (rs []*jsonrpcMessage, err error) {
-	if err = c.conn.Recv(buf); err != nil {
-		return nil, err
-	}
-	if isBatch(*buf) {
-		err = json.Unmarshal(*buf, &rs)
-	} else {
-		rs = make([]*jsonrpcMessage, 1)
-		err = json.Unmarshal(*buf, &rs[0])
-	}
-	return rs, err
 }
 
 // Subscriptions.

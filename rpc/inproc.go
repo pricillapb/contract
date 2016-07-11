@@ -16,41 +16,14 @@
 
 package rpc
 
-import (
-	"encoding/json"
-	"io"
-	"net"
-)
+import "net"
 
-// inProcClient is an in-process buffer stream attached to an RPC server.
-type inProcClient struct {
-	server *Server
-	cl     io.Closer
-	enc    *json.Encoder
-	dec    *json.Decoder
-}
-
-// Close tears down the request channel of the in-proc client.
-func (c *inProcClient) Close() {
-	c.cl.Close()
-}
-
-// NewInProcClient creates an in-process buffer stream attachment to a given
-// RPC server.
+// NewInProcClient attaches an in-process connection to the given RPC server.
 func DialInProc(handler *Server) *Client {
-	p1, p2 := net.Pipe()
-	go handler.ServeCodec(NewJSONCodec(p1), OptionMethodInvocation|OptionSubscriptions)
-	return newClient(&inProcClient{handler, p2, json.NewEncoder(p2), json.NewDecoder(p2)})
-}
-
-// Send marshals a message into a json format and injects in into the client
-// request channel.
-func (c *inProcClient) Send(msg interface{}) error {
-	return c.enc.Encode(msg)
-}
-
-// Recv reads a message from the response channel and tries to parse it into the
-// given msg interface.
-func (c *inProcClient) Recv(msg interface{}) error {
-	return c.dec.Decode(msg)
+	c, _ := newClient(func() (net.Conn, error) {
+		p1, p2 := net.Pipe()
+		go handler.ServeCodec(NewJSONCodec(p1), OptionMethodInvocation|OptionSubscriptions)
+		return p2, nil
+	})
+	return c
 }

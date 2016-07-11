@@ -16,65 +16,18 @@
 
 package rpc
 
-import (
-	"encoding/json"
-	"net"
-)
+import "net"
 
 // CreateIPCListener creates an listener, on Unix platforms this is a unix socket, on Windows this is a named pipe
 func CreateIPCListener(endpoint string) (net.Listener, error) {
 	return ipcListen(endpoint)
 }
 
-// ipcClient represent an IPC RPC client. It will connect to a given endpoint and tries to communicate with a node using
-// JSON serialization.
-type ipcClient struct {
-	endpoint string
-	conn     net.Conn
-	out      *json.Encoder
-	in       *json.Decoder
-}
-
 // DialIPC create a new IPC client that will connect on the given endpoint. Messages are JSON encoded and encoded.
 // On Unix it assumes the endpoint is the full path to a unix socket, and Windows the endpoint is an identifier for a
 // named pipe.
 func DialIPC(endpoint string) (*Client, error) {
-	conn, err := newIPCConnection(endpoint)
-	if err != nil {
-		return nil, err
-	}
-	codec := &ipcClient{endpoint: endpoint, conn: conn, in: json.NewDecoder(conn), out: json.NewEncoder(conn)}
-	return newClient(codec), nil
-}
-
-// Send will serialize the given message and send it to the server.
-// When sending the message fails it will try to reconnect once and send the message again.
-func (client *ipcClient) Send(msg interface{}) error {
-	if err := client.out.Encode(msg); err == nil {
-		return nil
-	}
-
-	// retry once
-	client.conn.Close()
-
-	conn, err := newIPCConnection(client.endpoint)
-	if err != nil {
-		return err
-	}
-
-	client.conn = conn
-	client.in = json.NewDecoder(conn)
-	client.out = json.NewEncoder(conn)
-
-	return client.out.Encode(msg)
-}
-
-// Recv will read a message from the connection and tries to parse it. It assumes the received message is JSON encoded.
-func (client *ipcClient) Recv(msg interface{}) error {
-	return client.in.Decode(&msg)
-}
-
-// Close will close the underlying IPC connection
-func (client *ipcClient) Close() {
-	client.conn.Close()
+	return newClient(func() (net.Conn, error) {
+		return newIPCConnection(endpoint)
+	})
 }

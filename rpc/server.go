@@ -242,13 +242,11 @@ func (s *Server) ServeSingleRequest(codec ServerCodec, options CodecOption) {
 func (s *Server) Stop() {
 	if atomic.CompareAndSwapInt32(&s.run, 1, 0) {
 		glog.V(logger.Debug).Infoln("RPC Server shutdown initiatied")
-		time.AfterFunc(stopPendingRequestTimeout, func() {
-			s.codecsMu.Lock()
-			defer s.codecsMu.Unlock()
-			s.codecs.Each(func(c interface{}) bool {
-				c.(ServerCodec).Close()
-				return true
-			})
+		s.codecsMu.Lock()
+		defer s.codecsMu.Unlock()
+		s.codecs.Each(func(c interface{}) bool {
+			c.(ServerCodec).Close()
+			return true
 		})
 	}
 }

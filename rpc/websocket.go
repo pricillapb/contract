@@ -18,10 +18,10 @@ package rpc
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 
 	"github.com/ethereum/go-ethereum/logger"
 	"github.com/ethereum/go-ethereum/logger/glog"
@@ -73,85 +73,37 @@ func NewWSServer(allowedOrigins string, handler *Server) *http.Server {
 		Handler: websocket.Server{
 			Handshake: wsHandshakeValidator(strings.Split(allowedOrigins, ",")),
 			Handler: func(conn *websocket.Conn) {
-				handler.ServeCodec(NewJSONCodec(conn),
-					OptionMethodInvocation|OptionSubscriptions)
+				handler.ServeCodec(NewJSONCodec(conn), OptionMethodInvocation|OptionSubscriptions)
 			},
 		},
 	}
 }
 
-// wsClient represents a RPC client that communicates over websockets with a
-// RPC server.
-type wsClient struct {
-	endpoint string
-	connMu   sync.Mutex
-	conn     *websocket.Conn
+func ListenWS(s *Server, addr, allowedOrigins string) (net.Listener, error) {
+	hs := NewWSServer(allowedOrigins, s)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	go hs.Serve(listener)
+	return listener, nil
 }
 
 // DialWS creates a new RPC client that communicates with a JSON-RPC server
 // that is listening on the given endpoint.
-func DialWS(endpoint string) (*Client, error) {
-	return newClient(&wsClient{endpoint: endpoint}), nil
-}
-
-// connection will return a websocket connection to the RPC server. It will
-// (re)connect when necessary.
-func (client *wsClient) connection() (*websocket.Conn, error) {
-	if client.conn != nil {
-		return client.conn, nil
-	}
-
-	origin, err := os.Hostname()
-	if err != nil {
-		return nil, err
-	}
-
-	origin = "http://" + origin
-	client.conn, err = websocket.Dial(client.endpoint, "", origin)
-
-	return client.conn, err
-}
-
-// Send writes the JSON serialized msg to the websocket. It will create a new
-// websocket connection to the server if the client is currently not connected.
-func (client *wsClient) Send(msg interface{}) (err error) {
-	client.connMu.Lock()
-	defer client.connMu.Unlock()
-
-	var conn *websocket.Conn
-	if conn, err = client.connection(); err == nil {
-		if err = websocket.JSON.Send(conn, msg); err != nil {
-			client.conn.Close()
-			client.conn = nil
+func DialWS(endpoint, origin string) (*Client, error) {
+	return newClient(func() (net.Conn, error) {
+		if origin == "" {
+			var err error
+			if origin, err = os.Hostname(); err != nil {
+				return nil, err
+			}
+			if strings.HasPrefix(endpoint, "wss") {
+				origin = "https://" + origin
+			} else {
+				origin = "http://" + origin
+			}
 		}
-	}
-
-	return err
-}
-
-// Recv reads a JSON message from the websocket and unmarshals it into msg.
-func (client *wsClient) Recv(msg interface{}) (err error) {
-	client.connMu.Lock()
-	defer client.connMu.Unlock()
-
-	var conn *websocket.Conn
-	if conn, err = client.connection(); err == nil {
-		if err = websocket.JSON.Receive(conn, msg); err != nil {
-			client.conn.Close()
-			client.conn = nil
-		}
-	}
-	return
-}
-
-// Close closes the underlaying websocket connection.
-func (client *wsClient) Close() {
-	client.connMu.Lock()
-	defer client.connMu.Unlock()
-
-	if client.conn != nil {
-		client.conn.Close()
-		client.conn = nil
-	}
-
+		return websocket.Dial(endpoint, "", origin)
+	})
 }

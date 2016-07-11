@@ -46,7 +46,6 @@ func ExampleClientSubscription() {
 	tracker := &BlockNumberTracker{subch: make(chan Block)}
 	client, _ := rpc.Dial("ws://127.0.0.1:8485")
 
-	// The outer loop manages the client connection.
 	for {
 		subch := make(chan Block)
 		sub, err := client.EthSubscribe(subch, "blocks")

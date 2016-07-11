@@ -19,6 +19,7 @@ package rpc
 import (
 	"encoding/json"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,16 +27,23 @@ import (
 )
 
 type NotificationTestService struct {
+	mu           sync.Mutex
+	unsubscribed bool
+
 	gotHangSubscriptionReq  chan struct{}
 	unblockHangSubscription chan struct{}
 }
 
-var (
-	unsubCallbackCalled = false
-)
+func (s *NotificationTestService) wasUnsubCallbackCalled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.unsubscribed
+}
 
 func (s *NotificationTestService) Unsubscribe(subid string) {
-	unsubCallbackCalled = true
+	s.mu.Lock()
+	s.unsubscribed = true
+	s.mu.Unlock()
 }
 
 func (s *NotificationTestService) SomeSubscription(ctx context.Context, n, val int) (Subscription, error) {
@@ -70,7 +78,7 @@ func (s *NotificationTestService) HangSubscription(ctx context.Context, val int)
 	if !supported {
 		return nil, ErrNotificationsUnsupported
 	}
-	close(s.gotHangSubscriptionReq)
+	s.gotHangSubscriptionReq <- struct{}{}
 	<-s.unblockHangSubscription
 	subscription, err := notifier.NewSubscription(s.Unsubscribe)
 	if err != nil {
@@ -136,7 +144,7 @@ func TestNotifications(t *testing.T) {
 	clientConn.Close() // causes notification unsubscribe callback to be called
 	time.Sleep(1 * time.Second)
 
-	if !unsubCallbackCalled {
+	if !service.wasUnsubCallbackCalled() {
 		t.Error("unsubscribe callback not called after closing connection")
 	}
 }

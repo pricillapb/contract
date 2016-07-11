@@ -18,13 +18,16 @@ package rpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rs/cors"
 )
@@ -33,36 +36,47 @@ const (
 	maxHTTPRequestContentLength = 1024 * 128
 )
 
-type httpClient struct {
+var nullAddr, _ = net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+
+type httpConn struct {
 	http.Client
 	endpoint  string
 	closeOnce sync.Once
 	closed    chan struct{}
 }
 
-// httpClient implements clientCodec, but is treated specially by Client.
-func (*httpClient) Send(msg interface{}) error { panic("Send called") }
+// httpConn is treated specially by Client.
+func (hc *httpConn) LocalAddr() net.Addr              { return nullAddr }
+func (hc *httpConn) RemoteAddr() net.Addr             { return nullAddr }
+func (hc *httpConn) SetReadDeadline(time.Time) error  { return nil }
+func (hc *httpConn) SetWriteDeadline(time.Time) error { return nil }
+func (hc *httpConn) SetDeadline(time.Time) error      { return nil }
+func (hc *httpConn) Write([]byte) (int, error)        { panic("Write called") }
 
-func (hc *httpClient) Recv(msg interface{}) error {
+func (hc *httpConn) Read(b []byte) (int, error) {
 	<-hc.closed
-	return nil
+	return 0, io.EOF
 }
 
-func (hc *httpClient) Close() {
+func (hc *httpConn) Close() error {
 	hc.closeOnce.Do(func() { close(hc.closed) })
+	return nil
 }
 
 // DialHTTP creates  a new RPC clients that connection to an RPC server over HTTP.
 func DialHTTP(endpoint string) (*Client, error) {
-	if _, err := url.Parse(endpoint); err != nil {
-		return nil, err
-	}
-	hc := &httpClient{endpoint: endpoint, closed: make(chan struct{})}
-	return newClient(hc), nil
+	return newClient(func() (net.Conn, error) {
+		if _, err := url.Parse(endpoint); err != nil {
+			return nil, err
+		}
+		return &httpConn{endpoint: endpoint, closed: make(chan struct{})}, nil
+	})
 }
 
-func (c *Client) sendHTTP(op *requestOp, msg interface{}) error {
-	hc := c.conn.(*httpClient)
+func (c *Client) sendHTTP(ctx context.Context, op *requestOp, msg interface{}) error {
+	// TODO: use context
+
+	hc := c.writeConn.(*httpConn)
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -80,8 +94,10 @@ func (c *Client) sendHTTP(op *requestOp, msg interface{}) error {
 	return nil
 }
 
-func (c *Client) sendBatchHTTP(op *requestOp, msgs []*jsonrpcMessage) error {
-	hc := c.conn.(*httpClient)
+func (c *Client) sendBatchHTTP(ctx context.Context, op *requestOp, msgs []*jsonrpcMessage) error {
+	// TODO: use context
+
+	hc := c.writeConn.(*httpConn)
 	body, err := json.Marshal(msgs)
 	if err != nil {
 		return err

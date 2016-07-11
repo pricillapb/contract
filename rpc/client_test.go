@@ -17,12 +17,15 @@
 package rpc
 
 import (
+	"context"
 	"net"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum/logger/glog"
 )
 
 func newTestClient(t *testing.T, serviceName string, service interface{}) (*Server, *Client) {
@@ -104,11 +107,15 @@ func TestClientSubscribeInvalidArg(t *testing.T) {
 			}
 			if !shouldPanic && err != nil {
 				t.Errorf("EthSubscribe shouldn't have panicked for %#v", arg)
-				t.Error("message was: ", err)
+				buf := make([]byte, 1024*1024)
+				buf = buf[:runtime.Stack(buf, false)]
+				t.Error(err)
+				t.Error(string(buf))
 			}
 		}()
-		client, _ := DialWS("http://localhost:9999")
-		client.Close()
+		server, client := newTestClient(t, "service", new(Service))
+		defer server.Stop()
+		defer client.Close()
 		client.EthSubscribe(arg, "foo_bar")
 	}
 	check(true, nil)
@@ -161,6 +168,9 @@ func TestClientSubscribeClose(t *testing.T) {
 	defer server.Stop()
 	defer client.Close()
 
+	glog.SetV(6)
+	glog.SetToStderr(true)
+
 	var (
 		nc   = make(chan int)
 		errc = make(chan error)
@@ -174,7 +184,7 @@ func TestClientSubscribeClose(t *testing.T) {
 
 	<-service.gotHangSubscriptionReq
 	client.Close()
-	close(service.unblockHangSubscription)
+	service.unblockHangSubscription <- struct{}{}
 
 	select {
 	case err := <-errc:
@@ -237,5 +247,52 @@ func TestClientHTTP(t *testing.T) {
 		if !reflect.DeepEqual(results[i], wantResult) {
 			t.Errorf("result %d mismatch: got %#v, want %#v", results[i], wantResult)
 		}
+	}
+}
+
+func TestClientReconnect(t *testing.T) {
+	startServer := func(addr string) (*Server, net.Listener) {
+		server := NewServer()
+		server.RegisterName("service", new(Service))
+		l, err := ListenWS(server, addr, "*")
+		if err != nil {
+			t.Fatal("can't serve", err)
+		}
+		return server, l
+	}
+
+	// Start a server and corresponding client.
+	s1, l1 := startServer("127.0.0.1:0")
+	client, err := Dial("ws://" + l1.Addr().String())
+	if err != nil {
+		t.Fatal("can't dial", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Perform a call. This should work because the server is up.
+	var resp Result
+	if err := client.CallContext(ctx, &resp, "service_echo", "", 1, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Shut down the server and try calling again. It shouldn't work.
+	l1.Close()
+	s1.Stop()
+	if err := client.CallContext(ctx, &resp, "service_echo", "", 2, nil); err == nil {
+		t.Error("successful call while the server is down")
+		t.Logf("resp: %#v", resp)
+	}
+
+	// Allow for some cool down time so we can listen on the same address again.
+	time.Sleep(2 * time.Second)
+
+	// Start it up again and call one more time. The connection should be reestablished.
+	s2, l2 := startServer(l1.Addr().String())
+	defer l2.Close()
+	defer s2.Stop()
+
+	if err := client.CallContext(ctx, &resp, "service_echo", "", 3, nil); err != nil {
+		t.Fatal("call with reconnect failed:", err)
 	}
 }
