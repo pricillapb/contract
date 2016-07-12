@@ -121,7 +121,7 @@ func TestNotifications(t *testing.T) {
 	}
 
 	var subid string
-	response := JSONSuccessResponse{Result: subid}
+	response := jsonSuccessResponse{Result: subid}
 	if err := in.Decode(&response); err != nil {
 		t.Fatal(err)
 	}
