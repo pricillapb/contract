@@ -22,7 +22,8 @@ import (
 	"net"
 	"time"
 
-	winio "github.com/microsoft/go-winio"
+	"github.com/microsoft/go-winio"
+	"golang.org/x/net/context"
 )
 
 // ipcListen will create a named pipe on the given endpoint.
@@ -31,7 +32,13 @@ func ipcListen(endpoint string) (net.Listener, error) {
 }
 
 // newIPCConnection will connect to a named pipe with the given endpoint as name.
-func newIPCConnection(endpoint string) (net.Conn, error) {
-	timeout := 5 * time.Second
+func newIPCConnection(ctx context.Context, endpoint string) (net.Conn, error) {
+	timeout := initialDialTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = deadline.Sub(time.Now())
+		if timeout < 0 {
+			timeout = 0
+		}
+	}
 	return winio.DialPipe(endpoint, &timeout)
 }

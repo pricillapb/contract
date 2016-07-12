@@ -1,4 +1,4 @@
-// Copyright 2015 The go-ethereum Authors
+// Copyright 2016 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -14,34 +14,23 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-// +build darwin dragonfly freebsd linux nacl netbsd openbsd solaris
+// +build go1.7
 
 package rpc
 
 import (
+	"context"
 	"net"
-	"os"
-	"path/filepath"
-
-	"golang.org/x/net/context"
+	"net/http"
 )
 
-// ipcListen will create a Unix socket on the given endpoint.
-func ipcListen(endpoint string) (net.Listener, error) {
-	// Ensure the IPC path exists and remove any previous leftover
-	if err := os.MkdirAll(filepath.Dir(endpoint), 0751); err != nil {
-		return nil, err
-	}
-	os.Remove(endpoint)
-	l, err := net.Listen("unix", endpoint)
-	if err != nil {
-		return nil, err
-	}
-	os.Chmod(endpoint, 0600)
-	return l, nil
+// dialContext connects to the given address, aborting the dial if ctx is canceled.
+func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := &net.Dialer{KeepAlive: tcpKeepAliveInterval}
+	return d.DialContext(ctx, network, addr)
 }
 
-// newIPCConnection will connect to a Unix socket on the given endpoint.
-func newIPCConnection(ctx context.Context, endpoint string) (net.Conn, error) {
-	return dialContext(ctx, "unix", endpoint)
+// requestWithContext copies req and adds the cancelation channel from the context.
+func requestWithContext(req *http.Request, ctx context.Context) *http.Request {
+	return req.WithContext(ctx)
 }

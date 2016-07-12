@@ -1,4 +1,4 @@
-// Copyright 2015 The go-ethereum Authors
+// Copyright 2016 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -14,27 +14,25 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
+// +build !go1.7
+
 package rpc
 
 import (
 	"net"
+	"net/http"
 
 	"golang.org/x/net/context"
 )
 
-// CreateIPCListener creates an listener, on Unix platforms this is a unix socket, on Windows this is a named pipe
-func CreateIPCListener(endpoint string) (net.Listener, error) {
-	return ipcListen(endpoint)
+// dialContext connects to the given address, aborting the dial if ctx is canceled.
+func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	return contextDialer(ctx).Dial(network, addr)
 }
 
-// DialIPC create a new IPC client that connects to the given endpoint. On Unix it assumes
-// the endpoint is the full path to a unix socket, and Windows the endpoint is an
-// identifier for a named pipe.
-//
-// The context is used for the initial connection establishment. It does not
-// affect subsequent interactions with the client.
-func DialIPC(ctx context.Context, endpoint string) (*Client, error) {
-	return newClient(ctx, func(ctx context.Context) (net.Conn, error) {
-		return newIPCConnection(ctx, endpoint)
-	})
+// requestWithContext copies req and adds the cancelation channel from the context.
+func requestWithContext(req *http.Request, ctx context.Context) *http.Request {
+	req2 := *req
+	req2.Cancel = ctx.Done()
+	return req2
 }

@@ -22,71 +22,108 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
-	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/rs/cors"
+	"golang.org/x/net/context"
 )
 
 const (
 	maxHTTPRequestContentLength = 1024 * 128
 )
 
-// httpClient connects to a geth RPC server over HTTP.
-type httpClient struct {
-	endpoint   *url.URL    // HTTP-RPC server endpoint
-	httpClient http.Client // reuse connection
-	lastRes    []byte      // HTTP requests are synchronous, store last response
+var nullAddr, _ = net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+
+type httpConn struct {
+	http.Client
+	req       *http.Request
+	closeOnce sync.Once
+	closed    chan struct{}
 }
 
-// NewHTTPClient create a new RPC clients that connection to a geth RPC server
-// over HTTP.
-func NewHTTPClient(endpoint string) (Client, error) {
-	url, err := url.Parse(endpoint)
+// httpConn is treated specially by Client.
+func (hc *httpConn) LocalAddr() net.Addr              { return nullAddr }
+func (hc *httpConn) RemoteAddr() net.Addr             { return nullAddr }
+func (hc *httpConn) SetReadDeadline(time.Time) error  { return nil }
+func (hc *httpConn) SetWriteDeadline(time.Time) error { return nil }
+func (hc *httpConn) SetDeadline(time.Time) error      { return nil }
+func (hc *httpConn) Write([]byte) (int, error)        { panic("Write called") }
+
+func (hc *httpConn) Read(b []byte) (int, error) {
+	<-hc.closed
+	return 0, io.EOF
+}
+
+func (hc *httpConn) Close() error {
+	hc.closeOnce.Do(func() { close(hc.closed) })
+	return nil
+}
+
+// DialHTTP creates a new RPC clients that connection to an RPC server over HTTP.
+func DialHTTP(endpoint string) (*Client, error) {
+	req, err := http.NewRequest("POST", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	return &httpClient{endpoint: url}, nil
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	initctx := context.Background()
+	return newClient(initctx, func(context.Context) (net.Conn, error) {
+		return &httpConn{req: req, closed: make(chan struct{})}, nil
+	})
 }
 
-// Send will serialize the given msg to JSON and sends it to the RPC server.
-// Since HTTP is synchronous the response is stored until Recv is called.
-func (client *httpClient) Send(msg interface{}) error {
-	var body []byte
-	var err error
-
-	client.lastRes = nil
-	if body, err = json.Marshal(msg); err != nil {
-		return err
-	}
-
-	resp, err := client.httpClient.Post(client.endpoint.String(), "application/json", bytes.NewReader(body))
+func (c *Client) sendHTTP(ctx context.Context, op *requestOp, msg interface{}) error {
+	hc := c.writeConn.(*httpConn)
+	respBody, err := hc.doRequest(ctx, msg)
 	if err != nil {
 		return err
 	}
-
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		client.lastRes, err = ioutil.ReadAll(resp.Body)
+	defer respBody.Close()
+	var respmsg jsonrpcMessage
+	if err := json.NewDecoder(respBody).Decode(&respmsg); err != nil {
 		return err
 	}
-
-	return fmt.Errorf("request failed: %s", resp.Status)
+	op.resp <- &respmsg
+	return nil
 }
 
-// Recv will try to deserialize the last received response into the given msg.
-func (client *httpClient) Recv(msg interface{}) error {
-	return json.Unmarshal(client.lastRes, &msg)
+func (c *Client) sendBatchHTTP(ctx context.Context, op *requestOp, msgs []*jsonrpcMessage) error {
+	hc := c.writeConn.(*httpConn)
+	respBody, err := hc.doRequest(ctx, msgs)
+	if err != nil {
+		return err
+	}
+	defer respBody.Close()
+	var respmsgs []jsonrpcMessage
+	if err := json.NewDecoder(respBody).Decode(&respmsgs); err != nil {
+		return err
+	}
+	for _, respmsg := range respmsgs {
+		op.resp <- &respmsg
+	}
+	return nil
 }
 
-// Close is not necessary for httpClient
-func (client *httpClient) Close() {
-}
+func (hc *httpConn) doRequest(ctx context.Context, msg interface{}) (io.ReadCloser, error) {
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	req := requestWithContext(hc.req, ctx)
+	req.Body = ioutil.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
 
-// SupportedModules will return the collection of offered RPC modules.
-func (client *httpClient) SupportedModules() (map[string]string, error) {
-	return SupportedModules(client)
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
 }
 
 // httpReadWriteNopCloser wraps a io.Reader and io.Writer with a NOP Close method.
