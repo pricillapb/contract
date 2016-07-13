@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-// +build !go1.6
+// +build go1.5,!go1.6
 
 package rpc
 
@@ -26,8 +26,8 @@ import (
 	"golang.org/x/net/context"
 )
 
-// In older versions of Go (below 1.6), dials cannot be canceled
-// via a channel or context. The context deadline can still applied.
+// In Go 1.5, dials cannot be canceled via a channel or context. The context deadline can
+// still be applied. Go 1.5 adds the ability to cancel HTTP requests via a channel.
 
 // contextDialer returns a dialer that applies the deadline value from the given context.
 func contextDialer(ctx context.Context) *net.Dialer {
@@ -45,10 +45,17 @@ func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	return contextDialer(ctx).Dial(network, addr)
 }
 
-// requestWithContext copies req, adding the cancelation channel and deadline from
-// the context.
-func requestWithContext(req *http.Request, ctx context.Context) *http.Request {
+// requestWithContext copies req, adding the cancelation channel and deadline from ctx.
+func requestWithContext(c *http.Client, req *http.Request, ctx context.Context) (*http.Client, *http.Request) {
+	// Set Timeout on the client if the context has a deadline.
+	// Note that there is no default timeout (unlike in contextDialer) because
+	// the timeout applies to the entire request, including reads from body.
+	if deadline, ok := ctx.Deadline(); ok {
+		c2 := *c
+		c2.Timeout = deadline.Sub(time.Now())
+		c = &c2
+	}
 	req2 := *req
 	req2.Cancel = ctx.Done()
-	return &req2
+	return c, &req2
 }

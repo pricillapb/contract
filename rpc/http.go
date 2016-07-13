@@ -39,7 +39,7 @@ const (
 var nullAddr, _ = net.ResolveTCPAddr("tcp", "127.0.0.1:0")
 
 type httpConn struct {
-	http.Client
+	client    *http.Client
 	req       *http.Request
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -74,7 +74,7 @@ func DialHTTP(endpoint string) (*Client, error) {
 
 	initctx := context.Background()
 	return newClient(initctx, func(context.Context) (net.Conn, error) {
-		return &httpConn{req: req, closed: make(chan struct{})}, nil
+		return &httpConn{client: new(http.Client), req: req, closed: make(chan struct{})}, nil
 	})
 }
 
@@ -115,11 +115,11 @@ func (hc *httpConn) doRequest(ctx context.Context, msg interface{}) (io.ReadClos
 	if err != nil {
 		return nil, err
 	}
-	req := requestWithContext(hc.req, ctx)
+	client, req := requestWithContext(hc.client, hc.req, ctx)
 	req.Body = ioutil.NopCloser(bytes.NewReader(body))
 	req.ContentLength = int64(len(body))
 
-	resp, err := hc.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -44,10 +44,12 @@ func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	return contextDialer(ctx).Dial(network, addr)
 }
 
-// requestWithContext copies req, adding the cancelation channel and deadline from
-// the context.
-func requestWithContext(req *http.Request, ctx context.Context) *http.Request {
+// requestWithContext copies req, adding the cancelation channel and deadline from ctx.
+func requestWithContext(c *http.Client, req *http.Request, ctx context.Context) (*http.Client, *http.Request) {
+	// We set Timeout on the client for Go <= 1.5. There
+	// is no need to do that here because the dial will be canceled
+	// by package http.
 	req2 := *req
 	req2.Cancel = ctx.Done()
-	return &req2
+	return c, &req2
 }
