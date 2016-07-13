@@ -92,9 +92,13 @@ func (msg *jsonrpcMessage) String() string {
 // Client represents a connection to an RPC server.
 type Client struct {
 	idCounter   uint32
-	writeConn   net.Conn
 	connectFunc func(ctx context.Context) (net.Conn, error)
 	isHTTP      bool
+
+	// writeConn is only safe to access outside dispatch, with the
+	// write lock held. The write lock is taken by sending on
+	// requestOp and released by sending on sendDone.
+	writeConn net.Conn
 
 	// for dispatch
 	close       chan struct{}
