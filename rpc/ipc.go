@@ -22,9 +22,21 @@ import (
 	"golang.org/x/net/context"
 )
 
-// CreateIPCListener creates an listener, on Unix platforms this is a unix socket, on Windows this is a named pipe
+// CreateIPCListener creates an listener, on Unix platforms this is a unix socket, on
+// Windows this is a named pipe
 func CreateIPCListener(endpoint string) (net.Listener, error) {
 	return ipcListen(endpoint)
+}
+
+// ServeListener accepts connections on l, serving JSON-RPC on them.
+func (srv *Server) ServeListener(l net.Listener) error {
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			return err
+		}
+		go srv.ServeCodec(NewJSONCodec(conn), OptionMethodInvocation|OptionSubscriptions)
+	}
 }
 
 // DialIPC create a new IPC client that connects to the given endpoint. On Unix it assumes

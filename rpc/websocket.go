@@ -32,6 +32,26 @@ import (
 	"gopkg.in/fatih/set.v0"
 )
 
+// WebsocketHandler returns a handler that serves JSON-RPC to WebSocket connections.
+//
+// allowedOrigins should be a comma-separated list of allowed origin URLs.
+// To allow connections with any origin, pass "*".
+func (srv *Server) WebsocketHandler(allowedOrigins string) http.Handler {
+	return websocket.Server{
+		Handshake: wsHandshakeValidator(strings.Split(allowedOrigins, ",")),
+		Handler: func(conn *websocket.Conn) {
+			srv.ServeCodec(NewJSONCodec(conn), OptionMethodInvocation|OptionSubscriptions)
+		},
+	}
+}
+
+// NewWSServer creates a new websocket RPC server around an API provider.
+//
+// Deprecated: use Server.WebsocketHandler
+func NewWSServer(allowedOrigins string, srv *Server) *http.Server {
+	return &http.Server{Handler: srv.WebsocketHandler(allowedOrigins)}
+}
+
 // wsHandshakeValidator returns a handler that verifies the origin during the
 // websocket upgrade process. When a '*' is specified as an allowed origins all
 // connections are accepted.
@@ -68,28 +88,6 @@ func wsHandshakeValidator(allowedOrigins []string) func(*websocket.Config, *http
 	}
 
 	return f
-}
-
-// NewWSServer creates a new websocket RPC server around an API provider.
-func NewWSServer(allowedOrigins string, handler *Server) *http.Server {
-	return &http.Server{
-		Handler: websocket.Server{
-			Handshake: wsHandshakeValidator(strings.Split(allowedOrigins, ",")),
-			Handler: func(conn *websocket.Conn) {
-				handler.ServeCodec(NewJSONCodec(conn), OptionMethodInvocation|OptionSubscriptions)
-			},
-		},
-	}
-}
-
-func ListenWS(s *Server, addr, allowedOrigins string) (net.Listener, error) {
-	hs := NewWSServer(allowedOrigins, s)
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-	go hs.Serve(listener)
-	return listener, nil
 }
 
 // DialWebsocket creates a new RPC client that communicates with a JSON-RPC server

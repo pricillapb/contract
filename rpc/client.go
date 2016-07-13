@@ -94,6 +94,7 @@ type Client struct {
 	idCounter   uint32
 	writeConn   net.Conn
 	connectFunc func(ctx context.Context) (net.Conn, error)
+	isHTTP      bool
 
 	// for dispatch
 	close       chan struct{}
@@ -165,9 +166,11 @@ func newClient(initctx context.Context, connectFunc func(context.Context) (net.C
 	if err != nil {
 		return nil, err
 	}
+	_, isHTTP := conn.(*httpConn)
 
 	c := &Client{
 		writeConn:   conn,
+		isHTTP:      isHTTP,
 		connectFunc: connectFunc,
 		close:       make(chan struct{}),
 		didQuit:     make(chan struct{}),
@@ -224,7 +227,7 @@ func (c *Client) CallContext(ctx context.Context, result interface{}, method str
 	}
 	op := &requestOp{ids: []json.RawMessage{msg.ID}, resp: make(chan *jsonrpcMessage, 1)}
 
-	if _, ok := c.writeConn.(*httpConn); ok {
+	if c.isHTTP {
 		err = c.sendHTTP(ctx, op, msg)
 	} else {
 		err = c.send(ctx, op, msg)
@@ -280,7 +283,7 @@ func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 	}
 
 	var err error
-	if _, ok := c.writeConn.(*httpConn); ok {
+	if c.isHTTP {
 		err = c.sendBatchHTTP(ctx, op, msgs)
 	} else {
 		err = c.send(ctx, op, msgs)
@@ -320,7 +323,7 @@ func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 // subscription. Server notifications for the subscription are sent to the given channel.
 // The element type of the channel must match the expected type of content returned by the
 // subscription.
-
+//
 // Callers should not use the same channel for multiple calls to EthSubscribe. The channel
 // is closed when the notification is unsubscribed or an error occurs. The error can be
 // retrieved via the Err method of the subscription.
@@ -335,8 +338,7 @@ func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*Client
 	if chanVal.IsNil() {
 		panic("channel given to EthSubscribe must not be nil")
 	}
-	// HTTP and notifications don't mix.
-	if _, ok := c.writeConn.(*httpConn); ok {
+	if c.isHTTP {
 		return nil, ErrNotificationsUnsupported
 	}
 
@@ -484,15 +486,16 @@ func (c *Client) dispatch(conn net.Conn) {
 			conn.Close()
 			reading = false
 
-		case conn = <-c.reconnected:
+		case newconn := <-c.reconnected:
 			glog.V(logger.Debug).Infof("<-reconnected: (reading=%t) %v", reading, conn.RemoteAddr())
 			if reading {
 				// Wait for the previous read loop to exit. This is a rare case.
 				conn.Close()
 				<-c.readErr
 			}
-			go c.read(conn)
+			go c.read(newconn)
 			reading = true
+			conn = newconn
 
 		// Send path.
 		case op := <-requestOpLock:
@@ -643,11 +646,9 @@ func newClientSubscription(c *Client, channel reflect.Value) *ClientSubscription
 		client:  c,
 		etype:   channel.Type().Elem(),
 		channel: channel,
+		quit:    make(chan error),
 		// in is buffered so dispatch can continue even if the subscriber is slow.
 		in: make(chan json.RawMessage, clientSubscriptionBuffer),
-		// quit is buffered so dispatch can progress immediately while setting up the
-		// subscription in handleResponse.
-		quit: make(chan error),
 	}
 	return sub
 }
@@ -671,6 +672,7 @@ func (sub *ClientSubscription) Unsubscribe() {
 
 func (sub *ClientSubscription) quitWithError(err error, unsubscribeServer bool) {
 	sub.mu.Lock()
+	defer sub.mu.Unlock()
 	// Keep the original error around.
 	if sub.err == nil {
 		sub.err = err
@@ -683,7 +685,6 @@ func (sub *ClientSubscription) quitWithError(err error, unsubscribeServer bool) 
 		sub.channel.Close()
 		sub.unsubscribed = true
 	}
-	sub.mu.Unlock()
 }
 
 func (sub *ClientSubscription) deliver(result json.RawMessage) (ok bool) {

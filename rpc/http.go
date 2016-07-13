@@ -137,43 +137,39 @@ func (t *httpReadWriteNopCloser) Close() error {
 	return nil
 }
 
-// newJSONHTTPHandler creates a HTTP handler that will parse incoming JSON requests,
-// send the request to the given API provider and sends the response back to the caller.
-func newJSONHTTPHandler(srv *Server) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.ContentLength > maxHTTPRequestContentLength {
-			http.Error(w,
-				fmt.Sprintf("content length too large (%d>%d)", r.ContentLength, maxHTTPRequestContentLength),
-				http.StatusRequestEntityTooLarge)
-			return
-		}
-
-		w.Header().Set("content-type", "application/json")
-
-		// create a codec that reads direct from the request body until
-		// EOF and writes the response to w and order the server to process
-		// a single request.
-		codec := NewJSONCodec(&httpReadWriteNopCloser{r.Body, w})
-		defer codec.Close()
-		srv.ServeSingleRequest(codec, OptionMethodInvocation)
-	}
+// NewHTTPServer creates a new HTTP RPC server around an API provider.
+//
+// Deprecated: Server implements http.Handler
+func NewHTTPServer(corsString string, srv *Server) *http.Server {
+	return &http.Server{Handler: newCorsHandler(srv, corsString)}
 }
 
-// NewHTTPServer creates a new HTTP RPC server around an API provider.
-func NewHTTPServer(corsString string, srv *Server) *http.Server {
+// ServeHTTP serves JSON-RPC requests over HTTP.
+func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength > maxHTTPRequestContentLength {
+		http.Error(w,
+			fmt.Sprintf("content length too large (%d>%d)", r.ContentLength, maxHTTPRequestContentLength),
+			http.StatusRequestEntityTooLarge)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
+
+	// create a codec that reads direct from the request body until
+	// EOF and writes the response to w and order the server to process
+	// a single request.
+	codec := NewJSONCodec(&httpReadWriteNopCloser{r.Body, w})
+	defer codec.Close()
+	srv.ServeSingleRequest(codec, OptionMethodInvocation)
+}
+
+func newCorsHandler(srv *Server, corsString string) http.Handler {
 	var allowedOrigins []string
 	for _, domain := range strings.Split(corsString, ",") {
 		allowedOrigins = append(allowedOrigins, strings.TrimSpace(domain))
 	}
-
 	c := cors.New(cors.Options{
 		AllowedOrigins: allowedOrigins,
 		AllowedMethods: []string{"POST", "GET"},
 	})
-
-	handler := c.Handler(newJSONHTTPHandler(srv))
-
-	return &http.Server{
-		Handler: handler,
-	}
+	return c.Handler(srv)
 }

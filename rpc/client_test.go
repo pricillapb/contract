@@ -17,7 +17,12 @@
 package rpc
 
 import (
+	"fmt"
+	"math/rand"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"reflect"
 	"runtime"
 	"sync"
@@ -25,20 +30,15 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum/logger"
+	"github.com/ethereum/go-ethereum/logger/glog"
 	"golang.org/x/net/context"
 )
 
-func newTestClient(t *testing.T, serviceName string, service interface{}) (*Server, *Client) {
-	server := NewServer()
-	if err := server.RegisterName(serviceName, service); err != nil {
-		t.Fatal(err)
-	}
-	return server, DialInProc(server)
-}
-
 func TestClientRequest(t *testing.T) {
-	server, client := newTestClient(t, "service", new(Service))
+	server := newTestServer("service", new(Service))
 	defer server.Stop()
+	client := DialInProc(server)
 	defer client.Close()
 
 	var resp Result
@@ -51,8 +51,9 @@ func TestClientRequest(t *testing.T) {
 }
 
 func TestClientBatchRequest(t *testing.T) {
-	server, client := newTestClient(t, "service", new(Service))
+	server := newTestServer("service", new(Service))
 	defer server.Stop()
+	client := DialInProc(server)
 	defer client.Close()
 
 	batch := []BatchElem{
@@ -98,7 +99,107 @@ func TestClientBatchRequest(t *testing.T) {
 	}
 }
 
+// func TestClientCancelInproc(t *testing.T) { testClientCancel("inproc", t) }
+func TestClientCancelWebsocket(t *testing.T) { testClientCancel("ws", t) }
+func TestClientCancelHTTP(t *testing.T)      { testClientCancel("http", t) }
+func TestClientCancelIPC(t *testing.T)       { testClientCancel("ipc", t) }
+
+// This test checks that requests made through CallContext can be canceled by canceling
+// the context.
+func testClientCancel(transport string, t *testing.T) {
+	server := newTestServer("service", new(Service))
+	defer server.Stop()
+
+	// What we want to achieve is that the context gets canceled
+	// at various stages of request processing. The interesting cases
+	// are:
+	//  - cancel during dial
+	//  - cancel while performing a HTTP request
+	//  - cancel while waiting for a response
+	//
+	// To trigger those, the times are chosen such that connections
+	// are killed within the deadline for every other call (maxKillTimeout
+	// is 2x maxCancelTimeout).
+	//
+	// Once a connection is dead, there is a fair chance it won't connect
+	// successfully because the accept is delayed by 1s.
+	maxContextCancelTimeout := 300 * time.Millisecond
+	fl := &flakeyListener{
+		maxAcceptDelay: 1 * time.Second,
+		maxKillTimeout: 600 * time.Millisecond,
+	}
+
+	var client *Client
+	switch transport {
+	case "ws", "http":
+		c, hs := httpTestClient(server, transport, fl)
+		defer hs.Close()
+		client = c
+	case "ipc":
+		c, l := ipcTestClient(server, fl)
+		defer l.Close()
+		client = c
+	default:
+		panic("unknown transport: " + transport)
+	}
+
+	// These tests take a lot of time, run them all at once.
+	// You probably want to run with -parallel 1 or comment out
+	// the call to t.Parallel if you enable the logging.
+	t.Parallel()
+	// glog.SetV(6)
+	// glog.SetToStderr(true)
+	// defer glog.SetToStderr(false)
+
+	// The actual test starts here.
+	var (
+		wg       sync.WaitGroup
+		nreqs    = 10
+		ncallers = 6
+	)
+	caller := func(index int) {
+		defer wg.Done()
+		for i := 0; i < nreqs; i++ {
+			var (
+				ctx     context.Context
+				cancel  func()
+				timeout = time.Duration(rand.Int63n(int64(maxContextCancelTimeout)))
+			)
+			if index < ncallers/2 {
+				// For half of the callers, create a context without deadline
+				// and cancel it later.
+				ctx, cancel = context.WithCancel(context.Background())
+				time.AfterFunc(timeout, cancel)
+			} else {
+				// For the other half, create a context with a deadline instead. This is
+				// different because the context deadline is used to set the socket write
+				// deadline.
+				ctx, cancel = context.WithTimeout(context.Background(), timeout)
+			}
+			// Now perform a call with the context.
+			// The key thing here is that no call will ever complete successfully.
+			err := client.CallContext(ctx, nil, "service_sleep", 2*maxContextCancelTimeout)
+			if err != nil {
+				glog.V(logger.Debug).Infoln("got expected error:", err)
+			} else {
+				t.Errorf("no error for call with %v wait time", timeout)
+			}
+			cancel()
+		}
+	}
+	wg.Add(ncallers)
+	for i := 0; i < ncallers; i++ {
+		go caller(i)
+	}
+	wg.Wait()
+}
+
 func TestClientSubscribeInvalidArg(t *testing.T) {
+	server := newTestServer("service", new(Service))
+	defer server.Stop()
+	client := DialInProc(server)
+	defer client.Close()
+
 	check := func(shouldPanic bool, arg interface{}) {
 		defer func() {
 			err := recover()
@@ -113,9 +214,6 @@ func TestClientSubscribeInvalidArg(t *testing.T) {
 				t.Error(string(buf))
 			}
 		}()
-		server, client := newTestClient(t, "service", new(Service))
-		defer server.Stop()
-		defer client.Close()
 		client.EthSubscribe(arg, "foo_bar")
 	}
 	check(true, nil)
@@ -127,8 +225,9 @@ func TestClientSubscribeInvalidArg(t *testing.T) {
 }
 
 func TestClientSubscribe(t *testing.T) {
-	server, client := newTestClient(t, "eth", new(NotificationTestService))
+	server := newTestServer("eth", new(NotificationTestService))
 	defer server.Stop()
+	client := DialInProc(server)
 	defer client.Close()
 
 	nc := make(chan int)
@@ -164,8 +263,9 @@ func TestClientSubscribeClose(t *testing.T) {
 		gotHangSubscriptionReq:  make(chan struct{}),
 		unblockHangSubscription: make(chan struct{}),
 	}
-	server, client := newTestClient(t, "eth", service)
+	server := newTestServer("eth", service)
 	defer server.Stop()
+	client := DialInProc(server)
 	defer client.Close()
 
 	var (
@@ -197,19 +297,15 @@ func TestClientSubscribeClose(t *testing.T) {
 }
 
 func TestClientHTTP(t *testing.T) {
-	server := NewServer()
-	server.RegisterName("service", new(Service))
-	httpserver := NewHTTPServer("", server)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	go httpserver.Serve(listener)
+	server := newTestServer("service", new(Service))
+	defer server.Stop()
+
+	client, hs := httpTestClient(server, "http", nil)
+	defer hs.Close()
+	defer client.Close()
 
 	// Launch concurrent requests.
 	var (
-		client, _  = Dial("http://" + listener.Addr().String())
 		results    = make([]Result, 100)
 		errc       = make(chan error)
 		wantResult = Result{"a", 1, new(Args)}
@@ -247,13 +343,13 @@ func TestClientHTTP(t *testing.T) {
 
 func TestClientReconnect(t *testing.T) {
 	startServer := func(addr string) (*Server, net.Listener) {
-		server := NewServer()
-		server.RegisterName("service", new(Service))
-		l, err := ListenWS(server, addr, "*")
+		srv := newTestServer("service", new(Service))
+		l, err := net.Listen("tcp", addr)
 		if err != nil {
-			t.Fatal("can't serve", err)
+			t.Fatal(err)
 		}
-		return server, l
+		go http.Serve(l, srv.WebsocketHandler("*"))
+		return srv, l
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -304,4 +400,85 @@ func TestClientReconnect(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
+}
+
+func newTestServer(serviceName string, service interface{}) *Server {
+	server := NewServer()
+	if err := server.RegisterName(serviceName, service); err != nil {
+		panic(err)
+	}
+	return server
+}
+
+func httpTestClient(srv *Server, transport string, fl *flakeyListener) (*Client, *httptest.Server) {
+	// Create the HTTP server.
+	var hs *httptest.Server
+	switch transport {
+	case "ws":
+		hs = httptest.NewUnstartedServer(srv.WebsocketHandler("*"))
+	case "http":
+		hs = httptest.NewUnstartedServer(srv)
+	default:
+		panic("unknown HTTP transport: " + transport)
+	}
+	// Wrap the listener if required.
+	if fl != nil {
+		fl.Listener = hs.Listener
+		hs.Listener = fl
+	}
+	// Connect the client.
+	hs.Start()
+	client, err := Dial(transport + "://" + hs.Listener.Addr().String())
+	if err != nil {
+		panic(err)
+	}
+	return client, hs
+}
+
+func ipcTestClient(srv *Server, fl *flakeyListener) (*Client, net.Listener) {
+	// Listen on a random endpoint.
+	endpoint := fmt.Sprintf("go-ethereum-test-ipc-%d-%d", os.Getpid(), rand.Int63())
+	if runtime.GOOS == "windows" {
+		endpoint = "\\.pipe\\" + endpoint
+	} else {
+		endpoint = os.TempDir() + "/" + endpoint
+	}
+	l, err := ipcListen(endpoint)
+	if err != nil {
+		panic(err)
+	}
+	// Connect the listener to the server.
+	if fl != nil {
+		fl.Listener = l
+		l = fl
+	}
+	go srv.serveListener(l)
+	// Connect the client.
+	client, err := Dial(endpoint)
+	if err != nil {
+		panic(err)
+	}
+	return client, l
+}
+
+// flakeyListener kills accepted connections after a random timeout.
+type flakeyListener struct {
+	net.Listener
+	maxKillTimeout time.Duration
+	maxAcceptDelay time.Duration
+}
+
+func (l *flakeyListener) Accept() (net.Conn, error) {
+	delay := time.Duration(rand.Int63n(int64(l.maxAcceptDelay)))
+	time.Sleep(delay)
+
+	c, err := l.Listener.Accept()
+	if err == nil {
+		timeout := time.Duration(rand.Int63n(int64(l.maxKillTimeout)))
+		time.AfterFunc(timeout, func() {
+			glog.V(logger.Debug).Infof("killing conn %v after %v", c.LocalAddr(), timeout)
+			c.Close()
+		})
+	}
+	return c, err
 }
