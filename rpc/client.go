@@ -51,13 +51,12 @@ const (
 type BatchElem struct {
 	Method string
 	Args   []interface{}
-	// The result is unmarshaled into this field.
-	// Result must be set to a non-nil value of the desired type, otherwise
-	// the response will be discarded.
+	// The result is unmarshaled into this field. Result must be set to a
+	// non-nil pointer value of the desired type, otherwise the response will be
+	// discarded.
 	Result interface{}
-	// Error is set if the server returns an error for this request,
-	// or if unmarshaling into Result fails.
-	// It is not set for I/O errors.
+	// Error is set if the server returns an error for this request, or if
+	// unmarshaling into Result fails. It is not set for I/O errors.
 	Error error
 }
 
@@ -214,16 +213,21 @@ func (c *Client) Close() {
 	}
 }
 
-// Call performs a JSON-RPC call with the given arguments
-// and unmarshals into result if no error occurred.
+// Call performs a JSON-RPC call with the given arguments and unmarshals into
+// result if no error occurred.
+//
+// The result must be a pointer so that package json can unmarshal into it. You
+// can also pass nil, in which case the result is ignored.
 func (c *Client) Call(result interface{}, method string, args ...interface{}) error {
 	ctx := context.Background()
 	return c.CallContext(ctx, result, method, args...)
 }
 
-// CallContext performs a JSON-RPC call with the given arguments.
-// If the call does not complete within the context deadline,
-// CallContext returns ctx.Err().
+// CallContext performs a JSON-RPC call with the given arguments. The call will
+// be canceled if the
+//
+// The result must be a pointer so that package json can unmarshal into it. You
+// can also pass nil, in which case the result is ignored.
 func (c *Client) CallContext(ctx context.Context, result interface{}, method string, args ...interface{}) error {
 	msg, err := c.newMessage(method, args...)
 	if err != nil {
@@ -253,24 +257,23 @@ func (c *Client) CallContext(ctx context.Context, result interface{}, method str
 	}
 }
 
-// BatchCall sends all given requests as a single batch
-// and waits for the server to return a response for all of them.
+// BatchCall sends all given requests as a single batch and waits for the server
+// to return a response for all of them.
 //
-// In contrast to Call, BatchCall only returns I/O errors.
-// Any error specific to a request is reported through the Error field
-// of the corresponding BatchElem.
+// In contrast to Call, BatchCall only returns I/O errors. Any error specific to
+// a request is reported through the Error field of the corresponding BatchElem.
 func (c *Client) BatchCall(b []BatchElem) error {
 	ctx := context.Background()
 	return c.BatchCallContext(ctx, b)
 }
 
-// BatchCall sends all given requests as a single batch
-// and waits for the server to return a response for all of them.
-// The wait duration is bounded by the context's deadline.
+// BatchCall sends all given requests as a single batch and waits for the server
+// to return a response for all of them. The wait duration is bounded by the
+// context's deadline.
 //
-// In contrast to CallContext, BatchCallContext only returns I/O errors.
-// Any error specific to a request is reported through the Error field
-// of the corresponding BatchElem.
+// In contrast to CallContext, BatchCallContext only returns I/O errors. Any
+// error specific to a request is reported through the Error field of the
+// corresponding BatchElem.
 func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 	msgs := make([]*jsonrpcMessage, len(b))
 	op := &requestOp{
@@ -323,14 +326,14 @@ func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 	return err
 }
 
-// EthSubscribe calls the "eth_subscribe" method with the given arguments, registering a
-// subscription. Server notifications for the subscription are sent to the given channel.
-// The element type of the channel must match the expected type of content returned by the
-// subscription.
+// EthSubscribe calls the "eth_subscribe" method with the given arguments,
+// registering a subscription. Server notifications for the subscription are
+// sent to the given channel. The element type of the channel must match the
+// expected type of content returned by the subscription.
 //
-// Callers should not use the same channel for multiple calls to EthSubscribe. The channel
-// is closed when the notification is unsubscribed or an error occurs. The error can be
-// retrieved via the Err method of the subscription.
+// Callers should not use the same channel for multiple calls to EthSubscribe.
+// The channel is closed when the notification is unsubscribed or an error
+// occurs. The error can be retrieved via the Err method of the subscription.
 //
 // Slow subscribers will block the clients ingress path eventually.
 func (c *Client) EthSubscribe(channel interface{}, args ...interface{}) (*ClientSubscription, error) {
