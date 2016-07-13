@@ -16,6 +16,8 @@
 
 // +build go1.6,!go1.7
 
+package rpc
+
 import (
 	"net"
 	"net/http"
