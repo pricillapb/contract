@@ -139,7 +139,7 @@ func TestClientSubscribe(t *testing.T) {
 	}
 	for i := 0; i < count; i++ {
 		if val := <-nc; val != i {
-			t.Fatalf("value mismatch: got %, want %d", val, i)
+			t.Fatalf("value mismatch: got %d, want %d", val, i)
 		}
 	}
 
@@ -240,7 +240,7 @@ func TestClientHTTP(t *testing.T) {
 	// Check results.
 	for i := range results {
 		if !reflect.DeepEqual(results[i], wantResult) {
-			t.Errorf("result %d mismatch: got %#v, want %#v", results[i], wantResult)
+			t.Errorf("result %d mismatch: got %#v, want %#v", i, results[i], wantResult)
 		}
 	}
 }

@@ -484,7 +484,7 @@ func (c *Client) dispatch(conn net.Conn) {
 					c.handleResponse(msg)
 				default:
 					if glog.V(logger.Debug) {
-						glog.Errorf("<-readResp: dropping weird message", msg)
+						glog.Error("<-readResp: dropping weird message", msg)
 					}
 					// TODO: maybe close
 				}
