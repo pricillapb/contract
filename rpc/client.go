@@ -160,18 +160,6 @@ func DialContext(ctx context.Context, rawurl string) (*Client, error) {
 	}
 }
 
-// contextDialer returns a dialer that applies the deadline
-// value from the given context.
-func contextDialer(ctx context.Context) *net.Dialer {
-	dialer := &net.Dialer{Cancel: ctx.Done(), KeepAlive: tcpKeepAliveInterval}
-	if deadline, ok := ctx.Deadline(); ok {
-		dialer.Deadline = deadline
-	} else {
-		dialer.Deadline = time.Now().Add(defaultDialTimeout)
-	}
-	return dialer
-}
-
 func newClient(initctx context.Context, connectFunc func(context.Context) (net.Conn, error)) (*Client, error) {
 	conn, err := connectFunc(initctx)
 	if err != nil {

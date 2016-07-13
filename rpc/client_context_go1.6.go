@@ -14,19 +14,17 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-// +build go1.7
-
-package rpc
+// +build go1.6,!go1.7
 
 import (
-	"context"
 	"net"
 	"net/http"
 	"time"
+
+	"golang.org/x/net/context"
 )
 
-// In Go 1.7, context moved into the standard library and support
-// for cancelation via context was added to net.Dialer and http.Request.
+// In Go 1.6, net.Dialer gained the ability to cancel via a channel.
 
 // contextDialer returns a dialer that applies the deadline value from the given context.
 func contextDialer(ctx context.Context) *net.Dialer {
@@ -41,12 +39,13 @@ func contextDialer(ctx context.Context) *net.Dialer {
 
 // dialContext connects to the given address, aborting the dial if ctx is canceled.
 func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	d := &net.Dialer{KeepAlive: tcpKeepAliveInterval}
-	return d.DialContext(ctx, network, addr)
+	return contextDialer(ctx).Dial(network, addr)
 }
 
 // requestWithContext copies req, adding the cancelation channel and deadline from
 // the context.
 func requestWithContext(req *http.Request, ctx context.Context) *http.Request {
-	return req.WithContext(ctx)
+	req2 := *req
+	req2.Cancel = ctx.Done()
+	return &req2
 }
