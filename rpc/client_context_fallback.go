@@ -34,5 +34,5 @@ func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 func requestWithContext(req *http.Request, ctx context.Context) *http.Request {
 	req2 := *req
 	req2.Cancel = ctx.Done()
-	return req2
+	return &req2
 }
