@@ -206,6 +206,10 @@ func (h *HexNumber) BigInt() *big.Int {
 	return (*big.Int)(h)
 }
 
+func (h *HexNumber) String() string {
+	return h.BigInt().String()
+}
+
 var (
 	pendingBlockNumber  = big.NewInt(-2)
 	latestBlockNumber   = big.NewInt(-1)
