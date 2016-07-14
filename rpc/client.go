@@ -543,17 +543,9 @@ func (c *Client) closeRequestOps(err error) {
 			didClose[op] = true
 		}
 	}
-
-	suberr := err
-	if err == ErrClientQuit {
-		// For subscriptions the close error is nil if the client was quit,
-		// as documented for ClientSubscription.Err. This is because nil
-		// is easier to handle as a "don't re-establish connection" signal.
-		suberr = nil
-	}
 	for id, sub := range c.subs {
 		delete(c.subs, id)
-		sub.quitWithError(suberr, false)
+		sub.quitWithError(err, false)
 	}
 }
 
@@ -642,8 +634,9 @@ type ClientSubscription struct {
 	subid   string
 	in      chan json.RawMessage
 
-	quitOnce sync.Once
+	quitOnce sync.Once     // ensures quit is closed once
 	quit     chan struct{} // quit is closed when the subscription exits
+	errOnce  sync.Once     // ensures err is closed once
 	err      chan error
 }
 
@@ -660,19 +653,23 @@ func newClientSubscription(c *Client, channel reflect.Value) *ClientSubscription
 	return sub
 }
 
-// Err returns the error that lead to the closing of the subscription channel.
+// Err returns the subscription error channel. The intended use of Err is to schedule
+// resubscription when the client connection is closed unexpectedly.
 //
-// The intended use of Err is to schedule resubscription when the client connection is
-// closed unexpectedly. After a call to Unsubscribe or Close on the underlying Client, Err
-// will return nil.
+// The error channel receives a value when the subscription has ended due
+// to an error. The received error is ErrClientQuit if Close has been called
+// on the underlying client and no other error has occurred.
+//
+// The error channel is closed when Unsubscribe is called on the subscription.
 func (sub *ClientSubscription) Err() <-chan error {
 	return sub.err
 }
 
-// Unsubscribe unsubscribes the notification and closes the associated channel.
+// Unsubscribe unsubscribes the notification and closes the error channel.
 // It can safely be called more than once.
 func (sub *ClientSubscription) Unsubscribe() {
 	sub.quitWithError(nil, true)
+	sub.errOnce.Do(func() { close(sub.err) })
 }
 
 func (sub *ClientSubscription) quitWithError(err error, unsubscribeServer bool) {
@@ -680,9 +677,10 @@ func (sub *ClientSubscription) quitWithError(err error, unsubscribeServer bool) 
 		if unsubscribeServer {
 			sub.requestUnsubscribe()
 		}
+		if err != nil {
+			sub.err <- err
+		}
 		close(sub.quit)
-		sub.err <- err
-		close(sub.err)
 	})
 }
 
@@ -696,10 +694,10 @@ func (sub *ClientSubscription) deliver(result json.RawMessage) (ok bool) {
 }
 
 func (sub *ClientSubscription) start() {
-	sub.quitWithError(sub.forward(), false)
+	sub.quitWithError(sub.forward())
 }
 
-func (sub *ClientSubscription) forward() error {
+func (sub *ClientSubscription) forward() (err error, unsubscribeServer bool) {
 	cases := []reflect.SelectCase{
 		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(sub.quit)},
 		{Dir: reflect.SelectSend, Chan: sub.channel},
@@ -709,18 +707,17 @@ func (sub *ClientSubscription) forward() error {
 		case result := <-sub.in:
 			val, err := sub.unmarshal(result)
 			if err != nil {
-				sub.requestUnsubscribe()
-				return err
+				return err, true
 			}
 			cases[1].Send = val
 			switch chosen, _, _ := reflect.Select(cases); chosen {
 			case 0: // <-sub.quit
-				return nil
+				return nil, false
 			case 1: // sub.channel<-
 				continue
 			}
 		case <-sub.quit:
-			return nil
+			return nil, false
 		}
 	}
 }

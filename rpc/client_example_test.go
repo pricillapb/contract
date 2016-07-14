@@ -19,6 +19,7 @@ package rpc_test
 import (
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -37,41 +38,46 @@ type Block struct {
 }
 
 func ExampleClientSubscription() {
-	// Create the client.
+	// Connect the client.
 	client, _ := rpc.Dial("ws://127.0.0.1:8485")
 	subch := make(chan Block)
+	go subscribeBlocks(client, subch)
 
-	for {
+	// Print events from the subscription as they arrive.
+	for block := range subch {
+		fmt.Println("latest block:", block.Number)
+	}
+}
+
+// subscribeBlocks runs in its own goroutine and maintains
+// a subscription for new blocks.
+func subscribeBlocks(client *rpc.Client, subch chan Block) {
+	for i := 0; ; i++ {
+		if i > 0 {
+			time.Sleep(2 * time.Second)
+		}
+
 		// Subscribe to new blocks.
-		sub, err := client.EthSubscribe(subch, "newBlocks", map[string]interface{}{})
-		if err != nil {
+		sub, err := client.EthSubscribe(subch, "newBlocks")
+		if err == rpc.ErrClientQuit {
+			return // Stop reconnecting if the client was closed.
+		} else if err != nil {
 			fmt.Println("subscribe error:", err)
 			continue
 		}
+
 		// The connection is established now.
-		// Re-sync with the current state.
+		// Update the channel with the current block.
 		var lastBlock Block
-		if err := client.Call(&lastBlock, "eth_getBlockByNumber", "latest", false); err != nil {
+		if err := client.Call(&lastBlock, "eth_getBlockByNumber", "latest"); err != nil {
 			fmt.Println("can't get latest block:", err)
 			continue
 		}
-		fmt.Println("connected: current block is", lastBlock.Number)
+		subch <- lastBlock
 
-		// In the inner loop, we track subscription events.
-	inner:
-		for {
-			select {
-			case block := <-subch:
-				fmt.Println("latest block:", block.Number)
-
-			case err := <-sub.Err():
-				// The subscription channel has closed.
-				// Stop reconnecting if the close was intentional (e.g. client.Close was called).
-				if err == nil {
-					return
-				}
-				break inner
-			}
-		}
+		// The subscription will deliver events to the channel. Wait for the
+		// subscription to end for any reason, then loop around to re-establish
+		// the connection.
+		fmt.Println("connection lost: ", <-sub.Err())
 	}
 }
