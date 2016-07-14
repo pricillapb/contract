@@ -244,15 +244,14 @@ func TestClientSubscribe(t *testing.T) {
 
 	sub.Unsubscribe()
 	select {
-	case _, ok := <-nc:
-		if ok {
-			t.Fatal("channel was not closed after unsubscribe")
+	case v := <-nc:
+		t.Fatal("received value after unsubscribe:", v)
+	case err := <-sub.Err():
+		if err != nil {
+			t.Fatalf("Err returned a non-nil error after explicit unsubscribe: %q", err)
 		}
 	case <-time.After(1 * time.Second):
-		t.Fatalf("channel not closed within 1s after unsubscribe")
-	}
-	if err := sub.Err(); err != nil {
-		t.Fatalf("Err returned a non-nil error after explicit unsubscribe: %q", err)
+		t.Fatalf("subscription not closed within 1s after unsubscribe")
 	}
 }
 

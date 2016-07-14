@@ -641,11 +641,10 @@ type ClientSubscription struct {
 	channel reflect.Value
 	subid   string
 	in      chan json.RawMessage
-	quit    chan error // quit is closed when the subscription exits
 
-	mu           sync.Mutex
-	unsubscribed bool
-	err          error
+	quitOnce sync.Once
+	quit     chan struct{} // quit is closed when the subscription exits
+	err      chan error
 }
 
 func newClientSubscription(c *Client, channel reflect.Value) *ClientSubscription {
@@ -653,7 +652,8 @@ func newClientSubscription(c *Client, channel reflect.Value) *ClientSubscription
 		client:  c,
 		etype:   channel.Type().Elem(),
 		channel: channel,
-		quit:    make(chan error),
+		quit:    make(chan struct{}),
+		err:     make(chan error, 1),
 		// in is buffered so dispatch can continue even if the subscriber is slow.
 		in: make(chan json.RawMessage, clientSubscriptionBuffer),
 	}
@@ -665,9 +665,7 @@ func newClientSubscription(c *Client, channel reflect.Value) *ClientSubscription
 // The intended use of Err is to schedule resubscription when the client connection is
 // closed unexpectedly. After a call to Unsubscribe or Close on the underlying Client, Err
 // will return nil.
-func (sub *ClientSubscription) Err() error {
-	sub.mu.Lock()
-	defer sub.mu.Unlock()
+func (sub *ClientSubscription) Err() <-chan error {
 	return sub.err
 }
 
@@ -678,20 +676,14 @@ func (sub *ClientSubscription) Unsubscribe() {
 }
 
 func (sub *ClientSubscription) quitWithError(err error, unsubscribeServer bool) {
-	sub.mu.Lock()
-	defer sub.mu.Unlock()
-	// Keep the original error around.
-	if sub.err == nil {
-		sub.err = err
-	}
-	if !sub.unsubscribed {
+	sub.quitOnce.Do(func() {
 		if unsubscribeServer {
 			sub.requestUnsubscribe()
 		}
 		close(sub.quit)
-		sub.channel.Close()
-		sub.unsubscribed = true
-	}
+		sub.err <- err
+		close(sub.err)
+	})
 }
 
 func (sub *ClientSubscription) deliver(result json.RawMessage) (ok bool) {

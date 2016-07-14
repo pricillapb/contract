@@ -39,10 +39,10 @@ type Block struct {
 func ExampleClientSubscription() {
 	// Create the client.
 	client, _ := rpc.Dial("ws://127.0.0.1:8485")
+	subch := make(chan Block)
 
 	for {
 		// Subscribe to new blocks.
-		subch := make(chan Block)
 		sub, err := client.EthSubscribe(subch, "newBlocks", map[string]interface{}{})
 		if err != nil {
 			fmt.Println("subscribe error:", err)
@@ -58,13 +58,20 @@ func ExampleClientSubscription() {
 		fmt.Println("connected: current block is", lastBlock.Number)
 
 		// In the inner loop, we track subscription events.
-		for block := range subch {
-			fmt.Println("latest block:", block.Number)
-		}
-		// The subscription channel has been closed.
-		// Stop reconnecting if the close was intentional (e.g. client.Close was called).
-		if sub.Err() == nil {
-			return
+	inner:
+		for {
+			select {
+			case block := <-subch:
+				fmt.Println("latest block:", block.Number)
+
+			case err := <-sub.Err():
+				// The subscription channel has closed.
+				// Stop reconnecting if the close was intentional (e.g. client.Close was called).
+				if err == nil {
+					return
+				}
+				break inner
+			}
 		}
 	}
 }
