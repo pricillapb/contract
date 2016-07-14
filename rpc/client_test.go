@@ -146,10 +146,11 @@ func testClientCancel(transport string, t *testing.T) {
 	// These tests take a lot of time, run them all at once.
 	// You probably want to run with -parallel 1 or comment out
 	// the call to t.Parallel if you enable the logging.
-	t.Parallel()
-	// glog.SetV(6)
-	// glog.SetToStderr(true)
-	// defer glog.SetToStderr(false)
+	//	t.Parallel()
+	glog.SetV(6)
+	glog.SetToStderr(true)
+	glog.Infoln("testing", transport)
+	defer glog.SetToStderr(false)
 
 	// The actual test starts here.
 	var (
