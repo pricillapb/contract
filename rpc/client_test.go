@@ -452,7 +452,7 @@ func ipcTestClient(srv *Server, fl *flakeyListener) (*Client, net.Listener) {
 		fl.Listener = l
 		l = fl
 	}
-	go srv.serveListener(l)
+	go srv.ServeListener(l)
 	// Connect the client.
 	client, err := Dial(endpoint)
 	if err != nil {
