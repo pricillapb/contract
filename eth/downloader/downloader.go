@@ -412,6 +412,10 @@ func (d *Downloader) syncWithPeer(p *peer, hash common.Hash, td *big.Int) (err e
 		)
 
 	case p.version >= 62:
+		if d.hasBlockAndState(p.head) {
+			glog.Infof("%v: advertised head already in our chain", p)
+			return nil
+		}
 		// Look up the sync boundaries: the common ancestor and the target block
 		latest, err := d.fetchHeight(p)
 		if err != nil {
