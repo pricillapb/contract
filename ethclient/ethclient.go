@@ -189,7 +189,7 @@ func toBlockNumArg(number *big.Int) string {
 	if number == nil {
 		return "latest"
 	}
-	return fmt.Sprintf("%#x", number)
+	return hexutil.EncodeBig(number)
 }
 
 type rpcProgress struct {
@@ -396,21 +396,12 @@ func (ec *Client) SendTransaction(ctx context.Context, tx *types.Transaction) er
 }
 
 func toCallArg(msg ethereum.CallMsg) interface{} {
-	arg := map[string]interface{}{
-		"from": msg.From,
-		"to":   msg.To,
+	return map[string]interface{}{
+		"from":     msg.From,
+		"to":       msg.To,
+		"data":     hexutil.Bytes(msg.Data),
+		"value":    (*hexutil.Big)(msg.Value),
+		"gas":      (*hexutil.Big)(msg.Gas),
+		"gasPrice": (*hexutil.Big)(msg.GasPrice),
 	}
-	if len(msg.Data) > 0 {
-		arg["data"] = fmt.Sprintf("%#x", msg.Data)
-	}
-	if msg.Value != nil {
-		arg["value"] = fmt.Sprintf("%#x", msg.Value)
-	}
-	if msg.Gas != nil {
-		arg["gas"] = fmt.Sprintf("%#x", msg.Gas)
-	}
-	if msg.GasPrice != nil {
-		arg["gasPrice"] = fmt.Sprintf("%#x", msg.GasPrice)
-	}
-	return arg
 }
