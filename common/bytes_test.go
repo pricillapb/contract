@@ -95,22 +95,6 @@ func (s *BytesSuite) TestIsHex(c *checker.C) {
 
 }
 
-func (s *BytesSuite) TestParseDataString(c *checker.C) {
-	res1 := ParseData("hello", "world", "0x0106")
-	data := "68656c6c6f000000000000000000000000000000000000000000000000000000776f726c640000000000000000000000000000000000000000000000000000000106000000000000000000000000000000000000000000000000000000000000"
-	exp1 := Hex2Bytes(data)
-	c.Assert(res1, checker.DeepEquals, exp1)
-}
-
-func (s *BytesSuite) TestParseDataBytes(c *checker.C) {
-	data1 := []byte{232, 212, 165, 16, 0}
-	exp1 := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 232, 212, 165, 16, 0}
-
-	res1 := ParseData(data1)
-	c.Assert(res1, checker.DeepEquals, exp1)
-
-}
-
 func (s *BytesSuite) TestLeftPadBytes(c *checker.C) {
 	val1 := []byte{1, 2, 3, 4}
 	exp1 := []byte{0, 0, 0, 0, 1, 2, 3, 4}
@@ -120,28 +104,6 @@ func (s *BytesSuite) TestLeftPadBytes(c *checker.C) {
 
 	c.Assert(res1, checker.DeepEquals, exp1)
 	c.Assert(res2, checker.DeepEquals, val1)
-}
-
-func (s *BytesSuite) TestFormatData(c *checker.C) {
-	data1 := ""
-	data2 := "0xa9e67e00"
-	data3 := "a9e67e"
-	data4 := "\"a9e67e00\""
-
-	// exp1 := []byte{}
-	exp2 := []byte{00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 0xa9, 0xe6, 0x7e, 00}
-	exp3 := []byte{00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00}
-	exp4 := []byte{0x61, 0x39, 0x65, 0x36, 0x37, 0x65, 0x30, 0x30, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00, 00}
-
-	res1 := FormatData(data1)
-	res2 := FormatData(data2)
-	res3 := FormatData(data3)
-	res4 := FormatData(data4)
-
-	c.Assert(res1, checker.IsNil)
-	c.Assert(res2, checker.DeepEquals, exp2)
-	c.Assert(res3, checker.DeepEquals, exp3)
-	c.Assert(res4, checker.DeepEquals, exp4)
 }
 
 func (s *BytesSuite) TestRightPadBytes(c *checker.C) {

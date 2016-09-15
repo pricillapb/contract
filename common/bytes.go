@@ -22,8 +22,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"math/big"
-	"strings"
 )
 
 func ToHex(b []byte) string {
@@ -137,68 +135,6 @@ func Hex2Bytes(str string) []byte {
 	return h
 }
 
-func Hex2BytesFixed(str string, flen int) []byte {
-	h, _ := hex.DecodeString(str)
-	if len(h) == flen {
-		return h
-	} else {
-		if len(h) > flen {
-			return h[len(h)-flen : len(h)]
-		} else {
-			hh := make([]byte, flen)
-			copy(hh[flen-len(h):flen], h[:])
-			return hh
-		}
-	}
-}
-
-func StringToByteFunc(str string, cb func(str string) []byte) (ret []byte) {
-	if len(str) > 1 && str[0:2] == "0x" && !strings.Contains(str, "\n") {
-		ret = Hex2Bytes(str[2:])
-	} else {
-		ret = cb(str)
-	}
-
-	return
-}
-
-func FormatData(data string) []byte {
-	if len(data) == 0 {
-		return nil
-	}
-	// Simple stupid
-	d := new(big.Int)
-	if data[0:1] == "\"" && data[len(data)-1:] == "\"" {
-		return RightPadBytes([]byte(data[1:len(data)-1]), 32)
-	} else if len(data) > 1 && data[:2] == "0x" {
-		d.SetBytes(Hex2Bytes(data[2:]))
-	} else {
-		d.SetString(data, 0)
-	}
-
-	return BigToBytes(d, 256)
-}
-
-func ParseData(data ...interface{}) (ret []byte) {
-	for _, item := range data {
-		switch t := item.(type) {
-		case string:
-			var str []byte
-			if IsHex(t) {
-				str = Hex2Bytes(t[2:])
-			} else {
-				str = []byte(t)
-			}
-
-			ret = append(ret, RightPadBytes(str, 32)...)
-		case []byte:
-			ret = append(ret, LeftPadBytes(t, 32)...)
-		}
-	}
-
-	return
-}
-
 func RightPadBytes(slice []byte, l int) []byte {
 	if l < len(slice) {
 		return slice
@@ -241,26 +177,4 @@ func RightPadString(str string, l int) string {
 
 	return str + zeros
 
-}
-
-func ToAddress(slice []byte) (addr []byte) {
-	if len(slice) < 20 {
-		addr = LeftPadBytes(slice, 20)
-	} else if len(slice) > 20 {
-		addr = slice[len(slice)-20:]
-	} else {
-		addr = slice
-	}
-
-	addr = CopyBytes(addr)
-
-	return
-}
-
-func ByteSliceToInterface(slice [][]byte) (ret []interface{}) {
-	for _, i := range slice {
-		ret = append(ret, i)
-	}
-
-	return
 }
