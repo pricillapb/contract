@@ -28,6 +28,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/hexutil"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -58,15 +59,15 @@ type txdata struct {
 
 type jsonTransaction struct {
 	Hash         *common.Hash    `json:"hash"`
-	AccountNonce *hexUint64      `json:"nonce"`
-	Price        *hexBig         `json:"gasPrice"`
-	GasLimit     *hexBig         `json:"gas"`
+	AccountNonce *hexutil.Uint   `json:"nonce"`
+	Price        *hexutil.Big    `json:"gasPrice"`
+	GasLimit     *hexutil.Big    `json:"gas"`
 	Recipient    *common.Address `json:"to"`
-	Amount       *hexBig         `json:"value"`
-	Payload      *hexBytes       `json:"input"`
-	V            *hexUint64      `json:"v"`
-	R            *hexBig         `json:"r"`
-	S            *hexBig         `json:"s"`
+	Amount       *hexutil.Big    `json:"value"`
+	Payload      *hexutil.Bytes  `json:"input"`
+	V            *hexutil.Uint   `json:"v"`
+	R            *hexutil.Big    `json:"r"`
+	S            *hexutil.Big    `json:"s"`
 }
 
 // NewContractCreation creates a new transaction with no recipient.
@@ -134,15 +135,15 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 
 	return json.Marshal(&jsonTransaction{
 		Hash:         &hash,
-		AccountNonce: (*hexUint64)(&tx.data.AccountNonce),
-		Price:        (*hexBig)(tx.data.Price),
-		GasLimit:     (*hexBig)(tx.data.GasLimit),
+		AccountNonce: (*hexutil.Uint)(&tx.data.AccountNonce),
+		Price:        (*hexutil.Big)(tx.data.Price),
+		GasLimit:     (*hexutil.Big)(tx.data.GasLimit),
 		Recipient:    tx.data.Recipient,
-		Amount:       (*hexBig)(tx.data.Amount),
-		Payload:      (*hexBytes)(&tx.data.Payload),
-		V:            (*hexUint64)(&v),
-		R:            (*hexBig)(tx.data.R),
-		S:            (*hexBig)(tx.data.S),
+		Amount:       (*hexutil.Big)(tx.data.Amount),
+		Payload:      (*hexutil.Bytes)(&tx.data.Payload),
+		V:            (*hexutil.Uint)(&v),
+		R:            (*hexutil.Big)(tx.data.R),
+		S:            (*hexutil.Big)(tx.data.S),
 	})
 }
 

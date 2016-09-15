@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/hexutil"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"golang.org/x/net/context"
@@ -156,9 +157,9 @@ func (ec *Client) TransactionByHash(ctx context.Context, hash common.Hash) (*typ
 
 // TransactionCount returns the total number of transactions in the given block.
 func (ec *Client) TransactionCount(ctx context.Context, blockHash common.Hash) (uint, error) {
-	var num rpc.HexNumber
+	var num hexutil.Uint
 	err := ec.c.CallContext(ctx, &num, "eth_getBlockTransactionCountByHash", blockHash)
-	return num.Uint(), err
+	return uint(num), err
 }
 
 // TransactionInBlock returns a single transaction at index in the given block.
@@ -192,11 +193,11 @@ func toBlockNumArg(number *big.Int) string {
 }
 
 type rpcProgress struct {
-	StartingBlock rpc.HexNumber
-	CurrentBlock  rpc.HexNumber
-	HighestBlock  rpc.HexNumber
-	PulledStates  rpc.HexNumber
-	KnownStates   rpc.HexNumber
+	StartingBlock hexutil.Uint
+	CurrentBlock  hexutil.Uint
+	HighestBlock  hexutil.Uint
+	PulledStates  hexutil.Uint
+	KnownStates   hexutil.Uint
 }
 
 // SyncProgress retrieves the current progress of the sync algorithm. If there's
@@ -216,11 +217,11 @@ func (ec *Client) SyncProgress(ctx context.Context) (*ethereum.SyncProgress, err
 		return nil, err
 	}
 	return &ethereum.SyncProgress{
-		StartingBlock: progress.StartingBlock.Uint64(),
-		CurrentBlock:  progress.CurrentBlock.Uint64(),
-		HighestBlock:  progress.HighestBlock.Uint64(),
-		PulledStates:  progress.PulledStates.Uint64(),
-		KnownStates:   progress.KnownStates.Uint64(),
+		StartingBlock: uint64(progress.StartingBlock),
+		CurrentBlock:  uint64(progress.CurrentBlock),
+		HighestBlock:  uint64(progress.HighestBlock),
+		PulledStates:  uint64(progress.PulledStates),
+		KnownStates:   uint64(progress.KnownStates),
 	}, nil
 }
 
@@ -235,15 +236,15 @@ func (ec *Client) SubscribeNewHead(ctx context.Context, ch chan<- *types.Header)
 // BalanceAt returns the wei balance of the given account.
 // The block number can be nil, in which case the balance is taken from the latest known block.
 func (ec *Client) BalanceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (*big.Int, error) {
-	var result rpc.HexNumber
+	var result hexutil.Big
 	err := ec.c.CallContext(ctx, &result, "eth_getBalance", account, toBlockNumArg(blockNumber))
-	return (*big.Int)(&result), err
+	return result.ToInt(), err
 }
 
 // StorageAt returns the value of key in the contract storage of the given account.
 // The block number can be nil, in which case the value is taken from the latest known block.
 func (ec *Client) StorageAt(ctx context.Context, account common.Address, key common.Hash, blockNumber *big.Int) ([]byte, error) {
-	var result rpc.HexBytes
+	var result hexutil.Bytes
 	err := ec.c.CallContext(ctx, &result, "eth_getStorageAt", account, key, toBlockNumArg(blockNumber))
 	return result, err
 }
@@ -251,7 +252,7 @@ func (ec *Client) StorageAt(ctx context.Context, account common.Address, key com
 // CodeAt returns the contract code of the given account.
 // The block number can be nil, in which case the code is taken from the latest known block.
 func (ec *Client) CodeAt(ctx context.Context, account common.Address, blockNumber *big.Int) ([]byte, error) {
-	var result rpc.HexBytes
+	var result hexutil.Bytes
 	err := ec.c.CallContext(ctx, &result, "eth_getCode", account, toBlockNumArg(blockNumber))
 	return result, err
 }
@@ -259,9 +260,9 @@ func (ec *Client) CodeAt(ctx context.Context, account common.Address, blockNumbe
 // NonceAt returns the account nonce of the given account.
 // The block number can be nil, in which case the nonce is taken from the latest known block.
 func (ec *Client) NonceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (uint64, error) {
-	var result rpc.HexNumber
+	var result hexutil.Uint
 	err := ec.c.CallContext(ctx, &result, "eth_getTransactionCount", account, toBlockNumArg(blockNumber))
-	return result.Uint64(), err
+	return uint64(result), err
 }
 
 // Filters
@@ -295,21 +296,21 @@ func toFilterArg(q ethereum.FilterQuery) interface{} {
 
 // PendingBalanceAt returns the wei balance of the given account in the pending state.
 func (ec *Client) PendingBalanceAt(ctx context.Context, account common.Address) (*big.Int, error) {
-	var result rpc.HexNumber
+	var result hexutil.Big
 	err := ec.c.CallContext(ctx, &result, "eth_getBalance", account, "pending")
-	return (*big.Int)(&result), err
+	return result.ToInt(), err
 }
 
 // PendingStorageAt returns the value of key in the contract storage of the given account in the pending state.
 func (ec *Client) PendingStorageAt(ctx context.Context, account common.Address, key common.Hash) ([]byte, error) {
-	var result rpc.HexBytes
+	var result hexutil.Bytes
 	err := ec.c.CallContext(ctx, &result, "eth_getStorageAt", account, key, "pending")
 	return result, err
 }
 
 // PendingCodeAt returns the contract code of the given account in the pending state.
 func (ec *Client) PendingCodeAt(ctx context.Context, account common.Address) ([]byte, error) {
-	var result rpc.HexBytes
+	var result hexutil.Bytes
 	err := ec.c.CallContext(ctx, &result, "eth_getCode", account, "pending")
 	return result, err
 }
@@ -317,16 +318,16 @@ func (ec *Client) PendingCodeAt(ctx context.Context, account common.Address) ([]
 // PendingNonceAt returns the account nonce of the given account in the pending state.
 // This is the nonce that should be used for the next transaction.
 func (ec *Client) PendingNonceAt(ctx context.Context, account common.Address) (uint64, error) {
-	var result rpc.HexNumber
+	var result hexutil.Uint
 	err := ec.c.CallContext(ctx, &result, "eth_getTransactionCount", account, "pending")
-	return result.Uint64(), err
+	return uint64(result), err
 }
 
 // PendingTransactionCount returns the total number of transactions in the pending state.
 func (ec *Client) PendingTransactionCount(ctx context.Context) (uint, error) {
-	var num rpc.HexNumber
+	var num hexutil.Uint
 	err := ec.c.CallContext(ctx, &num, "eth_getBlockTransactionCountByNumber", "pending")
-	return num.Uint(), err
+	return uint(num), err
 }
 
 // TODO: SubscribePendingTransactions (needs server side)
@@ -340,33 +341,33 @@ func (ec *Client) PendingTransactionCount(ctx context.Context) (uint, error) {
 // case the code is taken from the latest known block. Note that state from very old
 // blocks might not be available.
 func (ec *Client) CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
-	var hex string
-	err := ec.c.CallContext(ctx, &hex, "eth_call", toCallArg(msg), toBlockNumArg(blockNumber))
+	var result hexutil.Bytes
+	err := ec.c.CallContext(ctx, &result, "eth_call", toCallArg(msg), toBlockNumArg(blockNumber))
 	if err != nil {
 		return nil, err
 	}
-	return common.FromHex(hex), nil
+	return result, nil
 }
 
 // PendingCallContract executes a message call transaction using the EVM.
 // The state seen by the contract call is the pending state.
 func (ec *Client) PendingCallContract(ctx context.Context, msg ethereum.CallMsg) ([]byte, error) {
-	var hex string
-	err := ec.c.CallContext(ctx, &hex, "eth_call", toCallArg(msg), "pending")
+	var result hexutil.Bytes
+	err := ec.c.CallContext(ctx, &result, "eth_call", toCallArg(msg), "pending")
 	if err != nil {
 		return nil, err
 	}
-	return common.FromHex(hex), nil
+	return result, nil
 }
 
 // SuggestGasPrice retrieves the currently suggested gas price to allow a timely
 // execution of a transaction.
 func (ec *Client) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
-	var hex rpc.HexNumber
+	var hex hexutil.Big
 	if err := ec.c.CallContext(ctx, &hex, "eth_gasPrice"); err != nil {
 		return nil, err
 	}
-	return (*big.Int)(&hex), nil
+	return hex.ToInt(), nil
 }
 
 // EstimateGas tries to estimate the gas needed to execute a specific transaction based on
@@ -374,12 +375,12 @@ func (ec *Client) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
 // the true gas limit requirement as other transactions may be added or removed by miners,
 // but it should provide a basis for setting a reasonable default.
 func (ec *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (*big.Int, error) {
-	var hex rpc.HexNumber
+	var hex hexutil.Big
 	err := ec.c.CallContext(ctx, &hex, "eth_estimateGas", toCallArg(msg))
 	if err != nil {
 		return nil, err
 	}
-	return (*big.Int)(&hex), nil
+	return hex.ToInt(), nil
 }
 
 // SendTransaction injects a signed transaction into the pending pool for execution.

@@ -17,14 +17,12 @@
 package rpc
 
 import (
-	"bytes"
-	"encoding/hex"
 	"fmt"
 	"math"
-	"math/big"
 	"reflect"
-	"strings"
 	"sync"
+
+	"github.com/ethereum/go-ethereum/hexutil"
 
 	"gopkg.in/fatih/set.v0"
 )
@@ -123,99 +121,9 @@ type ServerCodec interface {
 	Closed() <-chan interface{}
 }
 
-// HexNumber serializes a number to hex format using the "%#x" format
-type HexNumber big.Int
-
-// NewHexNumber creates a new hex number instance which will serialize the given val with `%#x` on marshal.
-func NewHexNumber(val interface{}) *HexNumber {
-	if val == nil {
-		return nil // note, this doesn't catch nil pointers, only passing nil directly!
-	}
-
-	if v, ok := val.(*big.Int); ok {
-		if v != nil {
-			return (*HexNumber)(new(big.Int).Set(v))
-		}
-		return nil
-	}
-
-	rval := reflect.ValueOf(val)
-
-	var unsigned uint64
-	utype := reflect.TypeOf(unsigned)
-	if t := rval.Type(); t.ConvertibleTo(utype) {
-		hn := new(big.Int).SetUint64(rval.Convert(utype).Uint())
-		return (*HexNumber)(hn)
-	}
-
-	var signed int64
-	stype := reflect.TypeOf(signed)
-	if t := rval.Type(); t.ConvertibleTo(stype) {
-		hn := new(big.Int).SetInt64(rval.Convert(stype).Int())
-		return (*HexNumber)(hn)
-	}
-
-	return nil
-}
-
-func (h *HexNumber) UnmarshalJSON(input []byte) error {
-	length := len(input)
-	if length >= 2 && input[0] == '"' && input[length-1] == '"' {
-		input = input[1 : length-1]
-	}
-
-	hn := (*big.Int)(h)
-	if _, ok := hn.SetString(string(input), 0); ok {
-		return nil
-	}
-
-	return fmt.Errorf("Unable to parse number")
-}
-
-// MarshalJSON serialize the hex number instance to a hex representation.
-func (h *HexNumber) MarshalJSON() ([]byte, error) {
-	if h != nil {
-		hn := (*big.Int)(h)
-		if hn.BitLen() == 0 {
-			return []byte(`"0x0"`), nil
-		}
-		return []byte(fmt.Sprintf(`"0x%x"`, hn)), nil
-	}
-	return nil, nil
-}
-
-func (h *HexNumber) Int() int {
-	hn := (*big.Int)(h)
-	return int(hn.Int64())
-}
-
-func (h *HexNumber) Int64() int64 {
-	hn := (*big.Int)(h)
-	return hn.Int64()
-}
-
-func (h *HexNumber) Uint() uint {
-	hn := (*big.Int)(h)
-	return uint(hn.Uint64())
-}
-
-func (h *HexNumber) Uint64() uint64 {
-	hn := (*big.Int)(h)
-	return hn.Uint64()
-}
-
-func (h *HexNumber) BigInt() *big.Int {
-	return (*big.Int)(h)
-}
-
-var (
-	pendingBlockNumber  = big.NewInt(-2)
-	latestBlockNumber   = big.NewInt(-1)
-	earliestBlockNumber = big.NewInt(0)
-	maxBlockNumber      = big.NewInt(math.MaxInt64)
-)
-
 type BlockNumber int64
+
+const maxBlockNumber = uint64(math.MaxInt64)
 
 const (
 	PendingBlockNumber = BlockNumber(-2)
@@ -229,76 +137,26 @@ const (
 // - an invalid block number error when the given argument isn't a known strings
 // - an out of range error when the given block number is either too little or too large
 func (bn *BlockNumber) UnmarshalJSON(data []byte) error {
-	input := strings.TrimSpace(string(data))
-
-	if len(input) >= 2 && input[0] == '"' && input[len(input)-1] == '"' {
-		input = input[1 : len(input)-1]
-	}
-
-	if len(input) == 0 {
-		*bn = BlockNumber(latestBlockNumber.Int64())
-		return nil
-	}
-
-	in := new(big.Int)
-	_, ok := in.SetString(input, 0)
-
-	if !ok { // test if user supplied string tag
-		strBlockNumber := input
-		if strBlockNumber == "latest" {
-			*bn = BlockNumber(latestBlockNumber.Int64())
-			return nil
+	switch string(data) {
+	case `"latest"`:
+		*bn = LatestBlockNumber
+	case `"earliest"`:
+		*bn = BlockNumber(0)
+	case `"pending"`:
+		*bn = PendingBlockNumber
+	default:
+		var num hexutil.Uint
+		if err := num.UnmarshalJSON(data); err != nil {
+			return err
 		}
-
-		if strBlockNumber == "earliest" {
-			*bn = BlockNumber(earliestBlockNumber.Int64())
-			return nil
+		if uint64(num) > maxBlockNumber {
+			return fmt.Errorf("blocknumber not in range (0, %d)", maxBlockNumber)
 		}
-
-		if strBlockNumber == "pending" {
-			*bn = BlockNumber(pendingBlockNumber.Int64())
-			return nil
-		}
-
-		return fmt.Errorf(`invalid blocknumber %s`, data)
+		*bn = BlockNumber(num)
 	}
-
-	if in.Cmp(earliestBlockNumber) >= 0 && in.Cmp(maxBlockNumber) <= 0 {
-		*bn = BlockNumber(in.Int64())
-		return nil
-	}
-
-	return fmt.Errorf("blocknumber not in range [%d, %d]", earliestBlockNumber, maxBlockNumber)
+	return nil
 }
 
 func (bn BlockNumber) Int64() int64 {
 	return (int64)(bn)
-}
-
-// HexBytes JSON-encodes as hex with 0x prefix.
-type HexBytes []byte
-
-func (b HexBytes) MarshalJSON() ([]byte, error) {
-	result := make([]byte, len(b)*2+4)
-	copy(result, `"0x`)
-	hex.Encode(result[3:], b)
-	result[len(result)-1] = '"'
-	return result, nil
-}
-
-func (b *HexBytes) UnmarshalJSON(input []byte) error {
-	if len(input) >= 2 && input[0] == '"' && input[len(input)-1] == '"' {
-		input = input[1 : len(input)-1]
-	}
-	if !bytes.HasPrefix(input, []byte("0x")) {
-		return fmt.Errorf("missing 0x prefix for hex byte array")
-	}
-	input = input[2:]
-	if len(input) == 0 {
-		*b = nil
-		return nil
-	}
-	*b = make([]byte, len(input)/2)
-	_, err := hex.Decode(*b, input)
-	return err
 }

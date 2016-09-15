@@ -24,7 +24,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/hexutil"
 )
 
 // PublicWhisperAPI provides the whisper RPC service.
@@ -50,49 +50,48 @@ func NewPublicWhisperAPI(w *Whisper) *PublicWhisperAPI {
 }
 
 // Version returns the Whisper version this node offers.
-func (s *PublicWhisperAPI) Version() (*rpc.HexNumber, error) {
+func (s *PublicWhisperAPI) Version() (hexutil.Uint, error) {
 	if s.w == nil {
-		return rpc.NewHexNumber(0), whisperOffLineErr
+		return 0, whisperOffLineErr
 	}
-	return rpc.NewHexNumber(s.w.Version()), nil
+	return hexutil.Uint(s.w.Version()), nil
 }
 
 // HasIdentity checks if the the whisper node is configured with the private key
 // of the specified public pair.
-func (s *PublicWhisperAPI) HasIdentity(identity string) (bool, error) {
+func (s *PublicWhisperAPI) HasIdentity(identity hexutil.Bytes) (bool, error) {
 	if s.w == nil {
 		return false, whisperOffLineErr
 	}
-	return s.w.HasIdentity(crypto.ToECDSAPub(common.FromHex(identity))), nil
+	return s.w.HasIdentity(crypto.ToECDSAPub(identity)), nil
 }
 
 // NewIdentity generates a new cryptographic identity for the client, and injects
 // it into the known identities for message decryption.
-func (s *PublicWhisperAPI) NewIdentity() (string, error) {
+func (s *PublicWhisperAPI) NewIdentity() (hexutil.Bytes, error) {
 	if s.w == nil {
-		return "", whisperOffLineErr
+		return nil, whisperOffLineErr
 	}
-
 	identity := s.w.NewIdentity()
-	return common.ToHex(crypto.FromECDSAPub(&identity.PublicKey)), nil
+	return hexutil.Bytes(crypto.FromECDSAPub(&identity.PublicKey)), nil
 }
 
 type NewFilterArgs struct {
-	To     string
-	From   string
+	To     []byte
+	From   []byte
 	Topics [][][]byte
 }
 
 // NewWhisperFilter creates and registers a new message filter to watch for inbound whisper messages.
-func (s *PublicWhisperAPI) NewFilter(args NewFilterArgs) (*rpc.HexNumber, error) {
+func (s *PublicWhisperAPI) NewFilter(args NewFilterArgs) (*hexutil.Uint, error) {
 	if s.w == nil {
 		return nil, whisperOffLineErr
 	}
 
 	var id int
 	filter := Filter{
-		To:     crypto.ToECDSAPub(common.FromHex(args.To)),
-		From:   crypto.ToECDSAPub(common.FromHex(args.From)),
+		To:     crypto.ToECDSAPub(args.To),
+		From:   crypto.ToECDSAPub(args.From),
 		Topics: NewFilterTopics(args.Topics...),
 		Fn: func(message *Message) {
 			wmsg := NewWhisperMessage(message)
@@ -110,16 +109,17 @@ func (s *PublicWhisperAPI) NewFilter(args NewFilterArgs) (*rpc.HexNumber, error)
 	s.messages[id] = newWhisperFilter(id, s.w)
 	s.messagesMu.Unlock()
 
-	return rpc.NewHexNumber(id), nil
+	filterId := hexutil.Uint(id)
+	return &filterId, nil
 }
 
 // GetFilterChanges retrieves all the new messages matched by a filter since the last retrieval.
-func (s *PublicWhisperAPI) GetFilterChanges(filterId rpc.HexNumber) []WhisperMessage {
+func (s *PublicWhisperAPI) GetFilterChanges(filterId hexutil.Uint) []WhisperMessage {
 	s.messagesMu.RLock()
 	defer s.messagesMu.RUnlock()
 
-	if s.messages[filterId.Int()] != nil {
-		if changes := s.messages[filterId.Int()].retrieve(); changes != nil {
+	if s.messages[int(filterId)] != nil {
+		if changes := s.messages[int(filterId)].retrieve(); changes != nil {
 			return changes
 		}
 	}
@@ -127,26 +127,26 @@ func (s *PublicWhisperAPI) GetFilterChanges(filterId rpc.HexNumber) []WhisperMes
 }
 
 // UninstallFilter disables and removes an existing filter.
-func (s *PublicWhisperAPI) UninstallFilter(filterId rpc.HexNumber) bool {
+func (s *PublicWhisperAPI) UninstallFilter(filterId hexutil.Uint) bool {
 	s.messagesMu.Lock()
 	defer s.messagesMu.Unlock()
 
-	if _, ok := s.messages[filterId.Int()]; ok {
-		delete(s.messages, filterId.Int())
+	if _, ok := s.messages[int(filterId)]; ok {
+		delete(s.messages, int(filterId))
 		return true
 	}
 	return false
 }
 
 // GetMessages retrieves all the known messages that match a specific filter.
-func (s *PublicWhisperAPI) GetMessages(filterId rpc.HexNumber) []WhisperMessage {
+func (s *PublicWhisperAPI) GetMessages(filterId hexutil.Uint) []WhisperMessage {
 	// Retrieve all the cached messages matching a specific, existing filter
 	s.messagesMu.RLock()
 	defer s.messagesMu.RUnlock()
 
 	var messages []*Message
-	if s.messages[filterId.Int()] != nil {
-		messages = s.messages[filterId.Int()].messages()
+	if s.messages[int(filterId)] != nil {
+		messages = s.messages[int(filterId)].messages()
 	}
 
 	return returnWhisperMessages(messages)
@@ -162,10 +162,10 @@ func returnWhisperMessages(messages []*Message) []WhisperMessage {
 }
 
 type PostArgs struct {
-	From     string   `json:"from"`
-	To       string   `json:"to"`
+	From     []byte   `json:"from"`
+	To       []byte   `json:"to"`
 	Topics   [][]byte `json:"topics"`
-	Payload  string   `json:"payload"`
+	Payload  []byte   `json:"payload"`
 	Priority int64    `json:"priority"`
 	TTL      int64    `json:"ttl"`
 }
@@ -177,16 +177,16 @@ func (s *PublicWhisperAPI) Post(args PostArgs) (bool, error) {
 	}
 
 	// construct whisper message with transmission options
-	message := NewMessage(common.FromHex(args.Payload))
+	message := NewMessage(args.Payload)
 	options := Options{
-		To:     crypto.ToECDSAPub(common.FromHex(args.To)),
+		To:     crypto.ToECDSAPub(args.To),
 		TTL:    time.Duration(args.TTL) * time.Second,
 		Topics: NewTopics(args.Topics...),
 	}
 
 	// set sender identity
 	if len(args.From) > 0 {
-		if key := s.w.GetIdentity(crypto.ToECDSAPub(common.FromHex(args.From))); key != nil {
+		if key := s.w.GetIdentity(crypto.ToECDSAPub(args.From)); key != nil {
 			options.From = key
 		} else {
 			return false, fmt.Errorf("unknown identity to send from: %s", args.From)
@@ -217,28 +217,25 @@ type WhisperMessage struct {
 
 func (args *PostArgs) UnmarshalJSON(data []byte) (err error) {
 	var obj struct {
-		From     string        `json:"from"`
-		To       string        `json:"to"`
-		Topics   []string      `json:"topics"`
-		Payload  string        `json:"payload"`
-		Priority rpc.HexNumber `json:"priority"`
-		TTL      rpc.HexNumber `json:"ttl"`
+		From     hexutil.Bytes   `json:"from"`
+		To       hexutil.Bytes   `json:"to"`
+		Topics   []hexutil.Bytes `json:"topics"`
+		Payload  hexutil.Bytes   `json:"payload"`
+		Priority hexutil.Uint    `json:"priority"`
+		TTL      hexutil.Uint    `json:"ttl"`
 	}
-
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return err
 	}
-
 	args.From = obj.From
 	args.To = obj.To
 	args.Payload = obj.Payload
-	args.Priority = obj.Priority.Int64()
-	args.TTL = obj.TTL.Int64()
-
+	args.Priority = int64(obj.Priority) // TODO: should probably not overflow
+	args.TTL = int64(obj.TTL)
 	// decode topic strings
 	args.Topics = make([][]byte, len(obj.Topics))
 	for i, topic := range obj.Topics {
-		args.Topics[i] = common.FromHex(topic)
+		args.Topics[i] = topic
 	}
 
 	return nil
@@ -249,32 +246,20 @@ func (args *PostArgs) UnmarshalJSON(data []byte) (err error) {
 func (args *NewFilterArgs) UnmarshalJSON(b []byte) (err error) {
 	// Unmarshal the JSON message and sanity check
 	var obj struct {
-		To     interface{} `json:"to"`
-		From   interface{} `json:"from"`
-		Topics interface{} `json:"topics"`
+		To     *hexutil.Bytes `json:"to"`
+		From   *hexutil.Bytes `json :"from"`
+		Topics interface{}    `json:"topics"`
 	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return err
 	}
 
 	// Retrieve the simple data contents of the filter arguments
-	if obj.To == nil {
-		args.To = ""
-	} else {
-		argstr, ok := obj.To.(string)
-		if !ok {
-			return fmt.Errorf("to is not a string")
-		}
-		args.To = argstr
+	if obj.To != nil {
+		args.To = *obj.To
 	}
 	if obj.From == nil {
-		args.From = ""
-	} else {
-		argstr, ok := obj.From.(string)
-		if !ok {
-			return fmt.Errorf("from is not a string")
-		}
-		args.From = argstr
+		args.From = *obj.From
 	}
 	// Construct the nested topic array
 	if obj.Topics != nil {
@@ -316,7 +301,10 @@ func (args *NewFilterArgs) UnmarshalJSON(b []byte) (err error) {
 		for i, condition := range topics {
 			topicsDecoded[i] = make([][]byte, len(condition))
 			for j, topic := range condition {
-				topicsDecoded[i][j] = common.FromHex(topic)
+				topicsDecoded[i][j], err = hexutil.Decode(topic)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -401,8 +389,7 @@ func newWhisperFilter(id int, ref *Whisper) *whisperFilter {
 // NewWhisperMessage converts an internal message into an API version.
 func NewWhisperMessage(message *Message) WhisperMessage {
 	return WhisperMessage{
-		ref: message,
-
+		ref:     message,
 		Payload: common.ToHex(message.Payload),
 		From:    common.ToHex(crypto.FromECDSAPub(message.Recover())),
 		To:      common.ToHex(crypto.FromECDSAPub(message.To)),

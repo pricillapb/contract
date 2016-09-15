@@ -99,8 +99,8 @@ func (self *StateDB) StartRecord(thash, bhash common.Hash, ti int) {
 func (self *StateDB) AddLog(log *vm.Log) {
 	log.TxHash = self.thash
 	log.BlockHash = self.bhash
-	log.TxIndex = uint(self.txIndex)
-	log.Index = self.logSize
+	log.TxIndex = uint64(self.txIndex)
+	log.Index = uint64(self.logSize)
 	self.logs[self.thash] = append(self.logs[self.thash], log)
 	self.logSize++
 }

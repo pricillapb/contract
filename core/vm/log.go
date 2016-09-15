@@ -23,6 +23,7 @@ import (
 	"io"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/hexutil"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -39,20 +40,20 @@ type Log struct {
 	// Derived fields (don't reorder!).
 	BlockNumber uint64      // block in which the transaction was included
 	TxHash      common.Hash // hash of the transaction
-	TxIndex     uint        // index of the transaction in the block
+	TxIndex     uint64      // index of the transaction in the block
 	BlockHash   common.Hash // hash of the block in which the transaction was included
-	Index       uint        // index of the log in the receipt
+	Index       uint64      // index of the log in the receipt
 }
 
 type jsonLog struct {
 	Address     *common.Address `json:"address"`
 	Topics      *[]common.Hash  `json:"topics"`
-	Data        string          `json:"data"`
-	BlockNumber string          `json:"blockNumber"`
-	TxIndex     string          `json:"transactionIndex"`
+	Data        *hexutil.Bytes  `json:"data"`
+	BlockNumber *hexutil.Uint   `json:"blockNumber"`
+	TxIndex     *hexutil.Uint   `json:"transactionIndex"`
 	TxHash      *common.Hash    `json:"transactionHash"`
 	BlockHash   *common.Hash    `json:"blockHash"`
-	Index       string          `json:"logIndex"`
+	Index       *hexutil.Uint   `json:"logIndex"`
 }
 
 func NewLog(address common.Address, topics []common.Hash, data []byte, number uint64) *Log {
@@ -85,12 +86,12 @@ func (r *Log) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&jsonLog{
 		Address:     &r.Address,
 		Topics:      &r.Topics,
-		Data:        fmt.Sprintf("0x%x", r.Data),
-		BlockNumber: fmt.Sprintf("0x%x", r.BlockNumber),
-		TxIndex:     fmt.Sprintf("0x%x", r.TxIndex),
+		Data:        (*hexutil.Bytes)(&r.Data),
+		BlockNumber: (*hexutil.Uint)(&r.BlockNumber),
+		TxIndex:     (*hexutil.Uint)(&r.TxIndex),
 		TxHash:      &r.TxHash,
 		BlockHash:   &r.BlockHash,
-		Index:       fmt.Sprintf("0x%x", r.Index),
+		Index:       (*hexutil.Uint)(&r.Index),
 	})
 }
 
@@ -100,29 +101,20 @@ func (r *Log) UnmarshalJSON(input []byte) error {
 	if err := json.Unmarshal(input, &dec); err != nil {
 		return err
 	}
-	if dec.Address == nil || dec.Topics == nil || dec.Data == "" || dec.BlockNumber == "" ||
-		dec.TxIndex == "" || dec.TxHash == nil || dec.BlockHash == nil || dec.Index == "" {
+	if dec.Address == nil || dec.Topics == nil || dec.Data == nil || dec.BlockNumber == nil ||
+		dec.TxIndex == nil || dec.TxHash == nil || dec.BlockHash == nil || dec.Index == nil {
 		return errMissingLogFields
 	}
-	declog := Log{
-		Address:   *dec.Address,
-		Topics:    *dec.Topics,
-		TxHash:    *dec.TxHash,
-		BlockHash: *dec.BlockHash,
+	*r = Log{
+		Address:     *dec.Address,
+		Topics:      *dec.Topics,
+		TxHash:      *dec.TxHash,
+		BlockHash:   *dec.BlockHash,
+		Data:        *dec.Data,
+		BlockNumber: uint64(*dec.BlockNumber),
+		TxIndex:     uint64(*dec.TxIndex),
+		Index:       uint64(*dec.Index),
 	}
-	if _, err := fmt.Sscanf(dec.Data, "0x%x", &declog.Data); err != nil {
-		return fmt.Errorf("invalid hex log data")
-	}
-	if _, err := fmt.Sscanf(dec.BlockNumber, "0x%x", &declog.BlockNumber); err != nil {
-		return fmt.Errorf("invalid hex log block number")
-	}
-	if _, err := fmt.Sscanf(dec.TxIndex, "0x%x", &declog.TxIndex); err != nil {
-		return fmt.Errorf("invalid hex log tx index")
-	}
-	if _, err := fmt.Sscanf(dec.Index, "0x%x", &declog.Index); err != nil {
-		return fmt.Errorf("invalid hex log index")
-	}
-	*r = declog
 	return nil
 }
 

@@ -659,7 +659,7 @@ func (self *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain
 				continue
 			}
 			// Compute all the non-consensus fields of the receipts
-			transactions, logIndex := block.Transactions(), uint(0)
+			transactions, logIndex := block.Transactions(), uint64(0)
 			for j := 0; j < len(receipts); j++ {
 				// The transaction hash can be retrieved from the transaction itself
 				receipts[j].TxHash = transactions[j].Hash()
@@ -680,7 +680,7 @@ func (self *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain
 					receipts[j].Logs[k].BlockNumber = block.NumberU64()
 					receipts[j].Logs[k].BlockHash = block.Hash()
 					receipts[j].Logs[k].TxHash = receipts[j].TxHash
-					receipts[j].Logs[k].TxIndex = uint(j)
+					receipts[j].Logs[k].TxIndex = uint64(j)
 					receipts[j].Logs[k].Index = logIndex
 					logIndex++
 				}
