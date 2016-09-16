@@ -17,7 +17,7 @@ import (
 const ChequebookABI = `[{"constant":false,"inputs":[],"name":"kill","outputs":[],"type":"function"},{"constant":true,"inputs":[{"name":"","type":"address"}],"name":"sent","outputs":[{"name":"","type":"uint256"}],"type":"function"},{"constant":false,"inputs":[{"name":"beneficiary","type":"address"},{"name":"amount","type":"uint256"},{"name":"sig_v","type":"uint8"},{"name":"sig_r","type":"bytes32"},{"name":"sig_s","type":"bytes32"}],"name":"cash","outputs":[],"type":"function"},{"anonymous":false,"inputs":[{"indexed":false,"name":"deadbeat","type":"address"}],"name":"Overdraft","type":"event"}]`
 
 // ChequebookBin is the compiled bytecode used for deploying new contracts.
-const ChequebookBin = `0x606060405260008054600160a060020a031916331790556101ff806100246000396000f3606060405260e060020a600035046341c0e1b581146100315780637bf786f814610059578063fbf788d614610071575b005b61002f60005433600160a060020a03908116911614156100bd57600054600160a060020a0316ff5b6100ab60043560016020526000908152604090205481565b61002f600435602435604435606435608435600160a060020a03851660009081526001602052604081205485116100bf575b505050505050565b60408051918252519081900360200190f35b565b50604080516c0100000000000000000000000030600160a060020a0390811682028352881602601482015260288101869052815190819003604801812080825260ff861660208381019190915282840186905260608301859052925190926001926080818101939182900301816000866161da5a03f11561000257505060405151600054600160a060020a0390811691161461015a576100a3565b600160a060020a038681166000908152600160205260409020543090911631908603106101b357604060008181208790559051600160a060020a0388169190819081818181818881f1935050505015156100a357610002565b60005460408051600160a060020a03929092168252517f2250e2993c15843b32621c89447cc589ee7a9f049c026986e545d3c2c0c6f9789181900360200190a185600160a060020a0316ff`
+const ChequebookBin = "```@R`\x00\x80T`\x01`\xa0`\x02\n\x03\x19\x163\x17\x90Ua\x01\xff\x80a\x00$`\x009`\x00\xf3```@R`\xe0`\x02\n`\x005\x04cA\xc0ᵁ\x14a\x001W\x80c{\xf7\x86\xf8\x14a\x00YW\x80c\xfb\xf7\x88\xd6\x14a\x00qW[\x00[a\x00/`\x00T3`\x01`\xa0`\x02\n\x03\x90\x81\x16\x91\x16\x14\x15a\x00\xbdW`\x00T`\x01`\xa0`\x02\n\x03\x16\xff[a\x00\xab`\x045`\x01` R`\x00\x90\x81R`@\x90 T\x81V[a\x00/`\x045`$5`D5`d5`\x845`\x01`\xa0`\x02\n\x03\x85\x16`\x00\x90\x81R`\x01` R`@\x81 T\x85\x11a\x00\xbfW[PPPPPPV[`@\x80Q\x91\x82RQ\x90\x81\x90\x03` \x01\x90\xf3[V[P`@\x80Ql\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x000`\x01`\xa0`\x02\n\x03\x90\x81\x16\x82\x02\x83R\x88\x16\x02`\x14\x82\x01R`(\x81\x01\x86\x90R\x81Q\x90\x81\x90\x03`H\x01\x81 \x80\x82R`\xff\x86\x16` \x83\x81\x01\x91\x90\x91R\x82\x84\x01\x86\x90R``\x83\x01\x85\x90R\x92Q\x90\x92`\x01\x92`\x80\x81\x81\x01\x93\x91\x82\x90\x03\x01\x81`\x00\x86aa\xdaZ\x03\xf1\x15a\x00\x02WPP`@QQ`\x00T`\x01`\xa0`\x02\n\x03\x90\x81\x16\x91\x16\x14a\x01ZWa\x00\xa3V[`\x01`\xa0`\x02\n\x03\x86\x81\x16`\x00\x90\x81R`\x01` R`@\x90 T0\x90\x91\x161\x90\x86\x03\x10a\x01\xb3W`@`\x00\x81\x81 \x87\x90U\x90Q`\x01`\xa0`\x02\n\x03\x88\x16\x91\x90\x81\x90\x81\x81\x81\x81\x81\x88\x81\xf1\x93PPPP\x15\x15a\x00\xa3Wa\x00\x02V[`\x00T`@\x80Q`\x01`\xa0`\x02\n\x03\x92\x90\x92\x16\x82RQ\u007f\"P\xe2\x99<\x15\x84;2b\x1c\x89D|ŉ\xeez\x9f\x04\x9c\x02i\x86\xe5E\xd3\xc2\xc0\xc6\xf9x\x91\x81\x90\x03` \x01\x90\xa1\x85`\x01`\xa0`\x02\n\x03\x16\xff"
 
 // DeployChequebook deploys a new Ethereum contract, binding an instance of Chequebook to it.
 func DeployChequebook(auth *bind.TransactOpts, backend bind.ContractBackend) (common.Address, *types.Transaction, *Chequebook, error) {
@@ -25,7 +25,7 @@ func DeployChequebook(auth *bind.TransactOpts, backend bind.ContractBackend) (co
 	if err != nil {
 		return common.Address{}, nil, nil, err
 	}
-	address, tx, contract, err := bind.DeployContract(auth, parsed, common.FromHex(ChequebookBin), backend)
+	address, tx, contract, err := bind.DeployContract(auth, parsed, []byte(ChequebookBin), backend)
 	if err != nil {
 		return common.Address{}, nil, nil, err
 	}
@@ -231,7 +231,7 @@ func (_Chequebook *ChequebookTransactorSession) Kill() (*types.Transaction, erro
 const MortalABI = `[{"constant":false,"inputs":[],"name":"kill","outputs":[],"type":"function"}]`
 
 // MortalBin is the compiled bytecode used for deploying new contracts.
-const MortalBin = `0x606060405260008054600160a060020a03191633179055605c8060226000396000f3606060405260e060020a600035046341c0e1b58114601a575b005b60186000543373ffffffffffffffffffffffffffffffffffffffff90811691161415605a5760005473ffffffffffffffffffffffffffffffffffffffff16ff5b56`
+const MortalBin = "```@R`\x00\x80T`\x01`\xa0`\x02\n\x03\x19\x163\x17\x90U`\\\x80`\"`\x009`\x00\xf3```@R`\xe0`\x02\n`\x005\x04cA\xc0ᵁ\x14`\x1aW[\x00[`\x18`\x00T3s\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x90\x81\x16\x91\x16\x14\x15`ZW`\x00Ts\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x16\xff[V"
 
 // DeployMortal deploys a new Ethereum contract, binding an instance of Mortal to it.
 func DeployMortal(auth *bind.TransactOpts, backend bind.ContractBackend) (common.Address, *types.Transaction, *Mortal, error) {
@@ -239,7 +239,7 @@ func DeployMortal(auth *bind.TransactOpts, backend bind.ContractBackend) (common
 	if err != nil {
 		return common.Address{}, nil, nil, err
 	}
-	address, tx, contract, err := bind.DeployContract(auth, parsed, common.FromHex(MortalBin), backend)
+	address, tx, contract, err := bind.DeployContract(auth, parsed, []byte(MortalBin), backend)
 	if err != nil {
 		return common.Address{}, nil, nil, err
 	}
@@ -398,7 +398,7 @@ func (_Mortal *MortalTransactorSession) Kill() (*types.Transaction, error) {
 const OwnedABI = `[{"inputs":[],"type":"constructor"}]`
 
 // OwnedBin is the compiled bytecode used for deploying new contracts.
-const OwnedBin = `0x606060405260008054600160a060020a0319163317905560068060226000396000f3606060405200`
+const OwnedBin = "```@R`\x00\x80T`\x01`\xa0`\x02\n\x03\x19\x163\x17\x90U`\x06\x80`\"`\x009`\x00\xf3```@R\x00"
 
 // DeployOwned deploys a new Ethereum contract, binding an instance of Owned to it.
 func DeployOwned(auth *bind.TransactOpts, backend bind.ContractBackend) (common.Address, *types.Transaction, *Owned, error) {
@@ -406,7 +406,7 @@ func DeployOwned(auth *bind.TransactOpts, backend bind.ContractBackend) (common.
 	if err != nil {
 		return common.Address{}, nil, nil, err
 	}
-	address, tx, contract, err := bind.DeployContract(auth, parsed, common.FromHex(OwnedBin), backend)
+	address, tx, contract, err := bind.DeployContract(auth, parsed, []byte(OwnedBin), backend)
 	if err != nil {
 		return common.Address{}, nil, nil, err
 	}

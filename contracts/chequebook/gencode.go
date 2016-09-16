@@ -63,7 +63,7 @@ func main() {
 
 // ContractDeployedCode is used to detect suicides. This constant needs to be
 // updated when the contract code is changed.
-const ContractDeployedCode = "%#x"
+const ContractDeployedCode = %q
 `, code)
 	if err := ioutil.WriteFile("contract/code.go", []byte(content), 0644); err != nil {
 		panic(err)

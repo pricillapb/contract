@@ -638,5 +638,5 @@ func ValidateCode(ctx context.Context, b Backend, address common.Address) (ok bo
 	if err != nil {
 		return false, err
 	}
-	return bytes.Equal(code, common.FromHex(contract.ContractDeployedCode)), nil
+	return bytes.Equal(code, []byte(contract.ContractDeployedCode)), nil
 }

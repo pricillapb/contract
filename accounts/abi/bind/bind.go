@@ -29,6 +29,7 @@ import (
 	"unicode"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/hexutil"
 	"golang.org/x/tools/imports"
 )
 
@@ -85,10 +86,15 @@ func Bind(types []string, abis []string, bytecodes []string, pkg string) (string
 				transacts[original.Name] = &tmplMethod{Original: original, Normalized: normalized, Structured: structured(original)}
 			}
 		}
+
+		bytecode, err := hexutil.Decode(bytecodes[i])
+		if err != nil {
+			return "", fmt.Errorf("invalid bytecode for contract %s: %v", types[i], err)
+		}
 		contracts[types[i]] = &tmplContract{
 			Type:        capitalise(types[i]),
 			InputABI:    strippedABI,
-			InputBin:    strings.TrimSpace(bytecodes[i]),
+			InputBin:    fmt.Sprintf("%q", bytecode),
 			Constructor: evmABI.Constructor,
 			Calls:       calls,
 			Transacts:   transacts,

@@ -56,17 +56,17 @@ package {{.Package}}
 
 	{{if .InputBin}}
 		// {{.Type}}Bin is the compiled bytecode used for deploying new contracts.
-		const {{.Type}}Bin = ` + "`" + `{{.InputBin}}` + "`" + `
+		const {{.Type}}Bin = {{.InputBin}}
 
 		// Deploy{{.Type}} deploys a new Ethereum contract, binding an instance of {{.Type}} to it.
 		func Deploy{{.Type}}(auth *bind.TransactOpts, backend bind.ContractBackend {{range .Constructor.Inputs}}, {{.Name}} {{bindtype .Type}}{{end}}) (common.Address, *types.Transaction, *{{.Type}}, error) {
 		  parsed, err := abi.JSON(strings.NewReader({{.Type}}ABI))
 		  if err != nil {
-		    return common.Address{}, nil, nil, err
+			return common.Address{}, nil, nil, err
 		  }
-		  address, tx, contract, err := bind.DeployContract(auth, parsed, common.FromHex({{.Type}}Bin), backend {{range .Constructor.Inputs}}, {{.Name}}{{end}})
+		  address, tx, contract, err := bind.DeployContract(auth, parsed, []byte({{.Type}}Bin), backend {{range .Constructor.Inputs}}, {{.Name}}{{end}})
 		  if err != nil {
-		    return common.Address{}, nil, nil, err
+			return common.Address{}, nil, nil, err
 		  }
 		  return address, tx, &{{.Type}}{ {{.Type}}Caller: {{.Type}}Caller{contract: contract}, {{.Type}}Transactor: {{.Type}}Transactor{contract: contract} }, nil
 		}
@@ -129,7 +129,7 @@ package {{.Package}}
 	func New{{.Type}}(address common.Address, backend bind.ContractBackend) (*{{.Type}}, error) {
 	  contract, err := bind{{.Type}}(address, backend, backend)
 	  if err != nil {
-	    return nil, err
+		return nil, err
 	  }
 	  return &{{.Type}}{ {{.Type}}Caller: {{.Type}}Caller{contract: contract}, {{.Type}}Transactor: {{.Type}}Transactor{contract: contract} }, nil
 	}
@@ -138,7 +138,7 @@ package {{.Package}}
 	func New{{.Type}}Caller(address common.Address, caller bind.ContractCaller) (*{{.Type}}Caller, error) {
 	  contract, err := bind{{.Type}}(address, caller, nil)
 	  if err != nil {
-	    return nil, err
+		return nil, err
 	  }
 	  return &{{.Type}}Caller{contract: contract}, nil
 	}
@@ -147,7 +147,7 @@ package {{.Package}}
 	func New{{.Type}}Transactor(address common.Address, transactor bind.ContractTransactor) (*{{.Type}}Transactor, error) {
 	  contract, err := bind{{.Type}}(address, nil, transactor)
 	  if err != nil {
-	    return nil, err
+		return nil, err
 	  }
 	  return &{{.Type}}Transactor{contract: contract}, nil
 	}
@@ -156,7 +156,7 @@ package {{.Package}}
 	func bind{{.Type}}(address common.Address, caller bind.ContractCaller, transactor bind.ContractTransactor) (*bind.BoundContract, error) {
 	  parsed, err := abi.JSON(strings.NewReader({{.Type}}ABI))
 	  if err != nil {
-	    return nil, err
+		return nil, err
 	  }
 	  return bind.NewBoundContract(address, parsed, caller, transactor), nil
 	}
