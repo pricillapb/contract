@@ -213,11 +213,16 @@ func (am *Manager) TimedUnlock(a Account, passphrase string, timeout time.Durati
 	return nil
 }
 
-func (am *Manager) getDecryptedKey(a Account, auth string) (Account, *Key, error) {
+func (am *Manager) FindUnique(a Account) (Account, error) {
 	am.cache.maybeReload()
 	am.cache.mu.Lock()
 	a, err := am.cache.find(a)
 	am.cache.mu.Unlock()
+	return a, err
+}
+
+func (am *Manager) getDecryptedKey(a Account, auth string) (Account, *Key, error) {
+	a, err := am.FindUnique(a)
 	if err != nil {
 		return a, nil, err
 	}
