@@ -193,7 +193,7 @@ func decryptStoreAccount(accman *accounts.Manager, account string) *ecdsa.Privat
 	var a accounts.Account
 	var err error
 	if common.IsHexAddress(account) {
-		a, err = accman.FindUnique(accounts.Account{Address: common.HexToAddress(account)})
+		a, err = accman.Find(accounts.Account{Address: common.HexToAddress(account)})
 	} else if ix, ixerr := strconv.Atoi(account); ixerr == nil {
 		a, err = accman.AccountByIndex(ix)
 	} else {
