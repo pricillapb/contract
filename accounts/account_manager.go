@@ -213,7 +213,8 @@ func (am *Manager) TimedUnlock(a Account, passphrase string, timeout time.Durati
 	return nil
 }
 
-func (am *Manager) FindUnique(a Account) (Account, error) {
+// Find resolves the given account into a unique entry in the keystore.
+func (am *Manager) Find(a Account) (Account, error) {
 	am.cache.maybeReload()
 	am.cache.mu.Lock()
 	a, err := am.cache.find(a)
@@ -222,7 +223,7 @@ func (am *Manager) FindUnique(a Account) (Account, error) {
 }
 
 func (am *Manager) getDecryptedKey(a Account, auth string) (Account, *Key, error) {
-	a, err := am.FindUnique(a)
+	a, err := am.Find(a)
 	if err != nil {
 		return a, nil, err
 	}
