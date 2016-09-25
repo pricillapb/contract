@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/logger/glog"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/hashicorp/golang-lru"
 )
 
 // The starting nonce determines the default nonce when new accounts are being
@@ -42,9 +43,10 @@ const maxJournalLength = 20
 // * Contracts
 // * Accounts
 type StateDB struct {
-	db        ethdb.Database
-	trie      *trie.SecureTrie
-	pastTries []*trie.SecureTrie
+	db            ethdb.Database
+	trie          *trie.SecureTrie
+	pastTries     []*trie.SecureTrie
+	codeSizeCache *lru.Cache
 
 	// This map holds 'live' objects, which will get modified
 	// while processing a state transition.
@@ -65,12 +67,14 @@ func New(root common.Hash, db ethdb.Database) (*StateDB, error) {
 	if err != nil {
 		return nil, err
 	}
+	ccs, _ := lru.New(80000)
 	return &StateDB{
-		db:           db,
-		trie:         tr,
-		stateObjects: make(map[common.Address]*StateObject),
-		refund:       new(big.Int),
-		logs:         make(map[common.Hash]vm.Logs),
+		db:            db,
+		trie:          tr,
+		codeSizeCache: ccs,
+		stateObjects:  make(map[common.Address]*StateObject),
+		refund:        new(big.Int),
+		logs:          make(map[common.Hash]vm.Logs),
 	}, nil
 }
 
@@ -82,12 +86,13 @@ func (self *StateDB) Reset(root common.Hash) error {
 		return err
 	}
 	*self = StateDB{
-		db:           self.db,
-		trie:         tr,
-		pastTries:    self.pastTries,
-		stateObjects: make(map[common.Address]*StateObject),
-		refund:       new(big.Int),
-		logs:         make(map[common.Hash]vm.Logs),
+		db:            self.db,
+		trie:          tr,
+		pastTries:     self.pastTries,
+		codeSizeCache: self.codeSizeCache,
+		stateObjects:  make(map[common.Address]*StateObject),
+		refund:        new(big.Int),
+		logs:          make(map[common.Hash]vm.Logs),
 	}
 	return nil
 }
@@ -195,9 +200,14 @@ func (self *StateDB) GetCode(addr common.Address) []byte {
 }
 
 func (self *StateDB) GetCodeSize(addr common.Address) int {
+	if size, ok := self.codeSizeCache.Get(addr); ok {
+		return size.(int)
+	}
 	stateObject := self.GetStateObject(addr)
 	if stateObject != nil {
-		return stateObject.CodeSize(self.db)
+		size := stateObject.CodeSize(self.db)
+		self.codeSizeCache.Add(addr, size)
+		return size
 	}
 	return 0
 }
