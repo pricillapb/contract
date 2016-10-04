@@ -97,7 +97,7 @@ func (b *SimulatedBackend) ContractCall(contract common.Address, data []byte, pe
 		statedb *state.StateDB
 	)
 	if pending {
-		block, statedb = b.pendingBlock, b.pendingState.Copy()
+		block, statedb = b.pendingBlock, b.pendingState
 	} else {
 		block = b.blockchain.CurrentBlock()
 		statedb, _ = b.blockchain.State()
@@ -122,6 +122,7 @@ func (b *SimulatedBackend) ContractCall(contract common.Address, data []byte, pe
 	// Execute the call and return
 	vmenv := core.NewEnv(statedb, chainConfig, b.blockchain, msg, block.Header(), vm.Config{})
 	gaspool := new(core.GasPool).AddGas(common.MaxBig)
+	defer statedb.RevertToSnapshot(statedb.Snapshot())
 
 	out, _, err := core.ApplyMessage(vmenv, msg, gaspool)
 	return out, err
@@ -146,7 +147,7 @@ func (b *SimulatedBackend) EstimateGasLimit(sender common.Address, contract *com
 	// Create a copy of the currently pending state db to screw around with
 	var (
 		block   = b.pendingBlock
-		statedb = b.pendingState.Copy()
+		statedb = b.pendingState
 	)
 	// If there's no code to interact with, respond with an appropriate error
 	if contract != nil {
@@ -154,6 +155,9 @@ func (b *SimulatedBackend) EstimateGasLimit(sender common.Address, contract *com
 			return nil, bind.ErrNoCode
 		}
 	}
+
+	defer b.pendingState.RevertToSnapshot(b.pendingState.Snapshot())
+
 	// Set infinite balance to the a fake caller account
 	from := statedb.GetOrNewStateObject(sender)
 	from.SetBalance(common.MaxBig)
