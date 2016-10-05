@@ -275,10 +275,10 @@ func (self *StateDB) GetState(a common.Address, b common.Hash) common.Hash {
 	return common.Hash{}
 }
 
-func (self *StateDB) IsDeleted(addr common.Address) bool {
+func (self *StateDB) HasSuicided(addr common.Address) bool {
 	stateObject := self.GetStateObject(addr)
 	if stateObject != nil {
-		return stateObject.remove
+		return stateObject.suicided
 	}
 	return false
 }
@@ -327,17 +327,17 @@ func (self *StateDB) SetState(addr common.Address, key common.Hash, value common
 //
 // The account's state object is still available until the state is committed,
 // GetStateObject will return a non-nil account after Delete.
-func (self *StateDB) Delete(addr common.Address) bool {
+func (self *StateDB) Suicide(addr common.Address) bool {
 	stateObject := self.GetStateObject(addr)
 	if stateObject == nil {
 		return false
 	}
-	self.journal = append(self.journal, deleteAccountChange{
+	self.journal = append(self.journal, suicideChange{
 		account:     &addr,
-		prev:        stateObject.remove,
+		prev:        stateObject.suicided,
 		prevbalance: new(big.Int).Set(stateObject.Balance()),
 	})
-	stateObject.markForDeletion()
+	stateObject.markSuicided()
 	stateObject.data.Balance = new(big.Int)
 	return true
 }
@@ -517,7 +517,7 @@ func (s *StateDB) IntermediateRoot() common.Hash {
 	s.refund = new(big.Int)
 	for addr, _ := range s.stateObjectsDirty {
 		stateObject := s.stateObjects[addr]
-		if stateObject.remove {
+		if stateObject.suicided {
 			s.deleteStateObject(stateObject)
 		} else {
 			stateObject.updateRoot(s.db)
@@ -544,7 +544,7 @@ func (s *StateDB) DeleteSuicides() {
 
 		// If the object has been removed by a suicide
 		// flag the object as deleted.
-		if stateObject.remove {
+		if stateObject.suicided {
 			stateObject.deleted = true
 		}
 		delete(s.stateObjectsDirty, addr)
@@ -579,7 +579,7 @@ func (s *StateDB) commit(dbw trie.DatabaseWriter) (root common.Hash, err error) 
 
 	// Commit objects to the trie.
 	for addr, stateObject := range s.stateObjects {
-		if stateObject.remove {
+		if stateObject.suicided {
 			// If the object has been removed, don't bother syncing it
 			// and just mark it for deletion in the trie.
 			s.deleteStateObject(stateObject)
