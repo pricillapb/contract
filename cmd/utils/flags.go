@@ -672,11 +672,6 @@ func MakeSystemNode(name, version string, relconf release.Config, extra []byte, 
 	rand := rand.New(rand.NewSource(time.Now().UnixNano()))
 	// get enabled jit flag
 	jitEnabled := ctx.GlobalBool(VMEnableJitFlag.Name)
-	// if the jit is not enabled enable it for 10 pct of the people
-	if !jitEnabled && rand.Float64() < 0.1 {
-		jitEnabled = true
-		glog.V(logger.Info).Infoln("You're one of the lucky few that will try out the JIT VM (random). If you get a consensus failure please be so kind to report this incident with the block hash that failed. You can switch to the regular VM by setting --jitvm=false")
-	}
 
 	ethConf := &eth.Config{
 		ChainConfig:             MustMakeChainConfig(ctx),
