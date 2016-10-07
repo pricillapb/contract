@@ -23,7 +23,9 @@ import (
 	"io"
 	"math/big"
 	mrand "math/rand"
+	"os"
 	"runtime"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -842,6 +844,8 @@ func (self *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 		nonceChecked = make([]bool, len(chain))
 	)
 
+	defer stopProfile()
+
 	// Start the parallel nonce verifier.
 	nonceAbort, nonceResults := verifyNoncesFromBlocks(self.pow, chain)
 	defer close(nonceAbort)
@@ -854,6 +858,8 @@ func (self *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 		}
 
 		bstart := time.Now()
+		startProfile(block)
+
 		// Wait for block i's nonce to be verified before processing
 		// its state transition.
 		for !nonceChecked[i] {
@@ -987,6 +993,45 @@ func (self *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 	go self.postChainEvents(events, coalescedLogs)
 
 	return 0, nil
+}
+
+var (
+	profile        *os.File
+	profileName    string
+	profileStarted time.Time
+)
+
+func startProfile(b *types.Block) {
+	stopProfile()
+
+	name := fmt.Sprintf("block-%d-%s.cpu", b.Number(), b.Hash().Hex())
+	file, err := os.Create(name)
+	if err != nil {
+		glog.Warningf("can't do profile %s: %v", name, err)
+		return
+	}
+	if err := pprof.StartCPUProfile(file); err != nil {
+		file.Close()
+		glog.Warningf("can't do profile %s: %v", name, err)
+		return
+	}
+	profile = file
+	profileName = name
+	profileStarted = time.Now()
+}
+
+func stopProfile() {
+	if profile == nil {
+		return
+	}
+	pprof.StopCPUProfile()
+	profile.Close()
+	if time.Since(profileStarted) < 1*time.Second {
+		glog.Infof("deleting profile %s (fast block)", profileName)
+		os.Remove(profileName)
+	}
+	profile = nil
+	profileName = ""
 }
 
 // reorgs takes two blocks, an old chain and a new chain and will reconstruct the blocks and inserts them
