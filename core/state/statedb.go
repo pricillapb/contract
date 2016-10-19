@@ -651,9 +651,6 @@ func (self *StateDB) readAccountCache(addr common.Address) *Account {
 	}
 	// Cache entries are valid if the block they were last modified in
 	// is in the current canonical chain.
-	if data.BlockNum == self.bnum && data.BlockHash == self.bhash {
-		return &data.Account
-	}
 	if self.cacheValidator.IsCanonChainBlock(data.BlockNum, data.BlockHash) {
 		return &data.Account
 	}
