@@ -41,6 +41,8 @@ var StartingNonce uint64
 // Trie cache generation limit after which to evic trie nodes from memory.
 var MaxTrieCacheGen = uint16(120)
 
+var accountCacheKeyPrefix = []byte("accountcache:")
+
 const (
 	// Number of past tries to keep. This value is chosen such that
 	// reasonable chain reorg depths will hit an existing trie.
@@ -55,16 +57,22 @@ type revision struct {
 	journalIndex int
 }
 
+// CacheValidator can check whether a certain block is in the current canonical chain.
+type CacheValidator interface {
+	IsCanonChainBlock(uint64, common.Hash) bool
+}
+
 // StateDBs within the ethereum protocol are used to store anything
 // within the merkle trie. StateDBs take care of caching and storing
 // nested states. It's the general query interface to retrieve:
 // * Contracts
 // * Accounts
 type StateDB struct {
-	db            ethdb.Database
-	trie          *trie.SecureTrie
-	pastTries     []*trie.SecureTrie
-	codeSizeCache *lru.Cache
+	db             ethdb.Database
+	trie           *trie.SecureTrie
+	pastTries      []*trie.SecureTrie
+	codeSizeCache  *lru.Cache
+	cacheValidator CacheValidator
 
 	// This map holds 'live' objects, which will get modified while processing a state transition.
 	stateObjects      map[common.Address]*StateObject
@@ -174,6 +182,11 @@ func (self *StateDB) pushTrie(t *trie.SecureTrie) {
 	} else {
 		self.pastTries = append(self.pastTries, t)
 	}
+}
+
+// SetCanonChain sets the validator which is used to check disk cache entry validity.
+func (self *StateDB) SetCacheValidator(cv CacheValidator) {
+	self.cacheValidator = cv
 }
 
 // SetBlockContext sets metadata of the transaction being processed.
@@ -385,15 +398,18 @@ func (self *StateDB) GetStateObject(addr common.Address) (stateObject *StateObje
 		return obj
 	}
 
-	// Load the object from the database.
-	enc := self.trie.Get(addr[:])
-	if len(enc) == 0 {
-		return nil
-	}
 	var data Account
-	if err := rlp.DecodeBytes(enc, &data); err != nil {
-		glog.Errorf("can't decode object at %x: %v", addr[:], err)
-		return nil
+	if cached := self.readAccountCache(addr); cached != nil {
+		data = *cached
+	} else {
+		enc := self.trie.Get(addr[:])
+		if len(enc) == 0 {
+			return nil
+		}
+		if err := rlp.DecodeBytes(enc, &data); err != nil {
+			glog.Errorf("can't decode object at %x: %v", addr[:], err)
+			return nil
+		}
 	}
 	// Insert into the live set.
 	obj := newObject(self, addr, data, self.MarkStateObjectDirty)
@@ -593,6 +609,7 @@ func (s *StateDB) commit(dbw trie.DatabaseWriter) (root common.Hash, err error) 
 			// If the object has been removed, don't bother syncing it
 			// and just mark it for deletion in the trie.
 			s.deleteStateObject(stateObject)
+			s.deleteAccountCache(addr, dbw)
 		} else if _, ok := s.stateObjectsDirty[addr]; ok {
 			// Write any contract code associated with the state object
 			if stateObject.code != nil && stateObject.dirtyCode {
@@ -607,6 +624,7 @@ func (s *StateDB) commit(dbw trie.DatabaseWriter) (root common.Hash, err error) 
 			}
 			// Update the object in the main account trie.
 			s.updateStateObject(stateObject)
+			s.writeAccountCache(stateObject, dbw)
 		}
 		delete(s.stateObjectsDirty, addr)
 	}
@@ -616,4 +634,37 @@ func (s *StateDB) commit(dbw trie.DatabaseWriter) (root common.Hash, err error) 
 		s.pushTrie(s.trie)
 	}
 	return root, err
+}
+
+func (self *StateDB) readAccountCache(addr common.Address) *Account {
+	if self.cacheValidator == nil {
+		return nil
+	}
+	enc, _ := self.db.Get(append(accountCacheKeyPrefix, addr[:]...))
+	if len(enc) == 0 {
+		return nil
+	}
+	var data cachedAccount
+	if err := rlp.DecodeBytes(enc, &data); err != nil {
+		glog.Errorf("can't decode cached object at %x: %v", addr[:], err)
+		return nil
+	}
+	// Cache entries are valid if the block they were last modified in
+	// is in the current canonical chain.
+	if data.BlockNum == self.bnum && data.BlockHash == self.bhash {
+		return &data.Account
+	}
+	if self.cacheValidator.IsCanonChainBlock(data.BlockNum, data.BlockHash) {
+		return &data.Account
+	}
+	return nil
+}
+
+func (s *StateDB) writeAccountCache(so *StateObject, dbw trie.DatabaseWriter) error {
+	enc, _ := rlp.EncodeToBytes(cachedAccount{so.data, s.bnum, s.bhash})
+	return dbw.Put(append(accountCacheKeyPrefix, so.address[:]...), enc)
+}
+
+func (s *StateDB) deleteAccountCache(addr common.Address, dbw trie.DatabaseWriter) error {
+	return dbw.Delete(append(accountCacheKeyPrefix, addr[:]...))
 }

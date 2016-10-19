@@ -71,6 +71,8 @@ type DatabaseWriter interface {
 	// Implementations must not hold onto the value bytes, the trie
 	// will reuse the slice across calls to Put.
 	Put(key, value []byte) error
+	// Delete removes a mapping.
+	Delete(key []byte) error
 }
 
 // Trie is a Merkle Patricia Trie.

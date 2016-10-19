@@ -100,6 +100,12 @@ type Account struct {
 	CodeHash []byte
 }
 
+type cachedAccount struct {
+	Account
+	BlockNum  uint64
+	BlockHash common.Hash
+}
+
 // newObject creates a state object.
 func newObject(db *StateDB, address common.Address, data Account, onDirty func(addr common.Address)) *StateObject {
 	if data.Balance == nil {
