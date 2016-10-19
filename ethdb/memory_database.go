@@ -111,6 +111,14 @@ func (b *memBatch) Put(key, value []byte) error {
 	return nil
 }
 
+func (b *memBatch) Delete(key []byte) error {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	b.writes = append(b.writes, kv{common.CopyBytes(key), nil})
+	return nil
+}
+
 func (b *memBatch) Write() error {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
@@ -119,7 +127,11 @@ func (b *memBatch) Write() error {
 	defer b.db.lock.Unlock()
 
 	for _, kv := range b.writes {
-		b.db.db[string(kv.k)] = kv.v
+		if len(kv.v) == 0 {
+			delete(b.db.db, string(kv.k))
+		} else {
+			b.db.db[string(kv.k)] = kv.v
+		}
 	}
 	return nil
 }
