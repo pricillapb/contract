@@ -73,10 +73,13 @@ type StateDB struct {
 	// The refund counter, also used by state transitioning.
 	refund *big.Int
 
+	// Block/Transaction context. This is added to logs.
 	thash, bhash common.Hash
+	bnum         uint64
 	txIndex      int
-	logs         map[common.Hash]vm.Logs
-	logSize      uint
+
+	logs    map[common.Hash]vm.Logs
+	logSize uint
 
 	// Journal of state modifications. This is the backbone of
 	// Snapshot and RevertToSnapshot.
@@ -173,12 +176,16 @@ func (self *StateDB) pushTrie(t *trie.SecureTrie) {
 	}
 }
 
-func (self *StateDB) StartRecord(thash, bhash common.Hash, ti int) {
-	self.thash = thash
-	self.bhash = bhash
-	self.txIndex = ti
+// SetBlockContext sets metadata of the transaction being processed.
+// This metadata is written into logs added.
+func (self *StateDB) SetTxContext(blockHash common.Hash, blockNum uint64, txHash common.Hash, txIndex int) {
+	self.bhash = blockHash
+	self.bnum = blockNum
+	self.thash = txHash
+	self.txIndex = txIndex
 }
 
+// AddLog adds a log. The current transaction context is written into fields of log.
 func (self *StateDB) AddLog(log *vm.Log) {
 	self.journal = append(self.journal, addLogChange{txhash: self.thash})
 
@@ -190,10 +197,12 @@ func (self *StateDB) AddLog(log *vm.Log) {
 	self.logSize++
 }
 
-func (self *StateDB) GetLogs(hash common.Hash) vm.Logs {
-	return self.logs[hash]
+// GetLogs retrieves all logs for the given transaction since the last commit.
+func (self *StateDB) GetLogs(txHash common.Hash) vm.Logs {
+	return self.logs[txHash]
 }
 
+// Logs returns all logs that were added since the last commit.
 func (self *StateDB) Logs() vm.Logs {
 	var logs vm.Logs
 	for _, lgs := range self.logs {
