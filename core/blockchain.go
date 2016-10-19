@@ -197,13 +197,13 @@ func (self *BlockChain) loadLastState() error {
 			self.currentFastBlock = block
 		}
 	}
-	// Initialize a statedb cache to ensure singleton account bloom filter generation
+	// Open the state.
 	statedb, err := state.New(self.currentBlock.Root(), self.chainDb)
 	if err != nil {
 		return err
 	}
+	statedb.SetCacheValidator(self)
 	self.stateCache = statedb
-	self.stateCache.GetAccount(common.Address{})
 
 	// Issue a status log for the user
 	headerTd := self.GetTd(currentHeader.Hash(), currentHeader.Number.Uint64())
@@ -543,6 +543,11 @@ func (self *BlockChain) GetBlockByNumber(number uint64) *types.Block {
 		return nil
 	}
 	return self.GetBlock(hash, number)
+}
+
+// IsCanonChainBlock checks whether the given block is in the current canonical chain.
+func (self *BlockChain) IsCanonChainBlock(number uint64, hash common.Hash) bool {
+	return GetCanonicalHash(self.chainDb, number) == hash
 }
 
 // [deprecated by eth/62]
