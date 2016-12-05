@@ -22,37 +22,50 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/light"
+	"github.com/ethereum/go-ethereum/logger"
+	"github.com/ethereum/go-ethereum/logger/glog"
+	"github.com/ethereum/go-ethereum/p2p/discover"
 	"golang.org/x/net/context"
 )
 
 const (
 	//forceSyncCycle      = 10 * time.Second // Time interval to force syncs, even if few peers are available
-	minDesiredPeerCount = 5 // Amount of peers desired to start syncing
+	idealPeerCount = 2 // Amount of peers desired to start syncing
 )
 
 // syncer is responsible for periodically synchronising with the network, both
 // downloading hashes and blocks as well as handling the announcement handler.
 func (pm *ProtocolManager) syncer() {
-	// Start and ensure cleanup of sync mechanisms
-	//pm.fetcher.Start()
-	//defer pm.fetcher.Stop()
 	defer pm.downloader.Terminate()
 
-	// Wait for different events to fire synchronisation operations
-	//forceSync := time.Tick(forceSyncCycle)
+	var (
+		searchStop   chan struct{}
+		searchResult = make(chan string, 100)
+		added        = make(map[discover.NodeID]bool)
+	)
 	for {
-		select {
-		case <-pm.newPeerCh:
-/*			// Make sure we have peers to select from, then sync
-			if pm.peers.Len() < minDesiredPeerCount {
-				break
+		if pm.peers.Len() >= idealPeerCount {
+			if searchStop != nil {
+				close(searchStop)
+				searchStop = nil
 			}
-			go pm.synchronise(pm.peers.BestPeer())
-*/
-		/*case <-forceSync:
-		// Force a sync even if not enough peers are present
-		go pm.synchronise(pm.peers.BestPeer())
-		*/
+		} else {
+			if searchStop == nil && pm.topicDisc != nil {
+				searchStop = make(chan struct{})
+				go pm.topicDisc.SearchTopic(pm.lesTopic, searchStop, searchResult)
+			}
+		}
+
+		select {
+		case enode := <-searchResult:
+			node, err := discover.ParseNode(enode)
+			if err != nil || added[node.ID] {
+				continue
+			}
+			glog.V(logger.Info).Infoln("Found LES server:", enode)
+			pm.p2pServer.AddPeer(node)
+		case <-pm.newPeerCh:
+			// continue looking
 		case <-pm.noMorePeers:
 			return
 		}

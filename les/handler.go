@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
@@ -182,6 +181,8 @@ func NewProtocolManager(chainConfig *params.ChainConfig, lightSync bool, network
 		return nil, errIncompatibleConfig
 	}
 
+	manager.lesTopic = discv5.Topic("LES@" + common.Bytes2Hex(manager.blockchain.Genesis().Hash().Bytes()[0:8]))
+
 	removePeer := manager.removePeer
 	if disableClientRemovePeer {
 		removePeer = func(id string) {}
@@ -236,49 +237,16 @@ func (pm *ProtocolManager) removePeer(id string) {
 	}
 }
 
-func (pm *ProtocolManager) findServers() {
-	if pm.p2pServer == nil || pm.topicDisc == nil {
-		return
-	}
-	glog.V(logger.Debug).Infoln("Looking for topic", string(pm.lesTopic))
-	enodes := make(chan string, 100)
-	stop := make(chan struct{})
-	go pm.topicDisc.SearchTopic(pm.lesTopic, stop, enodes)
-	go func() {
-		added := make(map[string]bool)
-		for {
-			select {
-			case enode := <-enodes:
-				if !added[enode] {
-					glog.V(logger.Info).Infoln("Found LES server:", enode)
-					added[enode] = true
-					if node, err := discover.ParseNode(enode); err == nil {
-						pm.p2pServer.AddPeer(node)
-					}
-				}
-			case <-stop:
-				return
-			}
-		}
-	}()
-	select {
-	case <-time.After(time.Second * 20):
-	case <-pm.quitSync:
-	}
-	close(stop)
-}
-
 func (pm *ProtocolManager) Start(srvr *p2p.Server) {
 	pm.p2pServer = srvr
 	if srvr != nil {
 		pm.topicDisc = srvr.DiscV5
 	}
-	pm.lesTopic = discv5.Topic("LES@" + common.Bytes2Hex(pm.blockchain.Genesis().Hash().Bytes()[0:8]))
 	if pm.lightSync {
-		// start sync handler
-		go pm.findServers()
+		// Light client mode.
 		go pm.syncer()
 	} else {
+		// Light server mode.
 		if pm.topicDisc != nil {
 			go func() {
 				glog.V(logger.Debug).Infoln("Starting registering topic", string(pm.lesTopic))
