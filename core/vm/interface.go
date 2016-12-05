@@ -79,7 +79,7 @@ type Account interface {
 	Address() common.Address
 	ReturnGas(*big.Int)
 	SetCode(common.Hash, []byte)
-	ForEachStorage(cb func(key, value common.Hash) bool)
+	ForEachStorage(cb func(rawkey, key, value common.Hash) bool)
 	Value() *big.Int
 }
 

@@ -243,9 +243,9 @@ func (self *StateObject) Nonce() uint64 {
 // in the local storage cache. Note that unlike core/state.StateObject,
 // light.StateObject only returns cached values and doesn't download the
 // entire storage tree.
-func (self *StateObject) ForEachStorage(cb func(key, value common.Hash) bool) {
+func (self *StateObject) ForEachStorage(cb func(rawkey, key, value common.Hash) bool) {
 	for h, v := range self.storage {
-		cb(h, v)
+		cb(crypto.Keccak256Hash(h[:]), h, v)
 	}
 }
 

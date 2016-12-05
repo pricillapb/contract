@@ -28,7 +28,6 @@ type ContractRef interface {
 	Address() common.Address
 	Value() *big.Int
 	SetCode(common.Hash, []byte)
-	ForEachStorage(callback func(key, value common.Hash) bool)
 }
 
 // Contract represents an ethereum contract in the state database. It contains
@@ -152,10 +151,4 @@ func (self *Contract) SetCallCode(addr *common.Address, hash common.Hash, code [
 	self.Code = code
 	self.CodeHash = hash
 	self.CodeAddr = addr
-}
-
-// EachStorage iterates the contract's storage and calls a method for every key
-// value pair.
-func (self *Contract) ForEachStorage(cb func(key, value common.Hash) bool) {
-	self.caller.ForEachStorage(cb)
 }

@@ -32,7 +32,7 @@ func (dummyContractRef) ReturnGas(*big.Int)          {}
 func (dummyContractRef) Address() common.Address     { return common.Address{} }
 func (dummyContractRef) Value() *big.Int             { return new(big.Int) }
 func (dummyContractRef) SetCode(common.Hash, []byte) {}
-func (d *dummyContractRef) ForEachStorage(callback func(key, value common.Hash) bool) {
+func (d *dummyContractRef) ForEachStorage(callback func(rawkey, key, value common.Hash) bool) {
 	d.calledForEach = true
 }
 func (d *dummyContractRef) SubBalance(amount *big.Int) {}

@@ -26,11 +26,13 @@ import (
 	"math/big"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ethereum/ethash"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -503,62 +505,139 @@ func (api *PrivateDebugAPI) TraceTransaction(ctx context.Context, txHash common.
 		tracer = vm.NewStructLogger(config.LogConfig)
 	}
 
-	// Retrieve the tx from the chain and the containing block
+	// Set up the execution environment.
 	tx, blockHash, _, txIndex := core.GetTransaction(api.eth.ChainDb(), txHash)
 	if tx == nil {
 		return nil, fmt.Errorf("transaction %x not found", txHash)
 	}
-	block := api.eth.BlockChain().GetBlockByHash(blockHash)
-	if block == nil {
-		return nil, fmt.Errorf("block %x not found", blockHash)
-	}
-	// Create the state database to mutate and eventually trace
-	parent := api.eth.BlockChain().GetBlock(block.ParentHash(), block.NumberU64()-1)
-	if parent == nil {
-		return nil, fmt.Errorf("block parent %x not found", block.ParentHash())
-	}
-	stateDb, err := api.eth.BlockChain().StateAt(parent.Root())
+	msg, context, statedb, err := api.computeTxEnv(blockHash, int(txIndex))
 	if err != nil {
 		return nil, err
 	}
 
-	signer := types.MakeSigner(api.config, block.Number())
-	// Mutate the state and trace the selected transaction
-	for idx, tx := range block.Transactions() {
-		// Assemble the transaction call message
-		msg, err := tx.AsMessage(signer)
-		if err != nil {
-			return nil, fmt.Errorf("sender retrieval failed: %v", err)
-		}
-		context := core.NewEVMContext(msg, block.Header(), api.eth.BlockChain())
-
-		// Mutate the state if we haven't reached the tracing transaction yet
-		if uint64(idx) < txIndex {
-			vmenv := vm.NewEnvironment(context, stateDb, api.config, vm.Config{})
-			_, _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(tx.Gas()))
-			if err != nil {
-				return nil, fmt.Errorf("mutation failed: %v", err)
-			}
-			stateDb.DeleteSuicides()
-			continue
-		}
-
-		vmenv := vm.NewEnvironment(context, stateDb, api.config, vm.Config{Debug: true, Tracer: tracer})
-		ret, gas, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(tx.Gas()))
-		if err != nil {
-			return nil, fmt.Errorf("tracing failed: %v", err)
-		}
-
-		switch tracer := tracer.(type) {
-		case *vm.StructLogger:
-			return &ethapi.ExecutionResult{
-				Gas:         gas,
-				ReturnValue: fmt.Sprintf("%x", ret),
-				StructLogs:  ethapi.FormatLogs(tracer.StructLogs()),
-			}, nil
-		case *ethapi.JavascriptTracer:
-			return tracer.GetResult()
-		}
+	// Run the requested tx with tracing enabled.
+	vmenv := vm.NewEnvironment(context, statedb, api.config, vm.Config{Debug: true, Tracer: tracer})
+	ret, gas, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(tx.Gas()))
+	if err != nil {
+		return nil, fmt.Errorf("tracing failed: %v", err)
+	}
+	switch tracer := tracer.(type) {
+	case *vm.StructLogger:
+		return &ethapi.ExecutionResult{
+			Gas:         gas,
+			ReturnValue: fmt.Sprintf("%x", ret),
+			StructLogs:  ethapi.FormatLogs(tracer.StructLogs()),
+		}, nil
+	case *ethapi.JavascriptTracer:
+		return tracer.GetResult()
 	}
 	return nil, errors.New("database inconsistency")
+}
+
+// computeTxPreState returns the execution environment of a certain transaction.
+func (api *PrivateDebugAPI) computeTxEnv(blockHash common.Hash, txIndex int) (core.Message, vm.Context, *state.StateDB, error) {
+	// Create the parent state.
+	block := api.eth.BlockChain().GetBlockByHash(blockHash)
+	if block == nil {
+		return nil, vm.Context{}, nil, fmt.Errorf("block %x not found", blockHash)
+	}
+	parent := api.eth.BlockChain().GetBlock(block.ParentHash(), block.NumberU64()-1)
+	if parent == nil {
+		return nil, vm.Context{}, nil, fmt.Errorf("block parent %x not found", block.ParentHash())
+	}
+	statedb, err := api.eth.BlockChain().StateAt(parent.Root())
+	if err != nil {
+		return nil, vm.Context{}, nil, err
+	}
+	txs := block.Transactions()
+
+	// Recompute transactions up to the target index.
+	signer := types.MakeSigner(api.config, block.Number())
+	for idx, tx := range txs {
+		msg, err := tx.AsMessage(signer)
+		if err != nil {
+			return nil, vm.Context{}, nil, fmt.Errorf("tx %x failed: %v", tx.Hash(), err)
+		}
+		context := core.NewEVMContext(msg, block.Header(), api.eth.BlockChain())
+		if idx == txIndex {
+			return msg, context, statedb, nil
+		}
+
+		vmenv := vm.NewEnvironment(context, statedb, api.config, vm.Config{})
+		gp := new(core.GasPool).AddGas(tx.Gas())
+		if _, _, err = core.ApplyMessage(vmenv, msg, gp); err != nil {
+			return nil, vm.Context{}, nil, fmt.Errorf("tx %x failed: %v", tx.Hash(), err)
+		}
+		statedb.DeleteSuicides()
+	}
+	return nil, vm.Context{}, nil, fmt.Errorf("tx index %d out of range for block %x", txIndex, blockHash)
+}
+
+// StorageRangeResult is the result of a debug_storageRangeAt API call.
+type StorageRangeResult struct {
+	Storage  storageMap `json:"storage"`
+	Complete bool       `json:"complete"`
+}
+
+// StorageRangeAt returns the storage at the given block height and transaction index. It
+// may be limited using the keyStart, keyEnd (inclusive) and maxResult parameters.
+//
+// StorageRangeAt is currently limited and requires needless iterators due to the
+// limitation of the trie iterator. At present we can't start iterating from any given
+// key, thus we need to loop over any key that's not inclusive in the range of start and
+// end.
+func (api *PrivateDebugAPI) StorageRangeAt(ctx context.Context, blockHash common.Hash, txIndex int, contractAddress common.Address, keyStart, keyEnd hexutil.Bytes, maxResult int) (*StorageRangeResult, error) {
+	_, _, statedb, err := api.computeTxEnv(blockHash, txIndex)
+	if err != nil {
+		return nil, err
+	}
+	obj := statedb.GetStateObject(contractAddress)
+	if obj == nil {
+		return nil, fmt.Errorf("no account with address %s", contractAddress.Hex())
+	}
+	return storageRangeAt(obj, keyStart, keyEnd, maxResult), nil
+}
+
+func storageRangeAt(obj *state.StateObject, start, end []byte, maxResult int) *StorageRangeResult {
+	result := &StorageRangeResult{Storage: storageMap{}}
+	total := 0
+	obj.ForEachStorage(func(rawkey, key, value common.Hash) bool {
+		total++
+		if bytes.Compare(key[:], start[:]) >= 0 && (len(end) == 0 || bytes.Compare(key[:], end[:]) <= 0) {
+			result.Storage.insert(storageEntry{key, rawkey, value}, maxResult)
+		}
+		return true
+	})
+	result.Complete = len(result.Storage) == total
+	return result
+}
+
+// A storageMap is a list of storage entries sorted by key.
+type storageMap []storageEntry
+
+type storageEntry struct {
+	Key       common.Hash `json:"key"`
+	HashedKey common.Hash `json:"hashedKey"`
+	Value     common.Hash `json:"value"`
+}
+
+// compare orders storage entries by key. Entries with the same
+// key are ordered by their hashed keys.
+func (e storageEntry) compare(other storageEntry) int {
+	cmp := bytes.Compare(e.Key[:], other.Key[:])
+	if cmp == 0 {
+		cmp = bytes.Compare(e.HashedKey[:], other.HashedKey[:])
+	}
+	return cmp
+}
+
+func (sm *storageMap) insert(new storageEntry, maxEntries int) {
+	index := sort.Search(len(*sm), func(i int) bool { return (*sm)[i].compare(new) >= 0 })
+	if len(*sm) < maxEntries {
+		*sm = append(*sm, new)
+	}
+	if index < len(*sm) {
+		copy((*sm)[index+1:], (*sm)[index:])
+		(*sm)[index] = new
+	}
 }

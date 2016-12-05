@@ -144,7 +144,7 @@ func (l *StructLogger) CaptureState(env *Environment, pc uint64, op OpCode, gas,
 			storage = make(Storage)
 			// Get the contract account and loop over each storage entry. This may involve looping over
 			// the trie and is a very expensive process.
-			env.StateDB.GetAccount(contract.Address()).ForEachStorage(func(key, value common.Hash) bool {
+			env.StateDB.GetAccount(contract.Address()).ForEachStorage(func(rawkey, key, value common.Hash) bool {
 				storage[key] = value
 				// Return true, indicating we'd like to continue.
 				return true
