@@ -1396,7 +1396,7 @@ func testSyncProgress(t *testing.T, protocol int, mode SyncMode) {
 	go func() {
 		defer pending.Done()
 		if err := tester.sync("peer-half", nil, mode); err != nil {
-			t.Fatalf("failed to synchronise blocks: %v", err)
+			t.Errorf("failed to synchronise blocks: %v", err)
 		}
 	}()
 	<-starting
@@ -1413,7 +1413,7 @@ func testSyncProgress(t *testing.T, protocol int, mode SyncMode) {
 	go func() {
 		defer pending.Done()
 		if err := tester.sync("peer-full", nil, mode); err != nil {
-			t.Fatalf("failed to synchronise blocks: %v", err)
+			t.Errorf("failed to synchronise blocks: %v", err)
 		}
 	}()
 	<-starting
@@ -1469,7 +1469,7 @@ func testForkedSyncProgress(t *testing.T, protocol int, mode SyncMode) {
 	go func() {
 		defer pending.Done()
 		if err := tester.sync("fork A", nil, mode); err != nil {
-			t.Fatalf("failed to synchronise blocks: %v", err)
+			t.Errorf("failed to synchronise blocks: %v", err)
 		}
 	}()
 	<-starting
@@ -1489,7 +1489,7 @@ func testForkedSyncProgress(t *testing.T, protocol int, mode SyncMode) {
 	go func() {
 		defer pending.Done()
 		if err := tester.sync("fork B", nil, mode); err != nil {
-			t.Fatalf("failed to synchronise blocks: %v", err)
+			t.Errorf("failed to synchronise blocks: %v", err)
 		}
 	}()
 	<-starting
@@ -1550,7 +1550,7 @@ func testFailedSyncProgress(t *testing.T, protocol int, mode SyncMode) {
 	go func() {
 		defer pending.Done()
 		if err := tester.sync("faulty", nil, mode); err == nil {
-			t.Fatalf("succeeded faulty synchronisation")
+			t.Errorf("succeeded faulty synchronisation")
 		}
 	}()
 	<-starting
@@ -1567,7 +1567,7 @@ func testFailedSyncProgress(t *testing.T, protocol int, mode SyncMode) {
 	go func() {
 		defer pending.Done()
 		if err := tester.sync("valid", nil, mode); err != nil {
-			t.Fatalf("failed to synchronise blocks: %v", err)
+			t.Errorf("failed to synchronise blocks: %v", err)
 		}
 	}()
 	<-starting
@@ -1628,7 +1628,7 @@ func testFakedSyncProgress(t *testing.T, protocol int, mode SyncMode) {
 	go func() {
 		defer pending.Done()
 		if err := tester.sync("attack", nil, mode); err == nil {
-			t.Fatalf("succeeded attacker synchronisation")
+			t.Errorf("succeeded attacker synchronisation")
 		}
 	}()
 	<-starting
@@ -1645,7 +1645,7 @@ func testFakedSyncProgress(t *testing.T, protocol int, mode SyncMode) {
 	go func() {
 		defer pending.Done()
 		if err := tester.sync("valid", nil, mode); err != nil {
-			t.Fatalf("failed to synchronise blocks: %v", err)
+			t.Errorf("failed to synchronise blocks: %v", err)
 		}
 	}()
 	<-starting

@@ -217,9 +217,7 @@ func (peer *ServerNode) SendRequest(reqID, maxCost uint64) {
 	<-peer.assignToken
 	peer.bufEstimate -= maxCost
 	peer.sumCost += maxCost
-	if reqID >= 0 {
-		peer.pending[reqID] = peer.sumCost
-	}
+	peer.pending[reqID] = peer.sumCost
 }
 
 func (peer *ServerNode) GotReply(reqID, bv uint64) {

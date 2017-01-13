@@ -64,12 +64,12 @@ func TestOn(t *testing.T) {
 		t.Errorf("oops")
 	}
 	kad := New(addr, NewKadParams())
-	err := kad.On(&testNode{addr: other}, nil)
-	_ = err
+	if err := kad.On(&testNode{addr: other}, nil); err != nil {
+		t.Error(err)
+	}
 }
 
 func TestBootstrap(t *testing.T) {
-
 	test := func(test *bootstrapTest) bool {
 		// for any node kad.le, Target and N
 		params := NewKadParams()

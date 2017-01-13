@@ -441,7 +441,8 @@ func TestPendingLogsSubscription(t *testing.T) {
 			}
 
 			if len(fetched) != len(tt.expected) {
-				t.Fatalf("invalid number of logs for case %d, want %d log(s), got %d", i, len(tt.expected), len(fetched))
+				t.Errorf("invalid number of logs for case %d, want %d log(s), got %d", i, len(tt.expected), len(fetched))
+				return
 			}
 
 			for l := range fetched {

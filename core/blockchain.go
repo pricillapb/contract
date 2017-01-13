@@ -1206,8 +1206,9 @@ func (self *BlockChain) postChainEvents(events []interface{}, logs []*types.Log)
 	self.eventMux.Post(logs)
 	for _, event := range events {
 		if event, ok := event.(ChainEvent); ok {
-			// We need some control over the mining operation. Acquiring locks and waiting for the miner to create new block takes too long
-			// and in most cases isn't even necessary.
+			// We need some control over the mining operation. Acquiring locks and waiting
+			// for the miner to create new block takes too long and in most cases isn't
+			// even necessary.
 			if self.LastBlockHash() == event.Hash {
 				self.eventMux.Post(ChainHeadEvent{event.Block})
 			}
@@ -1218,10 +1219,11 @@ func (self *BlockChain) postChainEvents(events []interface{}, logs []*types.Log)
 }
 
 func (self *BlockChain) update() {
-	futureTimer := time.Tick(5 * time.Second)
+	futureTimer := time.NewTicker(5 * time.Second)
+	defer futureTimer.Stop()
 	for {
 		select {
-		case <-futureTimer:
+		case <-futureTimer.C:
 			self.procFutureBlocks()
 		case <-self.quit:
 			return

@@ -146,12 +146,9 @@ func TestTransactionPriceNonceSort(t *testing.T) {
 	txset := NewTransactionsByPriceAndNonce(groups)
 
 	txs := Transactions{}
-	for {
-		if tx := txset.Peek(); tx != nil {
-			txs = append(txs, tx)
-			txset.Shift()
-		}
-		break
+	if tx := txset.Peek(); tx != nil {
+		txs = append(txs, tx)
+		txset.Shift()
 	}
 	for i, txi := range txs {
 		fromi, _ := Sender(signer, txi)

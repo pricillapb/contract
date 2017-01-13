@@ -212,12 +212,10 @@ METHODS:
 
 		switch mtype.NumOut() {
 		case 0, 1:
-			break
 		case 2:
 			if h.errPos == -1 { // method must one return value and 1 error
 				continue METHODS
 			}
-			break
 		default:
 			continue METHODS
 		}

@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -192,13 +193,9 @@ func loadChain(fn string, t *testing.T) (types.Blocks, error) {
 	return chain, nil
 }
 
-func insertChain(done chan bool, blockchain *BlockChain, chain types.Blocks, t *testing.T) {
+func insertChain(done chan<- error, blockchain *BlockChain, chain types.Blocks) {
 	_, err := blockchain.InsertChain(chain)
-	if err != nil {
-		fmt.Println(err)
-		t.FailNow()
-	}
-	done <- true
+	done <- err
 }
 
 func TestLastBlock(t *testing.T) {
@@ -353,26 +350,26 @@ func TestChainInsertions(t *testing.T) {
 
 	chain1, err := loadChain("valid1", t)
 	if err != nil {
-		fmt.Println(err)
-		t.FailNow()
+		t.Fatal(err)
 	}
 
 	chain2, err := loadChain("valid2", t)
 	if err != nil {
-		fmt.Println(err)
-		t.FailNow()
+		t.Fatal(err)
 	}
 
 	blockchain := theBlockChain(db, t)
 
 	const max = 2
-	done := make(chan bool, max)
+	done := make(chan error, max)
 
-	go insertChain(done, blockchain, chain1, t)
-	go insertChain(done, blockchain, chain2, t)
+	go insertChain(done, blockchain, chain1)
+	go insertChain(done, blockchain, chain2)
 
 	for i := 0; i < max; i++ {
-		<-done
+		if err := <-done; err != nil {
+			t.Fatal("insertChain error:", err)
+		}
 	}
 
 	if chain2[len(chain2)-1].Hash() != blockchain.CurrentBlock().Hash() {
@@ -408,19 +405,15 @@ func TestChainMultipleInsertions(t *testing.T) {
 
 	blockchain := theBlockChain(db, t)
 
-	done := make(chan bool, max)
-	for i, chain := range chains {
-		// XXX the go routine would otherwise reference the same (chain[3]) variable and fail
-		i := i
-		chain := chain
-		go func() {
-			insertChain(done, blockchain, chain, t)
-			fmt.Println(i, "done")
-		}()
+	done := make(chan error, max)
+	for _, chain := range chains {
+		go insertChain(done, blockchain, chain)
 	}
 
 	for i := 0; i < max; i++ {
-		<-done
+		if err := <-done; err != nil {
+			t.Fatal("insertChain error:", err)
+		}
 	}
 
 	if chains[longest][len(chains[longest])-1].Hash() != blockchain.CurrentBlock().Hash() {
@@ -1098,38 +1091,41 @@ done:
 // Tests if the canonical block can be fetched from the database during chain insertion.
 func TestCanonicalBlockRetrieval(t *testing.T) {
 	var (
-		db, _   = ethdb.NewMemDatabase()
-		genesis = WriteGenesisBlockForTesting(db)
+		db, _         = ethdb.NewMemDatabase()
+		genesis       = WriteGenesisBlockForTesting(db)
+		blockchain, _ = NewBlockChain(db, testChainConfig(), FakePow{}, new(event.TypeMux))
+		chain, _      = GenerateChain(params.TestChainConfig, genesis, db, 10, func(i int, gen *BlockGen) {})
+		wg            sync.WaitGroup
 	)
-
-	evmux := &event.TypeMux{}
-	blockchain, _ := NewBlockChain(db, testChainConfig(), FakePow{}, evmux)
-
-	chain, _ := GenerateChain(params.TestChainConfig, genesis, db, 10, func(i int, gen *BlockGen) {})
+	wg.Add(len(chain))
+	defer wg.Wait()
 
 	for i := range chain {
-		go func(block *types.Block) {
+		block := chain[i]
+		go func() {
+			defer wg.Done()
+			// busy wait for canonical hash write
+			var ch common.Hash
+			for ch == (common.Hash{}) {
+				ch = GetCanonicalHash(db, block.NumberU64())
+			}
 			// try to retrieve a block by its canonical hash and see if the block data can be retrieved.
-			for {
-				ch := GetCanonicalHash(db, block.NumberU64())
-				if ch == (common.Hash{}) {
-					continue // busy wait for canonical hash to be written
-				}
-				if ch != block.Hash() {
-					t.Fatalf("unknown canonical hash, want %s, got %s", block.Hash().Hex(), ch.Hex())
-				}
-				fb := GetBlock(db, ch, block.NumberU64())
-				if fb == nil {
-					t.Fatalf("unable to retrieve block %d for canonical hash: %s", block.NumberU64(), ch.Hex())
-				}
-				if fb.Hash() != block.Hash() {
-					t.Fatalf("invalid block hash for block %d, want %s, got %s", block.NumberU64(), block.Hash().Hex(), fb.Hash().Hex())
-				}
+			if ch != block.Hash() {
+				t.Error("unknown canonical hash, want %s, got %s", block.Hash().Hex(), ch.Hex())
 				return
 			}
-		}(chain[i])
+			fb := GetBlock(db, ch, block.NumberU64())
+			if fb == nil {
+				t.Error("unable to retrieve block %d for canonical hash: %s", block.NumberU64(), ch.Hex())
+				return
+			}
+			if fb.Hash() != block.Hash() {
+				t.Error("invalid block hash for block %d, want %s, got %s", block.NumberU64(), block.Hash().Hex(), fb.Hash().Hex())
+				return
+			}
+		}()
 
-		blockchain.InsertChain(types.Blocks{chain[i]})
+		blockchain.InsertChain(types.Blocks{block})
 	}
 }
 

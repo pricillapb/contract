@@ -153,7 +153,7 @@ func (self retrieveRequestMsgData) isLookup() bool {
 }
 
 // sets timeout fields
-func (self retrieveRequestMsgData) setTimeout(t *time.Time) {
+func (self *retrieveRequestMsgData) setTimeout(t *time.Time) {
 	self.timeout = t
 	if t != nil {
 		self.Timeout = uint64(t.UnixNano())
@@ -162,7 +162,7 @@ func (self retrieveRequestMsgData) setTimeout(t *time.Time) {
 	}
 }
 
-func (self retrieveRequestMsgData) getTimeout() (t *time.Time) {
+func (self *retrieveRequestMsgData) getTimeout() (t *time.Time) {
 	if self.Timeout > 0 && self.timeout == nil {
 		timeout := time.Unix(int64(self.Timeout), 0)
 		t = &timeout
@@ -227,7 +227,7 @@ func (self peersMsgData) String() string {
 	return fmt.Sprintf("from: %v, Key: %x; ID: %v, Peers: %v", from, target, self.Id, self.Peers)
 }
 
-func (self peersMsgData) setTimeout(t *time.Time) {
+func (self *peersMsgData) setTimeout(t *time.Time) {
 	self.timeout = t
 	if t != nil {
 		self.Timeout = uint64(t.UnixNano())
@@ -236,7 +236,7 @@ func (self peersMsgData) setTimeout(t *time.Time) {
 	}
 }
 
-func (self peersMsgData) getTimeout() (t *time.Time) {
+func (self *peersMsgData) getTimeout() (t *time.Time) {
 	if self.Timeout > 0 && self.timeout == nil {
 		timeout := time.Unix(int64(self.Timeout), 0)
 		t = &timeout
