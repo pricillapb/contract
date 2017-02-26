@@ -76,12 +76,13 @@ type jsonNotification struct {
 // jsonCodec reads and writes JSON-RPC messages to the underlying connection. It
 // also has support for parsing arguments and serializing (result) objects.
 type jsonCodec struct {
-	closer sync.Once          // close closed channel once
-	closed chan interface{}   // closed on Close
-	decMu  sync.Mutex         // guards d
-	d      *json.Decoder      // decodes incoming requests
-	encMu  sync.Mutex         // guards e
-	e      *json.Encoder      // encodes responses
+	closer sync.Once        // close closed channel once
+	closed chan interface{} // closed on Close
+	decMu  sync.Mutex       // guards d
+	d      *json.Decoder    // decodes incoming requests
+	encMu  sync.Mutex       // guards encBuf, enc
+	encBuf bytes.Buffer
+	enc    *json.Encoder
 	rw     io.ReadWriteCloser // connection
 }
 
@@ -100,7 +101,9 @@ func (err *jsonError) ErrorCode() int {
 func NewJSONCodec(rwc io.ReadWriteCloser) ServerCodec {
 	d := json.NewDecoder(rwc)
 	d.UseNumber()
-	return &jsonCodec{closed: make(chan interface{}), d: d, e: json.NewEncoder(rwc), rw: rwc}
+	c := &jsonCodec{closed: make(chan interface{}), d: d, rw: rwc}
+	c.enc = json.NewEncoder(&c.encBuf)
+	return c
 }
 
 // isBatch returns true when the first non-whitespace characters is '['
@@ -340,7 +343,16 @@ func (c *jsonCodec) Write(res interface{}) error {
 	c.encMu.Lock()
 	defer c.encMu.Unlock()
 
-	return c.e.Encode(res)
+	if err := c.enc.Encode(res); err != nil {
+		return err
+	}
+	// Ensure that the stream of JSON values is newline-separated.
+	if c.encBuf.Len() > 0 && c.encBuf.Bytes()[:c.encBuf.Len()-1] != '\n' {
+		c.encBuf.WriteByte('\n')
+	}
+	_, err := c.encBuf.WriteTo(c.rw)
+	c.encBuf.Reset()
+	return err
 }
 
 // Close the underlying connection
