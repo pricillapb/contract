@@ -52,9 +52,10 @@ type Engine interface {
 	VerifyHeader(chain ChainReader, header *types.Header, seal bool) error
 
 	// VerifyHeaders is similar to VerifyHeader, but verifies a batch of headers
-	// concurrently. The method returns a quit channel to abort the operations and
-	// a results channel to retrieve the async verifications (the order is that of
-	// the input slice).
+	// concurrently.
+	//
+	// The returned quit channel to aborts the method. The results channel receives a nil
+	// error for each valid input header and at most one non-nil error.
 	VerifyHeaders(chain ChainReader, headers []*types.Header, seals []bool) (chan<- struct{}, <-chan error)
 
 	// VerifyUncles verifies that the given block's uncles conform to the consensus

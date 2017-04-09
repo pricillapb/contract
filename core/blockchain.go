@@ -942,15 +942,11 @@ func (self *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 				if block.Time().Cmp(max) > 0 {
 					return i, fmt.Errorf("future block: %v > %v", block.Time(), max)
 				}
-				self.futureBlocks.Add(block.Hash(), block)
-				stats.queued++
-				continue
-			}
-
-			if err == consensus.ErrUnknownAncestor && self.futureBlocks.Contains(block.ParentHash()) {
-				self.futureBlocks.Add(block.Hash(), block)
-				stats.queued++
-				continue
+				for _, block := range chain[i:] {
+					self.futureBlocks.Add(block.Hash(), block)
+					stats.queued++
+				}
+				return len(chain), nil
 			}
 
 			self.reportBlock(block, nil, err)

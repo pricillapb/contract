@@ -112,28 +112,21 @@ func testHeaderConcurrentVerification(t *testing.T, threads int) {
 			chain, _ := NewBlockChain(testdb, params.TestChainConfig, ethash.NewFakeFailer(uint64(len(headers)-1)), new(event.TypeMux), vm.Config{})
 			_, results = chain.engine.VerifyHeaders(chain, headers, seals)
 		}
-		// Wait for all the verification results
-		checks := make(map[int]error)
+		// Check verification results.
+	loop:
 		for j := 0; j < len(blocks); j++ {
 			select {
-			case result := <-results:
-				checks[j] = result
-
+			case err := <-results:
+				// We chose the last-but-one nonce in the chain to fail.
+				want := valid || (j < len(blocks)-2)
+				if (err == nil) != want {
+					t.Errorf("test %d.%d: validity mismatch: have %v, want %v", i, j, err, want)
+				}
+				if err != nil {
+					break loop
+				}
 			case <-time.After(time.Second):
 				t.Fatalf("test %d.%d: verification timeout", i, j)
-			}
-		}
-		// Check nonce check validity
-		for j := 0; j < len(blocks); j++ {
-			want := valid || (j < len(blocks)-2) // We chose the last-but-one nonce in the chain to fail
-			if (checks[j] == nil) != want {
-				t.Errorf("test %d.%d: validity mismatch: have %v, want %v", i, j, checks[j], want)
-			}
-			if !want {
-				// A few blocks after the first error may pass verification due to concurrent
-				// workers. We don't care about those in this test, just that the correct block
-				// errors out.
-				break
 			}
 		}
 		// Make sure no more data is returned
