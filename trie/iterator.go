@@ -19,6 +19,7 @@ package trie
 import (
 	"bytes"
 	"container/heap"
+
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -58,6 +59,11 @@ func (it *Iterator) Next() bool {
 	return false
 }
 
+// SkipToKey advances the iterator to the given key prefix.
+func (it *Iterator) SkipToKey(prefix []byte) {
+	it.nodeIt.SkipToKey(prefix)
+}
+
 // NodeIterator is an iterator to traverse the trie pre-order.
 type NodeIterator interface {
 	// Hash returns the hash of the current node
@@ -75,6 +81,8 @@ type NodeIterator interface {
 	// Next moves the iterator to the next node. If the parameter is false, any child
 	// nodes will be skipped.
 	Next(bool) bool
+	// SkipToKey advances the iterator to the given key prefix.
+	SkipToKey(prefix []byte)
 	// Error returns the error status of the iterator.
 	Error() error
 }
@@ -122,6 +130,26 @@ func (it *nodeIterator) Parent() common.Hash {
 	}
 
 	return it.stack[len(it.stack)-1].parent
+}
+
+func (it *nodeIterator) SkipToKey(prefix []byte) {
+	if len(prefix) > 0 {
+		if prefix[len(prefix)-1] > 0 {
+			prefix[len(prefix)-1]--
+		} else {
+			prefix = prefix[:len(prefix)-1]
+		}
+	}
+	key := compactHexDecode(prefix)
+
+	// Move 'back up' if we're in a branch that doesn't match.
+	for !bytes.HasPrefix(key, it.path) {
+		it.pop()
+	}
+	// Move forward until we're at the next matching node.
+	for bytes.Compare(key, it.path) > 0 {
+		it.Next(bytes.HasPrefix(key, it.path))
+	}
 }
 
 // Leaf returns true if the current node is a leaf
@@ -189,11 +217,9 @@ func (it *nodeIterator) step(descend bool) error {
 		it.stack = append(it.stack, state)
 		return nil
 	}
-
 	if !descend {
 		// If we're skipping children, pop the current node first
-		it.path = it.path[:it.stack[len(it.stack)-1].pathlen]
-		it.stack = it.stack[:len(it.stack)-1]
+		it.pop()
 	}
 
 	// Continue iteration to the next child
@@ -262,10 +288,16 @@ outer:
 				break
 			}
 		}
-		it.path = it.path[:parent.pathlen]
-		it.stack = it.stack[:len(it.stack)-1]
+		// No more child nodes, move back up.
+		it.pop()
 	}
 	return nil
+}
+
+func (it *nodeIterator) pop() {
+	parent := it.stack[len(it.stack)-1]
+	it.path = it.path[:parent.pathlen]
+	it.stack = it.stack[:len(it.stack)-1]
 }
 
 func compareNodes(a, b NodeIterator) int {
@@ -368,6 +400,11 @@ func (it *differenceIterator) Next(bool) bool {
 	}
 }
 
+func (it *differenceIterator) SkipToKey(prefix []byte) {
+	it.a.SkipToKey(prefix)
+	it.b.SkipToKey(prefix)
+}
+
 func (it *differenceIterator) Error() error {
 	if err := it.a.Error(); err != nil {
 		return err
@@ -468,6 +505,14 @@ func (it *unionIterator) Next(descend bool) bool {
 	}
 
 	return len(*it.items) > 0
+}
+
+// note: this is really inefficient.
+func (it *unionIterator) SkipToKey(prefix []byte) {
+	for i, subit := range *it.items {
+		subit.SkipToKey(prefix)
+		heap.Fix(it.items, i)
+	}
 }
 
 func (it *unionIterator) Error() error {

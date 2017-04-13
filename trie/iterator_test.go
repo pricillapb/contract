@@ -17,6 +17,7 @@
 package trie
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -138,6 +139,19 @@ var testdata2 = []struct{ k, v string }{
 	{"foos", "aa"},
 	{"food", "ab"},
 	{"jars", "d"},
+}
+
+func TestSkipToKey(t *testing.T) {
+	trie := newEmpty()
+	for _, val := range testdata1 {
+		trie.Update([]byte(val.k), []byte(val.v))
+	}
+
+	it := NewIteratorFromNodeIterator(NewNodeIterator(trie))
+	it.SkipToKey([]byte("bar"))
+	for it.Next() {
+		fmt.Printf("%s\n", it.Key)
+	}
 }
 
 func TestDifferenceIterator(t *testing.T) {
