@@ -114,6 +114,11 @@ var (
 		Usage: "Data directory for the databases and keystore",
 		Value: DirectoryString{node.DefaultDataDir()},
 	}
+	UseBadgerFlag = cli.BoolFlag{
+		Name:  "badgerdb",
+		Usage: "Use badger KV store",
+	}
+
 	KeyStoreDirFlag = DirectoryFlag{
 		Name:  "keystore",
 		Usage: "Directory for the keystore (default = inside the datadir)",
@@ -823,6 +828,9 @@ func SetNodeConfig(ctx *cli.Context, cfg *node.Config) {
 		cfg.DataDir = filepath.Join(node.DefaultDataDir(), "rinkeby")
 	}
 
+	if ctx.GlobalIsSet(UseBadgerFlag.Name) {
+		cfg.UseBadger = ctx.GlobalBool(UseBadgerFlag.Name)
+	}
 	if ctx.GlobalIsSet(KeyStoreDirFlag.Name) {
 		cfg.KeyStoreDir = ctx.GlobalString(KeyStoreDirFlag.Name)
 	}

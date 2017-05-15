@@ -66,6 +66,9 @@ type Config struct {
 	// in memory.
 	DataDir string
 
+	// If true, opened databases will use badger instead of LevelDB.
+	UseBadger bool
+
 	// Configuration of peer-to-peer networking.
 	P2P p2p.Config
 

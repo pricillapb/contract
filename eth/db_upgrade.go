@@ -35,6 +35,8 @@ var deduplicateData = []byte("dbUpgrade_20170714deduplicateData")
 // Returns a stop function that blocks until the process has
 // been safely stopped.
 func upgradeDeduplicateData(db ethdb.Database) func() error {
+	return func() error { return nil }
+
 	// If the database is already converted or empty, bail out
 	data, _ := db.Get(deduplicateData)
 	if len(data) > 0 && data[0] == 42 {

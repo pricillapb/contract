@@ -17,6 +17,7 @@
 package node
 
 import (
+	"os"
 	"reflect"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -43,11 +44,14 @@ func (ctx *ServiceContext) OpenDatabase(name string, cache int, handles int) (et
 	if ctx.config.DataDir == "" {
 		return ethdb.NewMemDatabase()
 	}
-	db, err := ethdb.NewLDBDatabase(ctx.config.resolvePath(name), cache, handles)
-	if err != nil {
-		return nil, err
+	dir := ctx.config.resolvePath(name)
+	if ctx.config.UseBadger {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return nil, err
+		}
+		return ethdb.NewBadger(dir)
 	}
-	return db, nil
+	return ethdb.NewLDBDatabase(dir, cache, handles)
 }
 
 // ResolvePath resolves a user path into the data directory if that was relative

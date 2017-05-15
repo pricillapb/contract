@@ -21,6 +21,12 @@
 			"revisionTime": "2016-08-11T21:22:31Z"
 		},
 		{
+			"checksumSHA1": "QqOnOky/XiZ6bq0akztC9ETtIR4=",
+			"path": "github.com/AndreasBriese/bbloom",
+			"revision": "0320de81a58b973b5187098f4815608711c70f3b",
+			"revisionTime": "2015-11-24T09:34:16Z"
+		},
+		{
 			"checksumSHA1": "24EW3PGLGVSy/5joAOZdHzN/S2E=",
 			"path": "github.com/Azure/azure-storage-go",
 			"revision": "12ccaadb081cdd217702067d28da9a7ff4305239",
@@ -67,6 +73,48 @@
 			"path": "github.com/davecgh/go-spew/spew",
 			"revision": "346938d642f2ec3594ed81d874461961cd0faa76",
 			"revisionTime": "2016-10-29T20:57:26Z"
+		},
+		{
+			"checksumSHA1": "r+Jxi+NQ2SKaX3i2G8nd413axgo=",
+			"path": "github.com/dgraph-io/badger",
+			"revision": "3470002820ee148acbffd3c25137a0966d969112",
+			"revisionTime": "2017-09-11T03:48:42Z"
+		},
+		{
+			"checksumSHA1": "oJcmTAx7nWmcwMaKvOunBhQ5qJY=",
+			"path": "github.com/dgraph-io/badger/badger",
+			"revision": "0c0bc0853b9b8a0598dd940fdabab61474c96cbb",
+			"revisionTime": "2017-05-15T06:14:01Z"
+		},
+		{
+			"checksumSHA1": "Aan9vLMJhDV6wYgTcLBBug6dwxY=",
+			"path": "github.com/dgraph-io/badger/options",
+			"revision": "3470002820ee148acbffd3c25137a0966d969112",
+			"revisionTime": "2017-09-11T03:48:42Z"
+		},
+		{
+			"checksumSHA1": "FB7rDZgiLfpIGi9RqWbgxjZ0Vjg=",
+			"path": "github.com/dgraph-io/badger/protos",
+			"revision": "3470002820ee148acbffd3c25137a0966d969112",
+			"revisionTime": "2017-09-11T03:48:42Z"
+		},
+		{
+			"checksumSHA1": "JPMRtJrMwbjSPHA6VsuUyJJM7xE=",
+			"path": "github.com/dgraph-io/badger/skl",
+			"revision": "3470002820ee148acbffd3c25137a0966d969112",
+			"revisionTime": "2017-09-11T03:48:42Z"
+		},
+		{
+			"checksumSHA1": "p03nWiAKduR/uci7cdpIba0lA1E=",
+			"path": "github.com/dgraph-io/badger/table",
+			"revision": "3470002820ee148acbffd3c25137a0966d969112",
+			"revisionTime": "2017-09-11T03:48:42Z"
+		},
+		{
+			"checksumSHA1": "oPljHenPQEwnVsS1YzvyD9FQGUM=",
+			"path": "github.com/dgraph-io/badger/y",
+			"revision": "3470002820ee148acbffd3c25137a0966d969112",
+			"revisionTime": "2017-09-11T03:48:42Z"
 		},
 		{
 			"checksumSHA1": "2Fy1Y6Z3lRRX1891WF/+HT4XS2I=",
@@ -254,6 +302,12 @@
 			"path": "github.com/peterh/liner",
 			"revision": "bf27d3ba8e1d9899d45a457ffac16c953eb2d647",
 			"revisionTime": "2017-02-11T19:53:22Z"
+		},
+		{
+			"checksumSHA1": "rJab1YdNhQooDiBWNnt7TLWPyBU=",
+			"path": "github.com/pkg/errors",
+			"revision": "c605e284fe17294bda444b34710735b29d1a9d90",
+			"revisionTime": "2017-05-05T04:36:39Z"
 		},
 		{
 			"checksumSHA1": "WbbxCn2jUYIL5viqLo0BKXEdPrQ=",
@@ -518,6 +572,18 @@
 			"path": "golang.org/x/net/html/charset",
 			"revision": "b4690f45fa1cafc47b1c280c2e75116efe40cc13",
 			"revisionTime": "2017-02-15T08:41:58Z"
+		},
+		{
+			"checksumSHA1": "UxahDzW2v4mf/+aFxruuupaoIwo=",
+			"path": "golang.org/x/net/internal/timeseries",
+			"revision": "84f0e6f92b10139f986b1756e149a7d9de270cdc",
+			"revisionTime": "2017-05-12T21:27:43Z"
+		},
+		{
+			"checksumSHA1": "9EZG3s2eOREO7WkBvigjk57wK/8=",
+			"path": "golang.org/x/net/trace",
+			"revision": "84f0e6f92b10139f986b1756e149a7d9de270cdc",
+			"revisionTime": "2017-05-12T21:27:43Z"
 		},
 		{
 			"checksumSHA1": "7EZyXN0EmZLgGxZxK01IJua4c8o=",
