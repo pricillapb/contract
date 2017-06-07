@@ -23,35 +23,32 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/core/vm"
 )
 
 // JSONLogger merely contains a writer, and immediately outputs to that channel,
-// instead of collecting logs
+// instead of collecting logs.
 type JSONLogger struct {
 	encoder *json.Encoder
 }
 
 // NewJSONLogger returns a new JSON logger
 func NewJSONLogger(writer io.Writer) *JSONLogger {
-	logger := &JSONLogger{
-		encoder: json.NewEncoder(writer),
-	}
-	return logger
+	return &JSONLogger{json.NewEncoder(writer)}
 }
 
-// CaptureState outputs state information on the logger
-func (l *JSONLogger) CaptureState(env *EVM, pc uint64, op OpCode, gas, cost uint64, memory *Memory, stack *Stack, contract *Contract, depth int, err error) error {
-	log := StructLog{pc, op, gas + cost, cost, memory.Data(), stack.Data(), nil, env.depth, err}
+// CaptureState outputs state information on the logger.
+func (l *JSONLogger) CaptureState(env *vm.EVM, pc uint64, op vm.OpCode, gas, cost uint64, memory *vm.Memory, stack *vm.Stack, contract *vm.Contract, depth int, err error) error {
+	log := vm.StructLog{pc, op, gas + cost, cost, memory.Data(), stack.Data(), nil, depth, err}
 	return l.encoder.Encode(log)
 }
+
 func (l *JSONLogger) CaptureEnd(output []byte, gasUsed uint64, t time.Duration) error {
 	type endLog struct {
 		Output  string              `json:"output"`
 		GasUsed math.HexOrDecimal64 `json:"gasUsed"`
 		Time    time.Duration       `json:"time"`
 	}
-
 	log := endLog{common.Bytes2Hex(output), math.HexOrDecimal64(gasUsed), t}
 	return l.encoder.Encode(log)
-
 }
