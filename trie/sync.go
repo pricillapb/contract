@@ -236,6 +236,11 @@ func (s *TrieSync) Pending() int {
 	return len(s.requests)
 }
 
+// QueueLen returns the number of state entries currently pending for download.
+func (s *TrieSync) QueueLen() int {
+	return s.queue.Size()
+}
+
 // schedule inserts a new state retrieval request into the fetch queue. If there
 // is already a pending request for this node, the new request will be discarded
 // and only a parent reference added to the old one.
