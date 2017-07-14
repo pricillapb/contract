@@ -445,6 +445,14 @@ func (s *stateSync) updateStats(processed, duplicate, unexpected int, duration t
 	s.d.syncStatsState.unexpected += uint64(unexpected)
 
 	if written > 0 || duplicate > 0 || unexpected > 0 {
-		log.Info("Imported new state entries", "count", processed, "elapsed", common.PrettyDuration(duration), "processed", s.d.syncStatsState.processed, "pending", s.d.syncStatsState.pending, "retry", len(s.tasks), "duplicate", s.d.syncStatsState.duplicate, "unexpected", s.d.syncStatsState.unexpected)
+		log.Info("Imported new state entries",
+			"count", processed,
+			"processed", s.d.syncStatsState.processed,
+			"pending", s.d.syncStatsState.pending,
+			"retry", len(s.tasks),
+			"duplicate", s.d.syncStatsState.duplicate,
+			"unexpected", s.d.syncStatsState.unexpected,
+			"elapsed", common.PrettyDuration(duration),
+		)
 	}
 }
