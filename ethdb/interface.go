@@ -31,4 +31,5 @@ type Database interface {
 type Batch interface {
 	Putter
 	Write() error
+	Size() int
 }

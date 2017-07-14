@@ -94,6 +94,7 @@ type memBatch struct {
 	db     *MemDatabase
 	writes []kv
 	lock   sync.RWMutex
+	size   int
 }
 
 func (b *memBatch) Put(key, value []byte) error {
@@ -115,4 +116,8 @@ func (b *memBatch) Write() error {
 		b.db.db[string(kv.k)] = kv.v
 	}
 	return nil
+}
+
+func (b *memBatch) Size() int {
+	return b.size
 }
