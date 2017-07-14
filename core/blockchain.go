@@ -734,6 +734,13 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			return i, fmt.Errorf("failed to write lookup metadata: %v", err)
 		}
 		stats.processed++
+
+		if batch.Size() >= 100*1024 {
+			if err := batch.Write(); err != nil {
+				return 0, err
+			}
+			batch = bc.chainDb.NewBatch()
+		}
 	}
 	if err := batch.Write(); err != nil {
 		return 0, err
