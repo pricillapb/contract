@@ -748,8 +748,12 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 	}
 	bc.mu.Unlock()
 
-	log.Info("Imported new block receipts", "count", stats.processed, "elapsed", common.PrettyDuration(time.Since(start)),
-		"number", head.Number(), "hash", head.Hash(), "ignored", stats.ignored)
+	log.Info("Imported new block receipts",
+		"blocknum", head.Number(), "hash", head.Hash(),
+		"count", stats.processed,
+		"ignored", stats.ignored,
+		"elapsed", common.PrettyDuration(time.Since(start)),
+	)
 	return 0, nil
 }
 

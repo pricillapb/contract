@@ -278,9 +278,12 @@ func (hc *HeaderChain) InsertHeaderChain(chain []*types.Header, writeHeader WhCa
 	}
 	// Report some public statistics so the user has a clue what's going on
 	last := chain[len(chain)-1]
-	log.Info("Imported new block headers", "count", stats.processed, "elapsed", common.PrettyDuration(time.Since(start)),
-		"number", last.Number, "hash", last.Hash(), "ignored", stats.ignored)
-
+	log.Info("Imported new block headers",
+		"blocknum", last.Number, "hash", last.Hash(),
+		"count", stats.processed,
+		"ignored", stats.ignored,
+		"elapsed", common.PrettyDuration(time.Since(start)),
+	)
 	return 0, nil
 }
 
