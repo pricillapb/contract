@@ -443,16 +443,13 @@ func (s *stateSync) updateStats(processed, duplicate, unexpected int, duration t
 	s.d.syncStatsState.processed += uint64(processed)
 	s.d.syncStatsState.duplicate += uint64(duplicate)
 	s.d.syncStatsState.unexpected += uint64(unexpected)
-
-	if processed > 0 || duplicate > 0 || unexpected > 0 {
-		log.Info("Imported new state entries",
-			"count", processed,
-			"processed", s.d.syncStatsState.processed,
-			"pending", s.d.syncStatsState.pending,
-			"retry", len(s.tasks),
-			"duplicate", s.d.syncStatsState.duplicate,
-			"unexpected", s.d.syncStatsState.unexpected,
-			"elapsed", common.PrettyDuration(duration),
-		)
-	}
+	log.Info("Imported new state entries",
+		"count", processed,
+		"processed", s.d.syncStatsState.processed,
+		"pending", s.d.syncStatsState.pending,
+		"retry", len(s.tasks),
+		"duplicate", s.d.syncStatsState.duplicate,
+		"unexpected", s.d.syncStatsState.unexpected,
+		"elapsed", common.PrettyDuration(duration),
+	)
 }
