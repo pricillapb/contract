@@ -301,7 +301,7 @@ func (s *stateSync) commit(force bool) error {
 	if err := b.Write(); err != nil {
 		return fmt.Errorf("DB write error: %v", err)
 	}
-	s.updateStats(0, s.numUncommitted, 0, 0, time.Since(start))
+	s.updateStats(s.numUncommitted, 0, 0, time.Since(start))
 	s.numUncommitted = 0
 	s.bytesUncommitted = 0
 	return nil
@@ -365,22 +365,20 @@ func (s *stateSync) fillTasks(n int, req *stateReq) {
 // delivered.
 func (s *stateSync) process(req *stateReq) (bool, error) {
 	// Collect processing stats and update progress if valid data was received
-	processed, duplicate, unexpected := 0, 0, 0
-
-	defer func(start time.Time) {
-		if processed+duplicate+unexpected > 0 {
-			s.updateStats(processed, 0, duplicate, unexpected, time.Since(start))
+	duplicate, unexpected := 0, 0, 0
+	progress, stale := false, len(req.response) > 0
+	start := time.Now()
+	defer func() {
+		if duplicate > 0 || unexpected > 0 {
+			s.updateStats(0, duplicate, unexpected, time.Since(start))
 		}
-	}(time.Now())
+	}()
 
 	// Iterate over all the delivered data and inject one-by-one into the trie
-	progress, stale := false, len(req.response) > 0
-
 	for _, blob := range req.response {
 		prog, hash, err := s.processNodeData(blob)
 		switch err {
 		case nil:
-			processed++
 			s.numUncommitted++
 			s.bytesUncommitted += len(blob)
 			progress = progress || prog
@@ -437,7 +435,7 @@ func (s *stateSync) processNodeData(blob []byte) (bool, common.Hash, error) {
 
 // updateStats bumps the various state sync progress counters and displays a log
 // message for the user to see.
-func (s *stateSync) updateStats(processed, written, duplicate, unexpected int, duration time.Duration) {
+func (s *stateSync) updateStats(processed, duplicate, unexpected int, duration time.Duration) {
 	s.d.syncStatsLock.Lock()
 	defer s.d.syncStatsLock.Unlock()
 
@@ -447,6 +445,6 @@ func (s *stateSync) updateStats(processed, written, duplicate, unexpected int, d
 	s.d.syncStatsState.unexpected += uint64(unexpected)
 
 	if written > 0 || duplicate > 0 || unexpected > 0 {
-		log.Info("Imported new state entries", "count", processed, "flushed", written, "elapsed", common.PrettyDuration(duration), "processed", s.d.syncStatsState.processed, "pending", s.d.syncStatsState.pending, "retry", len(s.tasks), "duplicate", s.d.syncStatsState.duplicate, "unexpected", s.d.syncStatsState.unexpected)
+		log.Info("Imported new state entries", "count", processed, "elapsed", common.PrettyDuration(duration), "processed", s.d.syncStatsState.processed, "pending", s.d.syncStatsState.pending, "retry", len(s.tasks), "duplicate", s.d.syncStatsState.duplicate, "unexpected", s.d.syncStatsState.unexpected)
 	}
 }
