@@ -379,29 +379,14 @@ func (s *stateSync) process(req *stateReq) (bool, error) {
 			stale = false
 		}
 	}
-	// If some data managed to hit the database, flush and reset failure counters
-	if progress {
-		// Flush any accumulated data out to disk
-		batch := s.d.stateDB.NewBatch()
-
-		count, err := s.sched.Commit(batch)
-		if err != nil {
-			return stale, err
-		}
-		if err := batch.Write(); err != nil {
-			return stale, err
-		}
-		written = count
-
-		// If we're inside the critical section, reset fail counter since we progressed
-		if atomic.LoadUint32(&s.d.fsPivotFails) > 1 {
-			log.Trace("Fast-sync progressed, resetting fail counter", "previous", atomic.LoadUint32(&s.d.fsPivotFails))
-			atomic.StoreUint32(&s.d.fsPivotFails, 1) // Don't ever reset to 0, as that will unlock the pivot block
-		}
+	// If we're inside the critical section, reset fail counter since we progressed.
+	if progress && atomic.LoadUint32(&s.d.fsPivotFails) > 1 {
+		log.Trace("Fast-sync progressed, resetting fail counter", "previous", atomic.LoadUint32(&s.d.fsPivotFails))
+		atomic.StoreUint32(&s.d.fsPivotFails, 1) // Don't ever reset to 0, as that will unlock the pivot block
 	}
+
 	// Put unfulfilled tasks back into the retry queue
 	npeers := s.d.peers.Len()
-
 	for hash, task := range req.tasks {
 		// If the node did deliver something, missing items may be due to a protocol
 		// limit or a previous timeout + delayed delivery. Both cases should permit
