@@ -727,7 +727,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			return i, fmt.Errorf("failed to write block receipts: %v", err)
 		}
 		if err := WriteTxLookupEntries(batch, block); err != nil {
-			return fmt.Errorf("failed to write lookup metadata: %v", err)
+			return i, fmt.Errorf("failed to write lookup metadata: %v", err)
 		}
 		stats.processed++
 	}
