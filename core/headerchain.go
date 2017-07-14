@@ -363,8 +363,8 @@ func (hc *HeaderChain) GetHeaderByHash(hash common.Hash) *types.Header {
 
 // HasHeader checks if a block header is present in the database or not, caching
 // it if present.
-func (hc *HeaderChain) HasHeader(hash common.Hash) bool {
-	return hc.GetHeaderByHash(hash) != nil
+func (hc *HeaderChain) HasHeader(hash common.Hash, number uint64) bool {
+	return hc.GetHeader(hash, number) != nil
 }
 
 // GetHeaderByNumber retrieves a block header from the database by number,

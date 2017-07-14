@@ -72,7 +72,7 @@ func errResp(code errCode, format string, v ...interface{}) error {
 type hashFetcherFn func(common.Hash) error
 
 type BlockChain interface {
-	HasHeader(hash common.Hash) bool
+	HasHeader(hash common.Hash, number uint64) bool
 	GetHeader(hash common.Hash, number uint64) *types.Header
 	GetHeaderByHash(hash common.Hash) *types.Header
 	CurrentHeader() *types.Header
