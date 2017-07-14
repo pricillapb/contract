@@ -292,7 +292,7 @@ func (s *stateSync) loop() error {
 }
 
 func (s *stateSync) commit(force bool) error {
-	if !force && s.bytesUncommitted < 100*1024 && s.sched.QueueLen() > 0 {
+	if !force && s.bytesUncommitted < 100*1024 {
 		return nil
 	}
 	start := time.Now()

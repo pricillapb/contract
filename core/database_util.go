@@ -161,8 +161,12 @@ func GetHeader(db ethdb.Database, hash common.Hash, number uint64) *types.Header
 
 // GetBodyRLP retrieves the block body (transactions and uncles) in RLP encoding.
 func GetBodyRLP(db ethdb.Database, hash common.Hash, number uint64) rlp.RawValue {
-	data, _ := db.Get(append(append(bodyPrefix, encodeBlockNumber(number)...), hash.Bytes()...))
+	data, _ := db.Get(blockBodyKey(hash, number))
 	return data
+}
+
+func blockBodyKey(hash common.Hash, number uint64) []byte {
+	return append(append(bodyPrefix, encodeBlockNumber(number)...), hash.Bytes()...)
 }
 
 // GetBody retrieves the block body (transactons, uncles) corresponding to the
