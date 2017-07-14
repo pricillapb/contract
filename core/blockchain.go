@@ -697,6 +697,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 	// Collect some import statistics to report on
 	stats := struct{ processed, ignored int32 }{}
 	start := time.Now()
+	bytes := 0
 
 	batch := bc.chainDb.NewBatch()
 	for i := 0; i < len(blockChain); i++ {
@@ -739,11 +740,15 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 			if err := batch.Write(); err != nil {
 				return 0, err
 			}
+			bytes += batch.Size()
 			batch = bc.chainDb.NewBatch()
 		}
 	}
-	if err := batch.Write(); err != nil {
-		return 0, err
+	if batch.Size() > 0 {
+		bytes += batch.Size()
+		if err := batch.Write(); err != nil {
+			return 0, err
+		}
 	}
 
 	// Update the head fast sync block if better
@@ -763,7 +768,7 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		"blocknum", head.Number(), "hash", head.Hash(),
 		"count", stats.processed,
 		"ignored", stats.ignored,
-		"batchsize", batch.Size(),
+		"totalsize", bytes,
 		"elapsed", common.PrettyDuration(time.Since(start)),
 	)
 	return 0, nil
