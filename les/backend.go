@@ -45,9 +45,10 @@ import (
 )
 
 type LightEthereum struct {
-	odr         *LesOdr
-	relay       *LesTxRelay
-	chainConfig *params.ChainConfig
+	odr             *LesOdr
+	relay           *LesTxRelay
+	chainConfig     *params.ChainConfig
+	protocolVersion uint
 	// Channel for shutting down the service
 	shutdownChan chan bool
 	// Handlers
@@ -85,23 +86,39 @@ func New(ctx *node.ServiceContext, config *eth.Config) (*LightEthereum, error) {
 		return nil, genesisErr
 	}
 	log.Info("Initialised chain configuration", "config", chainConfig)
+	protocolVersion := uint(config.LightVersion)
+	found := false
+	for _, p := range ProtocolVersions {
+		if p == protocolVersion {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("Unsupported LES protocol version %d", protocolVersion)
+	}
 
 	peers := newPeerSet()
 	quitSync := make(chan struct{})
 
 	leth := &LightEthereum{
-		chainConfig:    chainConfig,
-		chainDb:        chainDb,
-		eventMux:       ctx.EventMux,
-		peers:          peers,
-		reqDist:        newRequestDistributor(peers, quitSync),
-		accountManager: ctx.AccountManager,
-		engine:         eth.CreateConsensusEngine(ctx, config, chainConfig, chainDb),
-		shutdownChan:   make(chan bool),
-		networkId:      config.NetworkId,
-		bbIndexer:      eth.NewBloomBitsProcessor(chainDb, light.BloomTrieFrequency),
-		chtIndexer:     light.NewChtIndexer(chainDb, true),
-		bltIndexer:     light.NewBloomTrieIndexer(chainDb, true),
+		chainConfig:     chainConfig,
+		protocolVersion: protocolVersion,
+		chainDb:         chainDb,
+		eventMux:        ctx.EventMux,
+		peers:           peers,
+		reqDist:         newRequestDistributor(peers, quitSync),
+		accountManager:  ctx.AccountManager,
+		engine:          eth.CreateConsensusEngine(ctx, config, chainConfig, chainDb),
+		shutdownChan:    make(chan bool),
+		networkId:       config.NetworkId,
+		bloomRequests:   make(chan chan *bloombits.Retrieval),
+		chtIndexer:      light.NewChtIndexer(chainDb, true),
+	}
+
+	if protocolVersion >= 2 {
+		leth.bbIndexer = eth.NewBloomIndexer(chainDb, light.BloomTrieFrequency)
+		leth.bltIndexer = light.NewBloomTrieIndexer(chainDb, true)
 	}
 
 	leth.relay = NewLesTxRelay(peers, leth.reqDist)
@@ -118,10 +135,8 @@ func New(ctx *node.ServiceContext, config *eth.Config) (*LightEthereum, error) {
 		core.WriteChainConfig(chainDb, genesisHash, chainConfig)
 	}
 
-	//leth.bbIndexer.Start(leth.blockchain)
-
 	leth.txPool = light.NewTxPool(leth.chainConfig, leth.blockchain, leth.relay)
-	if leth.protocolManager, err = NewProtocolManager(leth.chainConfig, true, config.NetworkId, leth.eventMux, leth.engine, leth.peers, leth.blockchain, nil, chainDb, leth.odr, leth.relay, quitSync, &leth.wg); err != nil {
+	if leth.protocolManager, err = NewProtocolManager(leth.chainConfig, true, []uint{protocolVersion}, config.NetworkId, leth.eventMux, leth.engine, leth.peers, leth.blockchain, nil, chainDb, leth.odr, leth.relay, quitSync, &leth.wg); err != nil {
 		return nil, err
 	}
 	leth.ApiBackend = &LesApiBackend{leth, nil}
@@ -134,6 +149,10 @@ func New(ctx *node.ServiceContext, config *eth.Config) (*LightEthereum, error) {
 }
 
 func lesTopic(genesisHash common.Hash) discv5.Topic {
+	return discv5.Topic("LES2@" + common.Bytes2Hex(genesisHash.Bytes()[0:8]))
+}
+
+func lesV1Topic(genesisHash common.Hash) discv5.Topic {
 	return discv5.Topic("LES@" + common.Bytes2Hex(genesisHash.Bytes()[0:8]))
 }
 
@@ -209,7 +228,12 @@ func (s *LightEthereum) Protocols() []p2p.Protocol {
 func (s *LightEthereum) Start(srvr *p2p.Server) error {
 	log.Warn("Light client mode is an experimental feature")
 	s.netRPCService = ethapi.NewPublicNetAPI(srvr, s.networkId)
-	s.serverPool.start(srvr, lesTopic(s.blockchain.Genesis().Hash()))
+	switch s.protocolVersion {
+	case lpv1:
+		s.serverPool.start(srvr, lesV1Topic(s.blockchain.Genesis().Hash()))
+	case lpv2:
+		s.serverPool.start(srvr, lesTopic(s.blockchain.Genesis().Hash()))
+	}
 	s.protocolManager.Start()
 	return nil
 }
@@ -218,9 +242,15 @@ func (s *LightEthereum) Start(srvr *p2p.Server) error {
 // Ethereum protocol.
 func (s *LightEthereum) Stop() error {
 	s.odr.Stop()
-	s.bbIndexer.Close()
-	s.chtIndexer.Close()
-	s.bltIndexer.Close()
+	if s.bbIndexer != nil {
+		s.bbIndexer.Close()
+	}
+	if s.chtIndexer != nil {
+		s.chtIndexer.Close()
+	}
+	if s.bltIndexer != nil {
+		s.bltIndexer.Close()
+	}
 	s.blockchain.Stop()
 	s.protocolManager.Stop()
 	s.txPool.Stop()

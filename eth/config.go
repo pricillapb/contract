@@ -41,6 +41,7 @@ var DefaultConfig = Config{
 	EthashDatasetsOnDisk: 2,
 	NetworkId:            1,
 	LightPeers:           20,
+	LightVersion:         2,
 	DatabaseCache:        128,
 	GasPrice:             big.NewInt(18 * params.Shannon),
 
@@ -77,8 +78,9 @@ type Config struct {
 	SyncMode  downloader.SyncMode
 
 	// Light client options
-	LightServ  int `toml:",omitempty"` // Maximum percentage of time allowed for serving LES requests
-	LightPeers int `toml:",omitempty"` // Maximum number of LES client peers
+	LightServ    int `toml:",omitempty"` // Maximum percentage of time allowed for serving LES requests
+	LightPeers   int `toml:",omitempty"` // Maximum number of LES client peers
+	LightVersion int `toml:",omitempty"` // LES client protocol version
 
 	// Database options
 	SkipBcVersionCheck bool `toml:"-"`

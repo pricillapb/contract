@@ -32,11 +32,11 @@ const (
 	lpv2 = 2
 )
 
-// Supported versions of the les protocol (first is primary).
+// Supported versions of the les protocol
 var ProtocolVersions = []uint{lpv1, lpv2}
 
 // Number of implemented message corresponding to different protocol versions.
-var ProtocolLengths = []uint64{15, 19}
+var ProtocolLengths = map[uint]uint64{lpv1: 15, lpv2: 19}
 
 const (
 	NetworkId          = 1

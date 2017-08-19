@@ -173,6 +173,11 @@ var (
 		Usage: "Maximum number of LES client peers",
 		Value: 20,
 	}
+	LightVersionFlag = cli.IntFlag{
+		Name:  "lesversion",
+		Usage: "LES client protocol version",
+		Value: 2,
+	}
 	LightKDFFlag = cli.BoolFlag{
 		Name:  "lightkdf",
 		Usage: "Reduce key-derivation RAM & CPU usage at some expense of KDF strength",
@@ -944,6 +949,9 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *eth.Config) {
 	}
 	if ctx.GlobalIsSet(LightPeersFlag.Name) {
 		cfg.LightPeers = ctx.GlobalInt(LightPeersFlag.Name)
+	}
+	if ctx.GlobalIsSet(LightVersionFlag.Name) {
+		cfg.LightVersion = ctx.GlobalInt(LightVersionFlag.Name)
 	}
 	if ctx.GlobalIsSet(NetworkIdFlag.Name) {
 		cfg.NetworkId = ctx.GlobalUint64(NetworkIdFlag.Name)
