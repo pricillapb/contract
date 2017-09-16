@@ -61,6 +61,7 @@ type Retrieval struct {
 	Sections []uint64
 	Bitsets  [][]byte
 	Error    error
+	Cancel   chan struct{}
 }
 
 // Matcher is a pipelined system of schedulers and logic matchers which perform
@@ -621,7 +622,7 @@ func (s *MatcherSession) Multiplex(batch int, wait time.Duration, mux chan chan 
 
 		case mux <- request:
 			// Retrieval accepted, something must arrive before we're aborting
-			request <- &Retrieval{Bit: bit, Sections: sections}
+			request <- &Retrieval{Bit: bit, Sections: sections, Cancel: s.kill}
 
 			result := <-request
 			if result.Error != nil {

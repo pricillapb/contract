@@ -57,7 +57,17 @@ func (eth *LightEthereum) startBloomHandlers() {
 
 					task.Bitsets = make([][]byte, len(task.Sections))
 
-					compVectors, err := light.GetBloomBits(context.Background(), eth.odr, task.Bit, task.Sections)
+					done := make(chan struct{})
+					ctx, cancel := context.WithCancel(context.Background())
+					go func() {
+						select {
+						case <-done:
+						case <-task.Cancel:
+						}
+						cancel()
+					}()
+					compVectors, err := light.GetBloomBits(ctx, eth.odr, task.Bit, task.Sections)
+					close(done)
 					if err == nil {
 						for i, _ := range task.Sections {
 							if blob, err := bitutil.DecompressBytes(compVectors[i], int(light.BloomTrieFrequency/8)); err == nil {
