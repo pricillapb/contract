@@ -135,8 +135,9 @@ func (f *Filter) Logs(ctx context.Context) ([]*types.Log, error) {
 func (f *Filter) indexedLogs(ctx context.Context, end uint64) ([]*types.Log, error) {
 	// Create a matcher session and request servicing from the backend
 	matches := make(chan uint64, 64)
+	errCh := make(chan error, 1)
 
-	session, err := f.matcher.Start(uint64(f.begin), end, matches)
+	session, err := f.matcher.Start(uint64(f.begin), end, matches, errCh)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +166,9 @@ func (f *Filter) indexedLogs(ctx context.Context, end uint64) ([]*types.Log, err
 				return logs, err
 			}
 			logs = append(logs, found...)
+
+		case err := <-errCh:
+			return logs, err
 
 		case <-ctx.Done():
 			return logs, ctx.Err()

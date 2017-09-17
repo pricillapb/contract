@@ -144,7 +144,7 @@ func testMatcher(t *testing.T, filter [][]bloomIndexes, blocks uint64, intermitt
 	quit := make(chan struct{})
 	matches := make(chan uint64, 16)
 
-	session, err := matcher.Start(0, blocks-1, matches)
+	session, err := matcher.Start(0, blocks-1, matches, make(chan error, 1))
 	if err != nil {
 		t.Fatalf("failed to stat matcher session: %v", err)
 	}
@@ -169,7 +169,7 @@ func testMatcher(t *testing.T, filter [][]bloomIndexes, blocks uint64, intermitt
 				quit = make(chan struct{})
 				matches = make(chan uint64, 16)
 
-				session, err = matcher.Start(i+1, blocks-1, matches)
+				session, err = matcher.Start(i+1, blocks-1, matches, make(chan error, 1))
 				if err != nil {
 					t.Fatalf("failed to stat matcher session: %v", err)
 				}

@@ -60,6 +60,7 @@ type Retrieval struct {
 	Bit      uint
 	Sections []uint64
 	Bitsets  [][]byte
+	Error    error
 }
 
 // Matcher is a pipelined system of schedulers and logic matchers which perform
@@ -137,7 +138,7 @@ func (m *Matcher) addScheduler(idx uint) {
 // Start starts the matching process and returns a stream of bloom matches in
 // a given range of blocks. If there are no more matches in the range, the result
 // channel is closed.
-func (m *Matcher) Start(begin, end uint64, results chan uint64) (*MatcherSession, error) {
+func (m *Matcher) Start(begin, end uint64, results chan uint64, errCh chan error) (*MatcherSession, error) {
 	// Make sure we're not creating concurrent sessions
 	if atomic.SwapUint32(&m.running, 1) == 1 {
 		return nil, errors.New("matcher already running")
@@ -149,6 +150,7 @@ func (m *Matcher) Start(begin, end uint64, results chan uint64) (*MatcherSession
 		matcher: m,
 		quit:    make(chan struct{}),
 		kill:    make(chan struct{}),
+		errCh:   errCh,
 	}
 	for _, scheduler := range m.schedulers {
 		scheduler.reset()
@@ -502,9 +504,10 @@ func (m *Matcher) distributor(dist chan *request, session *MatcherSession) {
 type MatcherSession struct {
 	matcher *Matcher
 
-	quit chan struct{} // Quit channel to request pipeline termination
-	kill chan struct{} // Term channel to signal non-graceful forced shutdown
-	pend sync.WaitGroup
+	quit  chan struct{} // Quit channel to request pipeline termination
+	kill  chan struct{} // Term channel to signal non-graceful forced shutdown
+	errCh chan error
+	pend  sync.WaitGroup
 }
 
 // Close stops the matching process and waits for all subprocesses to terminate
@@ -621,6 +624,13 @@ func (s *MatcherSession) Multiplex(batch int, wait time.Duration, mux chan chan 
 			request <- &Retrieval{Bit: bit, Sections: sections}
 
 			result := <-request
+			if result.Error != nil {
+				select {
+				case s.errCh <- result.Error:
+				default:
+				}
+			}
+
 			s.DeliverSections(result.Bit, result.Sections, result.Bitsets)
 		}
 	}
