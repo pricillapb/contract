@@ -283,6 +283,10 @@ func (b *BloomTrieIndexerBackend) Commit() error {
 		}
 	}
 
+	// TODO: maybe use
+	// b := db.NewBatch()
+	// b.trie.CommitTo(b)
+	// b.Write()
 	root, err := b.trie.Commit()
 	if err != nil {
 		return err
