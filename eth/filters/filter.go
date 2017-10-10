@@ -154,7 +154,7 @@ func (f *Filter) indexedLogs(ctx context.Context, end uint64) ([]*types.Log, err
 			// Abort if all matches have been fulfilled
 			if !ok {
 				f.begin = int64(end) + 1
-				return logs, nil
+				return logs, session.Error()
 			}
 			// Retrieve the suggested block and pull any truly matching logs
 			header, err := f.backend.HeaderByNumber(ctx, rpc.BlockNumber(number))
@@ -166,9 +166,6 @@ func (f *Filter) indexedLogs(ctx context.Context, end uint64) ([]*types.Log, err
 				return logs, err
 			}
 			logs = append(logs, found...)
-
-		case err := <-errCh:
-			return logs, err
 
 		case <-ctx.Done():
 			return logs, ctx.Err()

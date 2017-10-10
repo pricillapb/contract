@@ -505,10 +505,10 @@ func (m *Matcher) distributor(dist chan *request, session *MatcherSession) {
 type MatcherSession struct {
 	matcher *Matcher
 
-	quit  chan struct{} // Quit channel to request pipeline termination
-	kill  chan struct{} // Term channel to signal non-graceful forced shutdown
-	errCh chan error
-	pend  sync.WaitGroup
+	quit chan struct{} // Quit channel to request pipeline termination
+	kill chan struct{} // Term channel to signal non-graceful forced shutdown
+	err  error
+	pend sync.WaitGroup
 }
 
 // Close stops the matching process and waits for all subprocesses to terminate
@@ -540,6 +540,14 @@ func (s *MatcherSession) AllocateRetrieval() (uint, bool) {
 		bit, ok := <-fetcher
 		return bit, ok
 	}
+}
+
+func (s *MatcherSession) Error() error {
+	return s.err
+}
+
+func (s *MatcherSession) setError(err error) {
+	s.err = err
 }
 
 // PendingSections returns the number of pending section retrievals belonging to
@@ -625,13 +633,7 @@ func (s *MatcherSession) Multiplex(batch int, wait time.Duration, mux chan chan 
 			request <- &Retrieval{Bit: bit, Sections: sections, Cancel: s.kill}
 
 			result := <-request
-			if result.Error != nil {
-				select {
-				case s.errCh <- result.Error:
-				default:
-				}
-			}
-
+			s.setError(result.Error)
 			s.DeliverSections(result.Bit, result.Sections, result.Bitsets)
 		}
 	}
