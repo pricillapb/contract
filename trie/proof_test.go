@@ -166,6 +166,7 @@ func randBytes(n int) []byte {
 	return r
 }
 
+// TODO: use ethdb.MemDatabase. Use Keys method instead of accessing the map.
 type testProofDb struct {
 	db map[string][]byte
 }
