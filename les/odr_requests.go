@@ -240,12 +240,12 @@ func (r *TrieRequest) Validate(db ethdb.Database, msg *Msg) error {
 		proofs := msg.Obj.(light.NodeList)
 		// Verify the proof and store if checks out
 		pdb := proofs.NodeSet()
-		cdb := pdb.ReadCache()
-		if _, err, _ := trie.VerifyProof(r.Id.Root, r.Key, cdb); err != nil {
+		reads := &readTraceDB{db: pdb}
+		if _, err, _ := trie.VerifyProof(r.Id.Root, r.Key, reads); err != nil {
 			return fmt.Errorf("merkle proof verification failed: %v", err)
 		}
 		// check if all nodes have been read by VerifyProof
-		if pdb.KeyCount() != cdb.KeyCount() {
+		if len(reads.reads) != cdb.KeyCount() {
 			return errUselessNodes
 		}
 		r.Proof = pdb
@@ -431,12 +431,12 @@ func (r *ChtRequest) Validate(db ethdb.Database, msg *Msg) error {
 		var encNumber [8]byte
 		binary.BigEndian.PutUint64(encNumber[:], r.BlockNum)
 
-		cdb := pdb.ReadCache()
-		value, err, _ := trie.VerifyProof(r.ChtRoot, encNumber[:], cdb)
+		reads := &readTraceDB{db: pdb}
+		value, err, _ := trie.VerifyProof(r.ChtRoot, encNumber[:], reads)
 		if err != nil {
 			return fmt.Errorf("merkle proof verification failed: %v", err)
 		}
-		if pdb.KeyCount() != cdb.KeyCount() {
+		if len(reads.reads) != cdb.KeyCount() {
 			return errUselessNodes
 		}
 
@@ -513,7 +513,7 @@ func (r *BloomRequest) Validate(db ethdb.Database, msg *Msg) error {
 	resps := msg.Obj.(PPTResps)
 	proofs := resps.Proofs
 	pdb := proofs.NodeSet()
-	cdb := pdb.ReadCache()
+	reads := &readTraceDB{db: pdb}
 
 	r.BloomBits = make([][]byte, len(r.SectionIdxList))
 
@@ -523,16 +523,31 @@ func (r *BloomRequest) Validate(db ethdb.Database, msg *Msg) error {
 
 	for i, idx := range r.SectionIdxList {
 		binary.BigEndian.PutUint64(encNumber[2:10], idx)
-		value, err, _ := trie.VerifyProof(r.BltRoot, encNumber[:], cdb)
+		value, err, _ := trie.VerifyProof(r.BltRoot, encNumber[:], reads)
 		if err != nil {
 			return err
 		}
 		r.BloomBits[i] = value
 	}
 
-	if pdb.KeyCount() != cdb.KeyCount() {
+	if len(reads.reads) != cdb.KeyCount() {
 		return errUselessNodes
 	}
 	r.Proofs = pdb
 	return nil
+}
+
+// readTraceDB stores the keys of database reads. We use this to check that received node
+// sets contain only the trie nodes necessary to make proofs pass.
+type readTraceDB struct {
+	db    trie.DatabaseReader
+	reads map[string]struct{}
+}
+
+func (db *readTraceDB) Get(k []byte) ([]byte, error) {
+	if db.reads == nil {
+		db.reads = make(map[string]struct{})
+	}
+	db.reads[string(k)] = struct{}{}
+	return db.db.Get(k)
 }
