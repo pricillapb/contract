@@ -16,7 +16,7 @@
 
 package dashboard
 
-//go:generate npm --prefix ./assets install
+//go:generate npm --prefix ./assets --no-save install
 //go:generate ./assets/node_modules/.bin/webpack --config ./assets/webpack.config.js --context ./assets
 //go:generate go-bindata -nometadata -o assets.go -prefix assets -nocompress -pkg dashboard assets/public/...
 //go:generate sh -c "sed 's#var _public#//nolint:misspell\\\n&#' assets.go > assets.go.tmp && mv assets.go.tmp assets.go"
