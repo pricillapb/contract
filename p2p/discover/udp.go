@@ -27,7 +27,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/p2p/nat"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -168,7 +167,10 @@ type udp struct {
 	gotreply   chan reply
 
 	closing chan struct{}
-	nat     nat.Interface
+
+	iptrack      *netutil.IPTracker
+	lastEndpoint string
+	iptrackCount int
 
 	*Table
 }
@@ -247,6 +249,7 @@ func newUDP(c conn, cfg Config) (*Table, *udp, error) {
 		closing:     make(chan struct{}),
 		gotreply:    make(chan reply),
 		addpending:  make(chan *pending),
+		iptrack:     netutil.NewIPTracker(20*time.Second, 60*time.Second, 0),
 	}
 	realaddr := c.LocalAddr().(*net.UDPAddr)
 	if cfg.AnnounceAddr != nil {
@@ -484,6 +487,19 @@ func (t *udp) write(toaddr *net.UDPAddr, what string, packet []byte) error {
 	return err
 }
 
+func (t *udp) updateIP(from NodeID, ip net.IP, port uint16) {
+	t.iptrack.AddStatement(string(from[:]), fmt.Sprintf("%v:%d", ip, port))
+	if ep := t.iptrack.PredictEndpoint(); ep != t.lastEndpoint {
+		log.Warn("IP prediction changed", "old", t.lastEndpoint, "new", ep)
+		t.lastEndpoint = ep
+	}
+	// t.iptrackCount++
+	// if t.iptrackCount > 50 {
+	// 	spew.Dump(t.iptrack)
+	// 	t.iptrackCount = 0
+	// }
+}
+
 func encodePacket(priv *ecdsa.PrivateKey, ptype byte, req interface{}) (packet, hash []byte, err error) {
 	b := new(bytes.Buffer)
 	b.Write(headSpace)
@@ -583,6 +599,7 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromID NodeID, mac []byte) er
 	if expired(req.Expiration) {
 		return errExpired
 	}
+	t.updateIP(fromID, req.To.IP, req.To.UDP)
 	t.send(from, pongPacket, &pong{
 		To:         makeEndpoint(from, req.From.TCP),
 		ReplyTok:   mac,
@@ -601,6 +618,7 @@ func (req *pong) handle(t *udp, from *net.UDPAddr, fromID NodeID, mac []byte) er
 	if expired(req.Expiration) {
 		return errExpired
 	}
+	t.updateIP(fromID, req.To.IP, req.To.UDP)
 	if !t.handleReply(fromID, pongPacket, req) {
 		return errUnsolicitedReply
 	}
