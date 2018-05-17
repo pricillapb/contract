@@ -545,7 +545,7 @@ func (tab *Table) len() (n int) {
 
 // bucket returns the bucket for the given node ID hash.
 func (tab *Table) bucket(id enode.ID) *bucket {
-	d := logdist(tab.self.id, id)
+	d := enode.LogDist(tab.self.id, id)
 	if d <= bucketMinDistance {
 		return tab.buckets[0]
 	}
@@ -734,7 +734,7 @@ type nodesByDistance struct {
 // push adds the given node to the list, keeping the total size below maxElems.
 func (h *nodesByDistance) push(n *Node, maxElems int) {
 	ix := sort.Search(len(h.entries), func(i int) bool {
-		return distcmp(h.target, h.entries[i].id, n.id) > 0
+		return enode.DistCmp(h.target, h.entries[i].id, n.id) > 0
 	})
 	if len(h.entries) < maxElems {
 		h.entries = append(h.entries, n)

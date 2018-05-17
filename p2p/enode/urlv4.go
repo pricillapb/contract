@@ -1,0 +1,167 @@
+package enode
+
+import (
+	"crypto/ecdsa"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"regexp"
+	"strconv"
+
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/p2p/enr"
+)
+
+var incompleteNodeURL = regexp.MustCompile("(?i)^(?:enode://)?([0-9a-f]+)$")
+
+// MustParseV4 parses a node URL. It panics if the URL is not valid.
+func MustParseV4(rawurl string) *Node {
+	n, err := ParseV4(rawurl)
+	if err != nil {
+		panic("invalid node URL: " + err.Error())
+	}
+	return n
+}
+
+// ParseV4 parses a node URL.
+//
+// There are two basic forms of node URLs:
+//
+//   - incomplete nodes, which only have the public key (node ID)
+//   - complete nodes, which contain the public key and IP/Port information
+//
+// For incomplete nodes, the designator must look like one of these
+//
+//    enode://<hex node id>
+//    <hex node id>
+//
+// For complete nodes, the node ID is encoded in the username portion
+// of the URL, separated from the host by an @ sign. The hostname can
+// only be given as an IP address, DNS domain names are not allowed.
+// The port in the host name section is the TCP listening port. If the
+// TCP and UDP (discovery) ports differ, the UDP port is specified as
+// query parameter "discport".
+//
+// In the following example, the node URL describes
+// a node with IP address 10.3.58.6, TCP listening port 30303
+// and UDP discovery port 30301.
+//
+//    enode://<hex node id>@10.3.58.6:30303?discport=30301
+func ParseV4(rawurl string) (*Node, error) {
+	if m := incompleteNodeURL.FindStringSubmatch(rawurl); m != nil {
+		id, err := parsePubkey(m[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid node ID (%v)", err)
+		}
+		return newNodeV4(id, nil, 0, 0), nil
+	}
+	return parseComplete(rawurl)
+}
+
+func NewV4(pubkey *ecdsa.PublicKey, ip net.IP, tcp, udp int) *Node {
+	return newNodeV4(pubkey, ip, tcp, udp)
+}
+
+func newNodeV4(pubkey *ecdsa.PublicKey, ip net.IP, tcp, udp int) *Node {
+	var n Node
+	n.Set(enr.ID("v4"))
+	n.Set((*enr.Secp256k1)(pubkey))
+	if ip != nil {
+		n.Set(enr.IP(ip))
+	}
+	if udp != 0 {
+		n.Set(enr.UDP(udp))
+	}
+	if tcp != 0 {
+		n.Set(enr.TCP(tcp))
+	}
+	return &n
+}
+
+func parseComplete(rawurl string) (*Node, error) {
+	var (
+		id               *ecdsa.PublicKey
+		ip               net.IP
+		tcpPort, udpPort uint64
+	)
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme != "enode" {
+		return nil, errors.New("invalid URL scheme, want \"enode\"")
+	}
+	// Parse the Node ID from the user portion.
+	if u.User == nil {
+		return nil, errors.New("does not contain node ID")
+	}
+	if id, err = parsePubkey(u.User.String()); err != nil {
+		return nil, fmt.Errorf("invalid node ID (%v)", err)
+	}
+	// Parse the IP address.
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		return nil, fmt.Errorf("invalid host: %v", err)
+	}
+	if ip = net.ParseIP(host); ip == nil {
+		return nil, errors.New("invalid IP address")
+	}
+	// Ensure the IP is 4 bytes long for IPv4 addresses.
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
+	}
+	// Parse the port numbers.
+	if tcpPort, err = strconv.ParseUint(port, 10, 16); err != nil {
+		return nil, errors.New("invalid port")
+	}
+	udpPort = tcpPort
+	qv := u.Query()
+	if qv.Get("discport") != "" {
+		udpPort, err = strconv.ParseUint(qv.Get("discport"), 10, 16)
+		if err != nil {
+			return nil, errors.New("invalid discport in query")
+		}
+	}
+	return newNodeV4(id, ip, int(udpPort), int(tcpPort)), nil
+}
+
+// parsePubkey parses a hex-encoded secp256k1 public key.
+func parsePubkey(in string) (*ecdsa.PublicKey, error) {
+	b, err := hex.DecodeString(in)
+	if err != nil {
+		return nil, err
+	} else if len(b) != 64 {
+		return nil, fmt.Errorf("wrong length, want %d hex chars", 128)
+	}
+	b = append([]byte{0x4}, b...)
+	return crypto.ToECDSAPub(b), nil
+}
+
+func (n *Node) v4URL() string {
+	var scheme enr.ID
+	var nodeid string
+	switch n.Load(&scheme); scheme {
+	case "":
+		nodeid = "noid"
+	case "v4":
+		var key ecdsa.PublicKey
+		n.Load((*enr.Secp256k1)(&key))
+		nodeid = fmt.Sprintf("%x", crypto.FromECDSAPub(&key)[1:])
+	default:
+		nodeid = fmt.Sprintf("%s.%x", scheme, n.NodeAddr())
+	}
+	u := url.URL{Scheme: "enode"}
+	if n.Incomplete() {
+		u.Host = nodeid
+	} else {
+		addr := net.TCPAddr{IP: n.IP(), Port: n.TCP()}
+		u.User = url.User(nodeid)
+		u.Host = addr.String()
+		if n.UDP() != n.TCP() {
+			u.RawQuery = "discport=" + strconv.Itoa(n.UDP())
+		}
+	}
+	return u.String()
+}

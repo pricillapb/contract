@@ -179,7 +179,7 @@ func TestTable_BucketIPLimit(t *testing.T) {
 // it is full. The node's IDs dont correspond to their
 // hashes.
 func fillBucket(tab *Table, n *Node) (last *Node) {
-	ld := logdist(tab.self.id, n.id)
+	ld := enode.LogDist(tab.self.id, n.id)
 	b := tab.bucket(n.id)
 	for len(b.entries) < bucketSize {
 		b.entries = append(b.entries, nodeAtDistance(tab.self.id, ld))
@@ -212,7 +212,7 @@ func setID(r *enode.Node, id enode.ID) {
 	}
 }
 
-// nodeAtDistance creates a node for which logdist(base, n.id) == ld.
+// nodeAtDistance creates a node for which enode.LogDist(base, n.id) == ld.
 func nodeAtDistance(base enode.ID, ld int) *Node {
 	n := new(enode.Node)
 	setID(n, idAtDistance(base, ld))
@@ -294,7 +294,7 @@ func TestTable_closest(t *testing.T) {
 					continue // don't run the check below for nodes in result
 				}
 				farthestResult := result[len(result)-1].id
-				if distcmp(test.Target, n.id, farthestResult) < 0 {
+				if enode.DistCmp(test.Target, n.id, farthestResult) < 0 {
 					t.Errorf("table contains node that is closer to target but it's not in result")
 					t.Logf("  Target:          %v", test.Target)
 					t.Logf("  Farthest Result: %v", farthestResult)
@@ -375,13 +375,13 @@ func TestTable_Lookup(t *testing.T) {
 	}
 	// seed table with initial node (otherwise lookup will terminate immediately)
 	seedKey, _ := decodePubkey(lookupTestnet.dists[256][0])
-	seed := newNode(enode.NewV4(seedKey, net.IP{}, 256, 0))
+	seed := newNode(enode.NewV4(seedKey, net.IP{}, 0, 256))
 	tab.stuff([]*Node{seed})
 
 	results := tab.Lookup(lookupTestnet.target)
 	t.Logf("results:")
 	for _, e := range results {
-		t.Logf("  ld=%d, %x", logdist(lookupTestnet.targetSha, e.id), e.id[:])
+		t.Logf("  ld=%d, %x", enode.LogDist(lookupTestnet.targetSha, e.id), e.id[:])
 	}
 	if len(results) != bucketSize {
 		t.Errorf("wrong number of results: got %d, want %d", len(results), bucketSize)
@@ -625,7 +625,7 @@ func (tn *preminedTestnet) mine(target encPubkey) {
 	for found < bucketSize*10 {
 		k := newkey()
 		key := encodePubkey(&k.PublicKey)
-		ld := logdist(n.targetSha, key.id())
+		ld := enode.LogDist(n.targetSha, key.id())
 		if len(n.dists[ld]) < bucketSize {
 			n.dists[ld] = append(n.dists[ld], key)
 			fmt.Println("found ID with ld", ld)
@@ -664,17 +664,6 @@ func hasDuplicates(slice []*Node) bool {
 	return false
 }
 
-func sortedByDistanceTo(distbase enode.ID, slice []*Node) bool {
-	var last enode.ID
-	for i, e := range slice {
-		if i > 0 && distcmp(distbase, e.id, last) < 0 {
-			return false
-		}
-		last = e.id
-	}
-	return true
-}
-
 func contains(ns []*Node, id enode.ID) bool {
 	for _, n := range ns {
 		if n.id == id {
@@ -682,6 +671,17 @@ func contains(ns []*Node, id enode.ID) bool {
 		}
 	}
 	return false
+}
+
+func sortedByDistanceTo(distbase enode.ID, slice []*Node) bool {
+	var last enode.ID
+	for i, e := range slice {
+		if i > 0 && enode.DistCmp(distbase, e.id, last) < 0 {
+			return false
+		}
+		last = e.id
+	}
+	return true
 }
 
 // gen wraps quick.Value so it's easier to use.
