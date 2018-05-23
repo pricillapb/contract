@@ -18,7 +18,6 @@ package discover
 
 import (
 	"crypto/ecdsa"
-	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -33,14 +32,6 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
-
-func newTestTable(t transport) *Table {
-	testKey, _ := crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
-	self := newNode(enode.NewV4(&testKey.PublicKey, net.IP{0, 0, 0, 0}, 0, 0))
-	db, _ := enode.NewDB("", self.id)
-	tab, _ := newTable(t, &self.n, self.addr(), db, nil)
-	return tab
-}
 
 func TestTable_pingReplace(t *testing.T) {
 	run := func(newNodeResponding, lastInBucketResponding bool) {
@@ -158,7 +149,7 @@ func TestTable_IPLimit(t *testing.T) {
 	}
 }
 
-// This checks that the table-wide IP limit is applied correctly.
+// This checks that the per-bucket IP limit is applied correctly.
 func TestTable_BucketIPLimit(t *testing.T) {
 	transport := newPingRecorder()
 	tab := newTestTable(transport)
@@ -258,9 +249,7 @@ func TestTable_closest(t *testing.T) {
 	test := func(test *closeTest) bool {
 		// for any node table, Target and N
 		transport := newPingRecorder()
-		self := nodeAtDistance(test.Self, 0)
-		db, _ := enode.NewDB("", test.Self)
-		tab, _ := newTable(transport, &self.n, &net.UDPAddr{}, db, nil)
+		tab := newTestTable(transport)
 		defer tab.Close()
 		tab.stuff(test.All)
 
@@ -364,9 +353,7 @@ func (*closeTest) Generate(rand *rand.Rand, size int) reflect.Value {
 }
 
 func TestTable_Lookup(t *testing.T) {
-	self := nodeAtDistance(enode.ID{}, 0)
-	db, _ := enode.NewDB("", self.id)
-	tab, _ := newTable(lookupTestnet, &self.n, &net.UDPAddr{}, db, nil)
+	tab := newTestTable(lookupTestnet)
 	defer tab.Close()
 
 	// lookup on empty table returns no nodes
@@ -399,7 +386,7 @@ func TestTable_Lookup(t *testing.T) {
 // The nodes were obtained by running testnet.mine with a random NodeID as target.
 var lookupTestnet = &preminedTestnet{
 	target:    hexEncPubkey("166aea4f556532c6d34e8b740e5d314af7e9ac0ca79833bd751d6b665f12dfd38ec563c363b32f02aef4a80b44fd3def94612d497b99cb5f17fd24de454927ec"),
-	targetSha: enode.ID{0x5c, 0x94, 0x4e, 0xe5, 0x1c, 0x5a, 0xe9, 0xf7, 0x2a, 0x95, 0xec, 0xcb, 0x8a, 0xed, 0x3, 0x74, 0xee, 0xcb, 0x51, 0x19, 0xd7, 0x20, 0xcb, 0xea, 0x68, 0x13, 0xe8, 0xe0, 0xd6, 0xad, 0x92, 0x61},
+	targetSha: enode.HexID("5c944ee51c5ae9f72a95eccb8aed0374eecb5119d720cbea6813e8e0d6ad9261"),
 	dists: [257][]encPubkey{
 		240: {
 			hexEncPubkey("2001ad5e3e80c71b952161bc0186731cf5ffe942d24a79230a0555802296238e57ea7a32f5b6f18564eadc1c65389448481f8c9338df0a3dbd18f708cbc2cbcb"),
@@ -650,40 +637,6 @@ func (tn *preminedTestnet) mine(target encPubkey) {
 	fmt.Println("}")
 }
 
-func hasDuplicates(slice []*Node) bool {
-	seen := make(map[enode.ID]bool)
-	for i, e := range slice {
-		if e == nil {
-			panic(fmt.Sprintf("nil *Node at %d", i))
-		}
-		if seen[e.id] {
-			return true
-		}
-		seen[e.id] = true
-	}
-	return false
-}
-
-func contains(ns []*Node, id enode.ID) bool {
-	for _, n := range ns {
-		if n.id == id {
-			return true
-		}
-	}
-	return false
-}
-
-func sortedByDistanceTo(distbase enode.ID, slice []*Node) bool {
-	var last enode.ID
-	for i, e := range slice {
-		if i > 0 && enode.DistCmp(distbase, e.id, last) < 0 {
-			return false
-		}
-		last = e.id
-	}
-	return true
-}
-
 // gen wraps quick.Value so it's easier to use.
 // it generates a random value of the given value's type.
 func gen(typ interface{}, rand *rand.Rand) interface{} {
@@ -694,37 +647,17 @@ func gen(typ interface{}, rand *rand.Rand) interface{} {
 	return v.Interface()
 }
 
+func quickcfg() *quick.Config {
+	return &quick.Config{
+		MaxCount: 5000,
+		Rand:     rand.New(rand.NewSource(time.Now().Unix())),
+	}
+}
+
 func newkey() *ecdsa.PrivateKey {
 	key, err := crypto.GenerateKey()
 	if err != nil {
 		panic("couldn't generate key: " + err.Error())
 	}
 	return key
-}
-
-func hexEncPubkey(h string) (ret encPubkey) {
-	b, err := hex.DecodeString(h)
-	if err != nil {
-		panic(err)
-	}
-	if len(b) != len(ret) {
-		panic("invalid length")
-	}
-	copy(ret[:], b)
-	return ret
-}
-
-func hexPubkey(h string) *ecdsa.PublicKey {
-	k, err := decodePubkey(hexEncPubkey(h))
-	if err != nil {
-		panic(err)
-	}
-	return k
-}
-
-func quickcfg() *quick.Config {
-	return &quick.Config{
-		MaxCount: 5000,
-		Rand:     rand.New(rand.NewSource(time.Now().Unix())),
-	}
 }

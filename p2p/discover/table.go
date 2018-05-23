@@ -101,11 +101,7 @@ type bucket struct {
 	ips          netutil.DistinctNetSet
 }
 
-func newTable(t transport, self *enode.Node, ourAddr *net.UDPAddr, db *enode.DB, bootnodes []*enode.Node) (*Table, error) {
-	// If no node database was given, use an in-memory one
-	if db == nil {
-		db, _ = enode.NewDB("", self.ID())
-	}
+func newTable(t transport, self *enode.Node, db *enode.DB, bootnodes []*enode.Node) (*Table, error) {
 	tab := &Table{
 		net:        t,
 		db:         db,
