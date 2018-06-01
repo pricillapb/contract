@@ -160,7 +160,7 @@ func (n *ID) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// MustHexID converts a hex string to an ID.
+// HexID converts a hex string to an ID.
 // The string may be prefixed with 0x.
 // It panics if the string is not a valid ID.
 func HexID(in string) ID {

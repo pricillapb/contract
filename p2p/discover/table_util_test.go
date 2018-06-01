@@ -53,13 +53,13 @@ func setID(r *enode.Node, id enode.ID) {
 	}
 }
 
-func newTestTable(t transport) *Table {
+func newTestTable(t transport) (*Table, *enode.DB) {
 	var n enode.Node
 	n.Set(enr.IP{0, 0, 0, 0})
 	setID(&n, enode.ID{})
 	db, _ := enode.NewDB("", enode.ID{})
 	tab, _ := newTable(t, &n, db, nil)
-	return tab
+	return tab, db
 }
 
 // nodeAtDistance creates a node for which enode.LogDist(base, n.id) == ld.

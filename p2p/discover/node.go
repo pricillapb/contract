@@ -91,7 +91,7 @@ func recoverNodeKey(hash, sig []byte) (key encPubkey, err error) {
 	if err != nil {
 		return key, err
 	}
-	copy(key[:], pubkey)
+	copy(key[:], pubkey[1:])
 	return key, nil
 }
 

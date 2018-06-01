@@ -139,7 +139,7 @@ func (t *udp) nodeFromRPC(sender *net.UDPAddr, rn rpcNode) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := newNode(enode.NewV4(key, rn.IP, int(rn.UDP), int(rn.TCP)))
+	n := newNode(enode.NewV4(key, rn.IP, int(rn.TCP), int(rn.UDP)))
 	err = n.n.ValidateComplete()
 	return n, err
 }
@@ -252,7 +252,7 @@ func newUDP(c conn, cfg Config) (*Table, *udp, error) {
 	if cfg.AnnounceAddr != nil {
 		realaddr = cfg.AnnounceAddr
 	}
-	self := enode.NewV4(&cfg.PrivateKey.PublicKey, realaddr.IP, realaddr.Port, 0)
+	self := enode.NewV4(&cfg.PrivateKey.PublicKey, realaddr.IP, 0, realaddr.Port)
 	db, err := enode.NewDB(cfg.NodeDBPath, self.ID())
 	if err != nil {
 		return nil, nil, err

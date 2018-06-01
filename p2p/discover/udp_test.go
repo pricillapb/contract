@@ -241,7 +241,9 @@ func TestUDP_findnode(t *testing.T) {
 	// take care not to overflow any bucket.
 	nodes := &nodesByDistance{target: testTarget.id()}
 	for i := 0; i < bucketSize; i++ {
-		nodes.push(nodeAtDistance(test.table.self.id, i+2), bucketSize)
+		key := newkey()
+		n := newNode(enode.NewV4(&key.PublicKey, net.IP{127, 0, 0, 1}, 0, i))
+		nodes.push(n, bucketSize)
 	}
 	test.table.stuff(nodes.entries)
 

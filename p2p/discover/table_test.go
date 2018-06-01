@@ -50,8 +50,9 @@ func TestTable_pingReplace(t *testing.T) {
 
 func testPingReplace(t *testing.T, newNodeIsResponding, lastInBucketIsResponding bool) {
 	transport := newPingRecorder()
-	tab := newTestTable(transport)
+	tab, db := newTestTable(transport)
 	defer tab.Close()
+	defer db.Close()
 
 	<-tab.initDone
 
@@ -136,8 +137,9 @@ func TestBucket_bumpNoDuplicates(t *testing.T) {
 // This checks that the table-wide IP limit is applied correctly.
 func TestTable_IPLimit(t *testing.T) {
 	transport := newPingRecorder()
-	tab := newTestTable(transport)
+	tab, db := newTestTable(transport)
 	defer tab.Close()
+	defer db.Close()
 
 	for i := 0; i < tableIPLimit+1; i++ {
 		n := nodeAtDistance(tab.self.id, i)
@@ -152,8 +154,9 @@ func TestTable_IPLimit(t *testing.T) {
 // This checks that the per-bucket IP limit is applied correctly.
 func TestTable_BucketIPLimit(t *testing.T) {
 	transport := newPingRecorder()
-	tab := newTestTable(transport)
+	tab, db := newTestTable(transport)
 	defer tab.Close()
+	defer db.Close()
 
 	d := 3
 	for i := 0; i < bucketIPLimit+1; i++ {
@@ -249,8 +252,9 @@ func TestTable_closest(t *testing.T) {
 	test := func(test *closeTest) bool {
 		// for any node table, Target and N
 		transport := newPingRecorder()
-		tab := newTestTable(transport)
+		tab, db := newTestTable(transport)
 		defer tab.Close()
+		defer db.Close()
 		tab.stuff(test.All)
 
 		// check that closest(Target, N) returns nodes
@@ -309,8 +313,9 @@ func TestTable_ReadRandomNodesGetAll(t *testing.T) {
 	}
 	test := func(buf []*Node) bool {
 		transport := newPingRecorder()
-		tab := newTestTable(transport)
+		tab, db := newTestTable(transport)
 		defer tab.Close()
+		defer db.Close()
 		<-tab.initDone
 
 		for i := 0; i < len(buf); i++ {
@@ -353,8 +358,9 @@ func (*closeTest) Generate(rand *rand.Rand, size int) reflect.Value {
 }
 
 func TestTable_Lookup(t *testing.T) {
-	tab := newTestTable(lookupTestnet)
+	tab, db := newTestTable(lookupTestnet)
 	defer tab.Close()
+	defer db.Close()
 
 	// lookup on empty table returns no nodes
 	if results := tab.Lookup(lookupTestnet.target); len(results) > 0 {
@@ -593,7 +599,7 @@ func (tn *preminedTestnet) findnode(toid enode.ID, toaddr *net.UDPAddr, target e
 	var result []*Node
 	for i, ekey := range tn.dists[toaddr.Port] {
 		key, _ := decodePubkey(ekey)
-		node := newNode(enode.NewV4(key, net.ParseIP("127.0.0.1"), next, i))
+		node := newNode(enode.NewV4(key, net.ParseIP("127.0.0.1"), i, next))
 		result = append(result, node)
 	}
 	return result, nil
