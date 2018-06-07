@@ -22,7 +22,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
-	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -193,7 +192,6 @@ func (db *DB) Node(id ID) *Node {
 func (db *DB) UpdateNode(node *Node) error {
 	blob, err := rlp.EncodeToBytes(node)
 	if err != nil {
-		fmt.Println("Can't encode node: %v", err)
 		return err
 	}
 	return db.lvl.Put(makeKey(node.ID(), nodeDBDiscoverRoot), blob, nil)
