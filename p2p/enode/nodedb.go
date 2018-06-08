@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -182,8 +183,7 @@ func (db *DB) Node(id ID) *Node {
 	}
 	node := new(Node)
 	if err := rlp.DecodeBytes(blob, node); err != nil {
-		log.Error("Failed to decode node RLP", "err", err)
-		return nil
+		panic(fmt.Errorf("p2p/enode: can't decode node %x in DB: %v", id[:], err))
 	}
 	return node
 }
