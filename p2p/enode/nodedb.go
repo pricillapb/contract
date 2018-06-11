@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/errors"
@@ -182,7 +183,7 @@ func (db *DB) Node(id ID) *Node {
 		return nil
 	}
 	node := new(Node)
-	if err := rlp.DecodeBytes(blob, node); err != nil {
+	if err := rlp.DecodeBytes(blob, (*enr.InsecureRecord)(&node.Record)); err != nil {
 		panic(fmt.Errorf("p2p/enode: can't decode node %x in DB: %v", id[:], err))
 	}
 	return node
@@ -190,7 +191,7 @@ func (db *DB) Node(id ID) *Node {
 
 // updateNode inserts - potentially overwriting - a node into the peer database.
 func (db *DB) UpdateNode(node *Node) error {
-	blob, err := rlp.EncodeToBytes(node)
+	blob, err := rlp.EncodeToBytes((*enr.InsecureRecord)(&node.Record))
 	if err != nil {
 		return err
 	}

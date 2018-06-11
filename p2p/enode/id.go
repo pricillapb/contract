@@ -21,14 +21,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"math/bits"
 	"math/rand"
 	"net"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/p2p/enr"
-	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // Node represents a host on the network.
@@ -108,19 +106,6 @@ func (n *Node) UnmarshalText(text []byte) error {
 		*n = *dec
 	}
 	return err
-}
-
-func (n *Node) DecodeRLP(s *rlp.Stream) error {
-	var r enr.Record
-	err := s.Decode(&r)
-	if err == nil {
-		n.Record = r
-	}
-	return err
-}
-
-func (n *Node) EncodeRLP(w io.Writer) error {
-	return rlp.Encode(w, n.Record)
 }
 
 // ID is a unique identifier for each node.
