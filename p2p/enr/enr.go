@@ -149,57 +149,10 @@ func (r Record) EncodeRLP(w io.Writer) error {
 
 // DecodeRLP implements rlp.Decoder. Decoding verifies the signature.
 func (r *Record) DecodeRLP(s *rlp.Stream) error {
-	raw, err := s.Raw()
+	dec, err := decodeRecord(s)
 	if err != nil {
 		return err
 	}
-	if len(raw) > SizeLimit {
-		return errTooBig
-	}
-
-	// Decode the RLP container.
-	dec := Record{raw: raw}
-	s = rlp.NewStream(bytes.NewReader(raw), 0)
-	if _, err := s.List(); err != nil {
-		return err
-	}
-	if err = s.Decode(&dec.signature); err != nil {
-		return err
-	}
-	if err = s.Decode(&dec.seq); err != nil {
-		return err
-	}
-	// The rest of the record contains sorted k/v pairs.
-	var prevkey string
-	for i := 0; ; i++ {
-		var kv pair
-		if err := s.Decode(&kv.k); err != nil {
-			if err == rlp.EOL {
-				break
-			}
-			return err
-		}
-		if err := s.Decode(&kv.v); err != nil {
-			if err == rlp.EOL {
-				return errIncompletePair
-			}
-			return err
-		}
-		if i > 0 {
-			if kv.k == prevkey {
-				return errDuplicateKey
-			}
-			if kv.k < prevkey {
-				return errNotSorted
-			}
-		}
-		dec.pairs = append(dec.pairs, kv)
-		prevkey = kv.k
-	}
-	if err := s.ListEnd(); err != nil {
-		return err
-	}
-
 	_, scheme := dec.idScheme()
 	if scheme == nil {
 		return errNoID
@@ -209,6 +162,57 @@ func (r *Record) DecodeRLP(s *rlp.Stream) error {
 	}
 	*r = dec
 	return nil
+}
+
+func decodeRecord(s *rlp.Stream) (dec Record, err error) {
+	raw, err := s.Raw()
+	if err != nil {
+		return dec, err
+	}
+	if len(raw) > SizeLimit {
+		return dec, errTooBig
+	}
+
+	// Decode the RLP container.
+	dec = Record{raw: raw}
+	s = rlp.NewStream(bytes.NewReader(raw), 0)
+	if _, err := s.List(); err != nil {
+		return dec, err
+	}
+	if err = s.Decode(&dec.signature); err != nil {
+		return dec, err
+	}
+	if err = s.Decode(&dec.seq); err != nil {
+		return dec, err
+	}
+	// The rest of the record contains sorted k/v pairs.
+	var prevkey string
+	for i := 0; ; i++ {
+		var kv pair
+		if err := s.Decode(&kv.k); err != nil {
+			if err == rlp.EOL {
+				break
+			}
+			return dec, err
+		}
+		if err := s.Decode(&kv.v); err != nil {
+			if err == rlp.EOL {
+				return dec, errIncompletePair
+			}
+			return dec, err
+		}
+		if i > 0 {
+			if kv.k == prevkey {
+				return dec, errDuplicateKey
+			}
+			if kv.k < prevkey {
+				return dec, errNotSorted
+			}
+		}
+		dec.pairs = append(dec.pairs, kv)
+		prevkey = kv.k
+	}
+	return dec, s.ListEnd()
 }
 
 // NodeAddr returns the node address. The return value will be nil if the record is
@@ -275,4 +279,37 @@ func (r *Record) idScheme() (string, IdentityScheme) {
 		return "", nil
 	}
 	return string(id), FindIdentityScheme(string(id))
+}
+
+// InsecureRecord can be used to avoid signature verification when
+// encoding and decoding records. To decode a record without verifying,
+// use:
+//
+//     var r Record
+//     err := rlp.DecodeBytes(input, (*enr.InsecureRecord)(&r))
+type InsecureRecord Record
+
+func (ir *InsecureRecord) DecodeRLP(s *rlp.Stream) error {
+	dec, err := decodeRecord(s)
+	if len(dec.signature) == 0 {
+		dec.signature = nil
+	}
+	if err == nil {
+		*ir = InsecureRecord(dec)
+	}
+	return err
+}
+
+func (ir *InsecureRecord) EncodeRLP(w io.Writer) (err error) {
+	var enc []byte
+	if len(ir.raw) > 0 {
+		enc = ir.raw
+	} else {
+		enc, err = (*Record)(ir).encode(ir.signature)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = w.Write(enc)
+	return err
 }
