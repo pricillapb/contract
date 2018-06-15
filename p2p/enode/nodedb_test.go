@@ -18,6 +18,7 @@ package enode
 
 import (
 	"bytes"
+	"fmt"
 	"io/ioutil"
 	"net"
 	"os"
@@ -210,19 +211,53 @@ var nodeDBSeedQueryNodes = []struct {
 		),
 		pong: time.Now().Add(-1 * time.Second),
 	},
+	{
+		node: NewV4(
+			hexPubkey("c013a50b4d1ebce5c377d8af8cb7114fd933ffc9627f96ad56d90fef5b7253ec736fd07ef9a81dc2955a997e54b7bf50afd0aa9f110595e2bec5bb7ce1657004"),
+			net.IP{127, 0, 0, 3},
+			30303,
+			30303,
+		),
+		pong: time.Now().Add(-2 * time.Second),
+	},
+	{
+		node: NewV4(
+			hexPubkey("f141087e3e08af1aeec261ff75f48b5b1637f594ea9ad670e50051646b0416daa3b134c28788cbe98af26992a47652889cd8577ccc108ac02c6a664db2dc1283"),
+			net.IP{127, 0, 0, 3},
+			30303,
+			30303,
+		),
+		pong: time.Now().Add(-2 * time.Second),
+	},
 }
 
 func TestDBSeedQuery(t *testing.T) {
+	// Querying seeds uses seeks an might not find all nodes
+	// every time when the database is small. Run the test multiple
+	// times to avoid flakes.
+	const attempts = 15
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = testSeedQuery(); err == nil {
+			return
+		}
+	}
+	if err != nil {
+		t.Errorf("no successful run in %d attempts: %v", attempts, err)
+	}
+}
+
+func testSeedQuery() error {
 	db, _ := NewDB("", nodeDBSeedQueryNodes[1].node.ID())
 	defer db.Close()
 
 	// Insert a batch of nodes for querying
 	for i, seed := range nodeDBSeedQueryNodes {
 		if err := db.UpdateNode(seed.node); err != nil {
-			t.Fatalf("node %d: failed to insert: %v", i, err)
+			return fmt.Errorf("node %d: failed to insert: %v", i, err)
 		}
 		if err := db.UpdateBondTime(seed.node.ID(), seed.pong); err != nil {
-			t.Fatalf("node %d: failed to insert bondTime: %v", i, err)
+			return fmt.Errorf("node %d: failed to insert bondTime: %v", i, err)
 		}
 	}
 
@@ -237,18 +272,19 @@ func TestDBSeedQuery(t *testing.T) {
 		want[seed.node.ID()] = struct{}{}
 	}
 	if len(seeds) != len(want) {
-		t.Errorf("seed count mismatch: have %v, want %v", len(seeds), len(want))
+		return fmt.Errorf("seed count mismatch: have %v, want %v", len(seeds), len(want))
 	}
 	for id := range have {
 		if _, ok := want[id]; !ok {
-			t.Errorf("extra seed: %v", id)
+			return fmt.Errorf("extra seed: %v", id)
 		}
 	}
 	for id := range want {
 		if _, ok := have[id]; !ok {
-			t.Errorf("missing seed: %v", id)
+			return fmt.Errorf("missing seed: %v", id)
 		}
 	}
+	return nil
 }
 
 func TestDBPersistency(t *testing.T) {
