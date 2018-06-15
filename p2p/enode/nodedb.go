@@ -182,9 +182,13 @@ func (db *DB) Node(id ID) *Node {
 	if err != nil {
 		return nil
 	}
+	return mustDecodeNode(id[:], blob)
+}
+
+func mustDecodeNode(id, data []byte) *Node {
 	node := new(Node)
-	if err := rlp.DecodeBytes(blob, (*enr.InsecureRecord)(&node.Record)); err != nil {
-		panic(fmt.Errorf("p2p/enode: can't decode node %x in DB: %v", id[:], err))
+	if err := rlp.DecodeBytes(data, (*enr.InsecureRecord)(&node.Record)); err != nil {
+		panic(fmt.Errorf("p2p/enode: can't decode node %x in DB: %v", id, err))
 	}
 	return node
 }
@@ -352,12 +356,7 @@ func nextNode(it iterator.Iterator) *Node {
 		if field != nodeDBDiscoverRoot {
 			continue
 		}
-		var n Node
-		if err := rlp.DecodeBytes(it.Value(), &n); err != nil {
-			log.Warn("Failed to decode node RLP", "id", id, "err", err)
-			continue
-		}
-		return &n
+		return mustDecodeNode(id[:], it.Value())
 	}
 	return nil
 }

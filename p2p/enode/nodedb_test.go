@@ -25,8 +25,6 @@ import (
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
 var nodeDBKeyTests = []struct {
@@ -154,8 +152,6 @@ func TestDBFetchStore(t *testing.T) {
 		t.Errorf("node: not found")
 	} else if !reflect.DeepEqual(stored, node) {
 		t.Errorf("node: data mismatch: have %v, want %v", stored, node)
-		spew.Config.DisableMethods = true
-		spew.Dump(stored, node)
 	}
 }
 
