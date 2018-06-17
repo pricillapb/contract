@@ -20,7 +20,6 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"math/big"
-	"math/rand"
 	"net"
 	"time"
 
@@ -62,7 +61,18 @@ func (e encPubkey) id() enode.ID {
 	return enode.ID(crypto.Keccak256Hash(e[:]))
 }
 
-func newNode(n *enode.Node) *Node {
+// recoverNodeKey computes the public key used to sign the
+// given hash from the signature.
+func recoverNodeKey(hash, sig []byte) (key encPubkey, err error) {
+	pubkey, err := secp256k1.RecoverPubkey(hash, sig)
+	if err != nil {
+		return key, err
+	}
+	copy(key[:], pubkey[1:])
+	return key, nil
+}
+
+func convertNode(n *enode.Node) *Node {
 	return &Node{n: *n, id: n.ID()}
 }
 
@@ -78,39 +88,6 @@ func (n *Node) addr() *net.UDPAddr {
 	return &net.UDPAddr{IP: n.n.IP(), Port: n.n.UDP()}
 }
 
-// The string representation of a Node is a URL.
-// Please see ParseNode for a description of the format.
 func (n *Node) String() string {
 	return n.n.String()
-}
-
-// recoverNodeKey computes the public key used to sign the
-// given hash from the signature.
-func recoverNodeKey(hash, sig []byte) (key encPubkey, err error) {
-	pubkey, err := secp256k1.RecoverPubkey(hash, sig)
-	if err != nil {
-		return key, err
-	}
-	copy(key[:], pubkey[1:])
-	return key, nil
-}
-
-// idAtDistance returns a random hash such that enode.LogDist(a, b) == n
-func idAtDistance(a enode.ID, n int) (b enode.ID) {
-	if n == 0 {
-		return a
-	}
-	// flip bit at position n, fill the rest with random bits
-	b = a
-	pos := len(a) - n/8 - 1
-	bit := byte(0x01) << (byte(n%8) - 1)
-	if bit == 0 {
-		pos++
-		bit = 0x80
-	}
-	b[pos] = a[pos]&^bit | ^a[pos]&bit // TODO: randomize end bits
-	for i := pos + 1; i < len(a); i++ {
-		b[i] = byte(rand.Intn(255))
-	}
-	return b
 }

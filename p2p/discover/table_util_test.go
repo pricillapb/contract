@@ -20,6 +20,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"net"
 	"sync"
 
@@ -68,6 +69,26 @@ func nodeAtDistance(base enode.ID, ld int) *Node {
 	setID(n, idAtDistance(base, ld))
 	n.Set(enr.IP{byte(ld), 0, 2, byte(ld)})
 	return newNode(n)
+}
+
+// idAtDistance returns a random hash such that enode.LogDist(a, b) == n
+func idAtDistance(a enode.ID, n int) (b enode.ID) {
+	if n == 0 {
+		return a
+	}
+	// flip bit at position n, fill the rest with random bits
+	b = a
+	pos := len(a) - n/8 - 1
+	bit := byte(0x01) << (byte(n%8) - 1)
+	if bit == 0 {
+		pos++
+		bit = 0x80
+	}
+	b[pos] = a[pos]&^bit | ^a[pos]&bit // TODO: randomize end bits
+	for i := pos + 1; i < len(a); i++ {
+		b[i] = byte(rand.Intn(255))
+	}
+	return b
 }
 
 // fillBucket inserts nodes into the given bucket until it is full.
