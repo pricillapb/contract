@@ -105,7 +105,7 @@ func newTable(t transport, self *enode.Node, db *enode.DB, bootnodes []*enode.No
 	tab := &Table{
 		net:        t,
 		db:         db,
-		self:       newNode(self),
+		self:       convertNode(self),
 		refreshReq: make(chan chan struct{}),
 		initDone:   make(chan struct{}),
 		closeReq:   make(chan struct{}),
@@ -210,7 +210,7 @@ func (tab *Table) setFallbackNodes(nodes []*enode.Node) error {
 	}
 	tab.nursery = make([]*Node, 0, len(nodes))
 	for _, n := range nodes {
-		tab.nursery = append(tab.nursery, newNode(n))
+		tab.nursery = append(tab.nursery, convertNode(n))
 	}
 	return nil
 }

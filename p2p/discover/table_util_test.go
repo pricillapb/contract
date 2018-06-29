@@ -68,7 +68,7 @@ func nodeAtDistance(base enode.ID, ld int) *Node {
 	n := new(enode.Node)
 	setID(n, idAtDistance(base, ld))
 	n.Set(enr.IP{byte(ld), 0, 2, byte(ld)})
-	return newNode(n)
+	return convertNode(n)
 }
 
 // idAtDistance returns a random hash such that enode.LogDist(a, b) == n

@@ -58,7 +58,7 @@ func testPingReplace(t *testing.T, newNodeIsResponding, lastInBucketIsResponding
 
 	// Fill up the sender's bucket.
 	pingKey, _ := crypto.HexToECDSA("45a915e4d060149eb4365960e6a7a45f334393093061116b197e3240065ff2d8")
-	pingSender := newNode(enode.NewV4(&pingKey.PublicKey, net.IP{}, 99, 99))
+	pingSender := convertNode(enode.NewV4(&pingKey.PublicKey, net.IP{}, 99, 99))
 	last := fillBucket(tab, pingSender)
 
 	// Add the sender as if it just pinged us. Revalidate should replace the last node in
@@ -368,7 +368,7 @@ func TestTable_Lookup(t *testing.T) {
 	}
 	// seed table with initial node (otherwise lookup will terminate immediately)
 	seedKey, _ := decodePubkey(lookupTestnet.dists[256][0])
-	seed := newNode(enode.NewV4(seedKey, net.IP{}, 0, 256))
+	seed := convertNode(enode.NewV4(seedKey, net.IP{}, 0, 256))
 	tab.stuff([]*Node{seed})
 
 	results := tab.Lookup(lookupTestnet.target)
@@ -599,7 +599,7 @@ func (tn *preminedTestnet) findnode(toid enode.ID, toaddr *net.UDPAddr, target e
 	var result []*Node
 	for i, ekey := range tn.dists[toaddr.Port] {
 		key, _ := decodePubkey(ekey)
-		node := newNode(enode.NewV4(key, net.ParseIP("127.0.0.1"), i, next))
+		node := convertNode(enode.NewV4(key, net.ParseIP("127.0.0.1"), i, next))
 		result = append(result, node)
 	}
 	return result, nil
@@ -613,14 +613,14 @@ func (*preminedTestnet) ping(toid enode.ID, toaddr *net.UDPAddr) error { return 
 // various distances to the given target.
 func (tn *preminedTestnet) mine(target encPubkey) {
 	tn.target = target
-	tn.targetSha = n.target.id()
+	tn.targetSha = tn.target.id()
 	found := 0
 	for found < bucketSize*10 {
 		k := newkey()
 		key := encodePubkey(&k.PublicKey)
-		ld := enode.LogDist(n.targetSha, key.id())
-		if len(n.dists[ld]) < bucketSize {
-			n.dists[ld] = append(n.dists[ld], key)
+		ld := enode.LogDist(tn.targetSha, key.id())
+		if len(tn.dists[ld]) < bucketSize {
+			tn.dists[ld] = append(tn.dists[ld], key)
 			fmt.Println("found ID with ld", ld)
 			found++
 		}

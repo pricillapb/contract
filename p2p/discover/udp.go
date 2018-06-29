@@ -139,7 +139,7 @@ func (t *udp) nodeFromRPC(sender *net.UDPAddr, rn rpcNode) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := newNode(enode.NewV4(key, rn.IP, int(rn.TCP), int(rn.UDP)))
+	n := convertNode(enode.NewV4(key, rn.IP, int(rn.TCP), int(rn.UDP)))
 	err = n.n.ValidateComplete()
 	return n, err
 }
@@ -625,11 +625,10 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 		ReplyTok:   mac,
 		Expiration: uint64(time.Now().Add(expiration).Unix()),
 	})
-	fromID := fromKey.id()
-	t.handleReply(fromKey.id(), pingPacket, req)
-	n := newNode(enode.NewV4(key, from.IP, int(req.From.TCP), from.Port))
-	if time.Since(t.db.LastPongReceived(fromID)) > nodeDBNodeExpiration {
-		t.sendPing(fromID, from, func() { t.addThroughPing(n) })
+	n := convertNode(enode.NewV4(key, from.IP, int(req.From.TCP), from.Port))
+	t.handleReply(n.id, pingPacket, req)
+	if time.Since(t.db.LastPongReceived(n.id)) > nodeDBNodeExpiration {
+		t.sendPing(n.id, from, func() { t.addThroughPing(n) })
 	} else {
 		t.addThroughPing(n)
 	}

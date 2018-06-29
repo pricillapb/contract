@@ -79,7 +79,7 @@ func convertNode(n *enode.Node) *Node {
 func convertNodes(ns []*enode.Node) []*Node {
 	result := make([]*Node, 0, len(ns))
 	for _, n := range ns {
-		result = append(result, newNode(n))
+		result = append(result, convertNode(n))
 	}
 	return result
 }
