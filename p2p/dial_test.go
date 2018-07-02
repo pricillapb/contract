@@ -25,6 +25,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 )
 
@@ -78,11 +79,11 @@ func runDialTest(t *testing.T, test dialtest) {
 
 type fakeTable []*discover.Node
 
-func (t fakeTable) Self() *discover.Node                     { return new(discover.Node) }
-func (t fakeTable) Close()                                   {}
-func (t fakeTable) Lookup(discover.NodeID) []*discover.Node  { return nil }
-func (t fakeTable) Resolve(discover.NodeID) *discover.Node   { return nil }
-func (t fakeTable) ReadRandomNodes(buf []*discover.Node) int { return copy(buf, t) }
+func (t fakeTable) Self() *discover.Node                  { return new(discover.Node) }
+func (t fakeTable) Close()                                {}
+func (t fakeTable) LookupRandom() []*enode.Node           { return nil }
+func (t fakeTable) Resolve(*enode.Node) *enode.Node       { return nil }
+func (t fakeTable) ReadRandomNodes(buf []*enode.Node) int { return copy(buf, t) }
 
 // This test checks that dynamic dials are launched from discovery results.
 func TestDialStateDynDial(t *testing.T) {
@@ -672,25 +673,24 @@ next:
 	return true
 }
 
-func uintID(i uint32) discover.NodeID {
-	var id discover.NodeID
+func uintID(i uint32) enode.ID {
+	var id enode.ID
 	binary.BigEndian.PutUint32(id[:], i)
 	return id
 }
 
 // implements discoverTable for TestDialResolve
 type resolveMock struct {
-	resolveCalls []discover.NodeID
-	answer       *discover.Node
+	resolveCalls []*enode.Node
+	answer       *enode.Node
 }
 
-func (t *resolveMock) Resolve(id discover.NodeID) *discover.Node {
-	t.resolveCalls = append(t.resolveCalls, id)
+func (t *resolveMock) Resolve(n *enode.Node) *enode.Node {
+	t.resolveCalls = append(t.resolveCalls, n)
 	return t.answer
 }
 
-func (t *resolveMock) Self() *discover.Node                     { return new(discover.Node) }
-func (t *resolveMock) Close()                                   {}
-func (t *resolveMock) Bootstrap([]*discover.Node)               {}
-func (t *resolveMock) Lookup(discover.NodeID) []*discover.Node  { return nil }
-func (t *resolveMock) ReadRandomNodes(buf []*discover.Node) int { return 0 }
+func (t *resolveMock) Self() *enode.Node                     { return new(enode.Node) }
+func (t *resolveMock) Close()                                {}
+func (t *resolveMock) LookupRandom() []*enode.Node           { return nil }
+func (t *resolveMock) ReadRandomNodes(buf []*enode.Node) int { return 0 }

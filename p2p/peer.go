@@ -28,7 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -60,7 +60,7 @@ type protoHandshake struct {
 	Name       string
 	Caps       []Cap
 	ListenPort uint64
-	ID         discover.NodeID
+	ID         enode.ID
 
 	// Ignore additional fields (for forward compatibility).
 	Rest []rlp.RawValue `rlp:"tail"`
@@ -90,12 +90,12 @@ const (
 // PeerEvent is an event emitted when peers are either added or dropped from
 // a p2p.Server or when a message is sent or received on a peer connection
 type PeerEvent struct {
-	Type     PeerEventType   `json:"type"`
-	Peer     discover.NodeID `json:"peer"`
-	Error    string          `json:"error,omitempty"`
-	Protocol string          `json:"protocol,omitempty"`
-	MsgCode  *uint64         `json:"msg_code,omitempty"`
-	MsgSize  *uint32         `json:"msg_size,omitempty"`
+	Type     PeerEventType `json:"type"`
+	Peer     enode.ID      `json:"peer"`
+	Error    string        `json:"error,omitempty"`
+	Protocol string        `json:"protocol,omitempty"`
+	MsgCode  *uint64       `json:"msg_code,omitempty"`
+	MsgSize  *uint32       `json:"msg_size,omitempty"`
 }
 
 // Peer represents a connected remote node.
@@ -115,7 +115,7 @@ type Peer struct {
 }
 
 // NewPeer returns a peer for testing purposes.
-func NewPeer(id discover.NodeID, name string, caps []Cap) *Peer {
+func NewPeer(id enode.ID, name string, caps []Cap) *Peer {
 	pipe, _ := net.Pipe()
 	conn := &conn{fd: pipe, transport: nil, id: id, caps: caps, name: name}
 	peer := newPeer(conn, nil)
@@ -124,7 +124,7 @@ func NewPeer(id discover.NodeID, name string, caps []Cap) *Peer {
 }
 
 // ID returns the node's public key.
-func (p *Peer) ID() discover.NodeID {
+func (p *Peer) ID() enode.ID {
 	return p.rw.id
 }
 

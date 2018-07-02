@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/discv5"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/nat"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 )
@@ -180,7 +181,7 @@ type Server struct {
 	log           log.Logger
 }
 
-type peerOpFunc func(map[discover.NodeID]*Peer)
+type peerOpFunc func(map[enode.ID]*Peer)
 
 type peerDrop struct {
 	*Peer
@@ -203,15 +204,15 @@ type conn struct {
 	fd net.Conn
 	transport
 	flags connFlag
-	cont  chan error      // The run loop uses cont to signal errors to SetupConn.
-	id    discover.NodeID // valid after the encryption handshake
-	caps  []Cap           // valid after the protocol handshake
-	name  string          // valid after the protocol handshake
+	cont  chan error // The run loop uses cont to signal errors to SetupConn.
+	id    enode.ID   // valid after the encryption handshake
+	caps  []Cap      // valid after the protocol handshake
+	name  string     // valid after the protocol handshake
 }
 
 type transport interface {
 	// The two handshakes.
-	doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (discover.NodeID, error)
+	doEncHandshake(prv *ecdsa.PrivateKey, dialDest *enode.Node) (enode.ID, error)
 	doProtoHandshake(our *protoHandshake) (*protoHandshake, error)
 	// The MsgReadWriter can only be used after the encryption
 	// handshake has completed. The code uses conn.id to track this
@@ -225,7 +226,7 @@ type transport interface {
 
 func (c *conn) String() string {
 	s := c.flags.String()
-	if (c.id != discover.NodeID{}) {
+	if (c.id != enode.ID{}) {
 		s += " " + c.id.String()
 	}
 	s += " " + c.fd.RemoteAddr().String()
@@ -279,7 +280,7 @@ func (srv *Server) Peers() []*Peer {
 	// Note: We'd love to put this function into a variable but
 	// that seems to cause a weird compiler error in some
 	// environments.
-	case srv.peerOp <- func(peers map[discover.NodeID]*Peer) {
+	case srv.peerOp <- func(peers map[enode.ID]*Peer) {
 		for _, p := range peers {
 			ps = append(ps, p)
 		}
@@ -294,7 +295,7 @@ func (srv *Server) Peers() []*Peer {
 func (srv *Server) PeerCount() int {
 	var count int
 	select {
-	case srv.peerOp <- func(ps map[discover.NodeID]*Peer) { count = len(ps) }:
+	case srv.peerOp <- func(ps map[enode.ID]*Peer) { count = len(ps) }:
 		<-srv.peerOpDone
 	case <-srv.quit:
 	}
@@ -342,31 +343,29 @@ func (srv *Server) SubscribeEvents(ch chan *PeerEvent) event.Subscription {
 }
 
 // Self returns the local node's endpoint information.
-func (srv *Server) Self() *discover.Node {
+func (srv *Server) Self() *enode.Node {
 	srv.lock.Lock()
 	defer srv.lock.Unlock()
 
 	if !srv.running {
-		return &discover.Node{IP: net.ParseIP("0.0.0.0")}
+		return enode.NewV4(&srv.PrivateKey.PublicKey, net.ParseIP("0.0.0.0"), 0, 0)
 	}
 	return srv.makeSelf(srv.listener, srv.ntab)
 }
 
-func (srv *Server) makeSelf(listener net.Listener, ntab discoverTable) *discover.Node {
+func (srv *Server) makeSelf(listener net.Listener, ntab discoverTable) *enode.Node {
 	// If the server's not running, return an empty node.
 	// If the node is running but discovery is off, manually assemble the node infos.
 	if ntab == nil {
-		// Inbound connections disabled, use zero address.
+		var addr *net.TCPAddr
 		if listener == nil {
-			return &discover.Node{IP: net.ParseIP("0.0.0.0"), ID: discover.PubkeyID(&srv.PrivateKey.PublicKey)}
+			// Inbound connections disabled, use zero address.
+			addr = net.TCPAddr{IP: net.IP{0, 0, 0, 0}, Port: 0}
+		} else {
+			// Otherwise inject the listener address too.
+			addr = listener.Addr().(*net.TCPAddr)
 		}
-		// Otherwise inject the listener address too
-		addr := listener.Addr().(*net.TCPAddr)
-		return &discover.Node{
-			ID:  discover.PubkeyID(&srv.PrivateKey.PublicKey),
-			IP:  addr.IP,
-			TCP: uint16(addr.Port),
-		}
+		return enode.NewV4(&srv.PrivateKey.PublicKey, addr.IP, addr.Port, 0)
 	}
 	// Otherwise return the discovery node.
 	return ntab.Self()
@@ -568,7 +567,7 @@ func (srv *Server) startListening() error {
 }
 
 type dialer interface {
-	newTasks(running int, peers map[discover.NodeID]*Peer, now time.Time) []task
+	newTasks(running int, peers map[enode.ID]*Peer, now time.Time) []task
 	taskDone(task, time.Time)
 	addStatic(*discover.Node)
 	removeStatic(*discover.Node)
@@ -577,9 +576,9 @@ type dialer interface {
 func (srv *Server) run(dialstate dialer) {
 	defer srv.loopWG.Done()
 	var (
-		peers        = make(map[discover.NodeID]*Peer)
+		peers        = make(map[enode.ID]*Peer)
 		inboundCount = 0
-		trusted      = make(map[discover.NodeID]bool, len(srv.TrustedNodes))
+		trusted      = make(map[enode.ID]bool, len(srv.TrustedNodes))
 		taskdone     = make(chan task, maxActiveDialTasks)
 		runningTasks []task
 		queuedTasks  []task // tasks that can't run yet
@@ -749,7 +748,7 @@ running:
 	}
 }
 
-func (srv *Server) protoHandshakeChecks(peers map[discover.NodeID]*Peer, inboundCount int, c *conn) error {
+func (srv *Server) protoHandshakeChecks(peers map[enode.ID]*Peer, inboundCount int, c *conn) error {
 	// Drop connections with no matching protocols.
 	if len(srv.Protocols) > 0 && countMatchingProtocols(srv.Protocols, c.caps) == 0 {
 		return DiscUselessPeer
@@ -759,7 +758,7 @@ func (srv *Server) protoHandshakeChecks(peers map[discover.NodeID]*Peer, inbound
 	return srv.encHandshakeChecks(peers, inboundCount, c)
 }
 
-func (srv *Server) encHandshakeChecks(peers map[discover.NodeID]*Peer, inboundCount int, c *conn) error {
+func (srv *Server) encHandshakeChecks(peers map[enode.ID]*Peer, inboundCount int, c *conn) error {
 	switch {
 	case !c.is(trustedConn|staticDialedConn) && len(peers) >= srv.MaxPeers:
 		return DiscTooManyPeers
@@ -850,7 +849,7 @@ func (srv *Server) listenLoop() {
 // SetupConn runs the handshakes and attempts to add the connection
 // as a peer. It returns when the connection has been added as a peer
 // or the handshakes have failed.
-func (srv *Server) SetupConn(fd net.Conn, flags connFlag, dialDest *discover.Node) error {
+func (srv *Server) SetupConn(fd net.Conn, flags connFlag, dialDest *enode.Node) error {
 	self := srv.Self()
 	if self == nil {
 		return errors.New("shutdown")

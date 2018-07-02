@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/sha3"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
 func init() {
@@ -36,13 +37,13 @@ func init() {
 }
 
 type testTransport struct {
-	id discover.NodeID
+	id enode.ID
 	*rlpx
 
 	closeErr error
 }
 
-func newTestTransport(id discover.NodeID, fd net.Conn) transport {
+func newTestTransport(id enode.ID, fd net.Conn) transport {
 	wrapped := newRLPX(fd).(*rlpx)
 	wrapped.rw = newRLPXFrameRW(fd, secrets{
 		MAC:        zero16,
@@ -53,7 +54,7 @@ func newTestTransport(id discover.NodeID, fd net.Conn) transport {
 	return &testTransport{id: id, rlpx: wrapped}
 }
 
-func (c *testTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (discover.NodeID, error) {
+func (c *testTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (enode.ID, error) {
 	return c.id, nil
 }
 
@@ -66,7 +67,7 @@ func (c *testTransport) close(err error) {
 	c.closeErr = err
 }
 
-func startTestServer(t *testing.T, id discover.NodeID, pf func(*Peer)) *Server {
+func startTestServer(t *testing.T, id enode.ID, pf func(*Peer)) *Server {
 	config := Config{
 		Name:       "test",
 		MaxPeers:   10,
@@ -211,7 +212,7 @@ func TestServerTaskScheduling(t *testing.T) {
 		quit, returned = make(chan struct{}), make(chan struct{})
 		tc             = 0
 		tg             = taskgen{
-			newFunc: func(running int, peers map[discover.NodeID]*Peer) []task {
+			newFunc: func(running int, peers map[enode.ID]*Peer) []task {
 				tc++
 				return []task{&testTask{index: tc - 1}}
 			},
@@ -284,7 +285,7 @@ func TestServerManyTasks(t *testing.T) {
 	defer srv.Stop()
 	srv.loopWG.Add(1)
 	go srv.run(taskgen{
-		newFunc: func(running int, peers map[discover.NodeID]*Peer) []task {
+		newFunc: func(running int, peers map[enode.ID]*Peer) []task {
 			start, end = end, end+maxActiveDialTasks+10
 			if end > len(alltasks) {
 				end = len(alltasks)
@@ -319,11 +320,11 @@ func TestServerManyTasks(t *testing.T) {
 }
 
 type taskgen struct {
-	newFunc  func(running int, peers map[discover.NodeID]*Peer) []task
+	newFunc  func(running int, peers map[enode.ID]*Peer) []task
 	doneFunc func(task)
 }
 
-func (tg taskgen) newTasks(running int, peers map[discover.NodeID]*Peer, now time.Time) []task {
+func (tg taskgen) newTasks(running int, peers map[enode.ID]*Peer, now time.Time) []task {
 	return tg.newFunc(running, peers)
 }
 func (tg taskgen) taskDone(t task, now time.Time) {
@@ -361,7 +362,7 @@ func TestServerAtCap(t *testing.T) {
 	}
 	defer srv.Stop()
 
-	newconn := func(id discover.NodeID) *conn {
+	newconn := func(id enode.ID) *conn {
 		fd, _ := net.Pipe()
 		tx := newTestTransport(id, fd)
 		return &conn{fd: fd, transport: tx, flags: inboundConn, id: id, cont: make(chan error)}
@@ -560,7 +561,7 @@ func TestServerSetupConn(t *testing.T) {
 }
 
 type setupTransport struct {
-	id              discover.NodeID
+	id              enode.ID
 	encHandshakeErr error
 
 	phs               *protoHandshake
@@ -570,7 +571,7 @@ type setupTransport struct {
 	closeErr error
 }
 
-func (c *setupTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (discover.NodeID, error) {
+func (c *setupTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (enode.ID, error) {
 	c.calls += "doEncHandshake,"
 	return c.id, c.encHandshakeErr
 }
@@ -602,7 +603,7 @@ func newkey() *ecdsa.PrivateKey {
 	return key
 }
 
-func randomID() (id discover.NodeID) {
+func randomID() (id enode.ID) {
 	for i := range id {
 		id[i] = byte(rand.Intn(255))
 	}
