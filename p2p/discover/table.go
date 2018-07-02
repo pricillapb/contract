@@ -247,6 +247,12 @@ func (tab *Table) Resolve(targetKey encPubkey) *Node {
 	return nil
 }
 
+func (tab *Table) LookupRandom() []*Node {
+	var target encPubkey
+	crand.Read(target[:])
+	return tab.Lookup(target)
+}
+
 // Lookup performs a network search for nodes close
 // to the given target. It approaches the target by querying
 // nodes that are closer to it on each iteration.

@@ -61,6 +61,10 @@ func (e encPubkey) id() enode.ID {
 	return enode.ID(crypto.Keccak256Hash(e[:]))
 }
 
+func PubkeyToID(key *ecdsa.PublicKey) enode.ID {
+	return encodePubkey(key).id()
+}
+
 // recoverNodeKey computes the public key used to sign the
 // given hash from the signature.
 func recoverNodeKey(hash, sig []byte) (key encPubkey, err error) {
