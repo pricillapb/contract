@@ -15,14 +15,20 @@
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 // Package enr implements Ethereum Node Records as defined in EIP-778. A node record holds
-// arbitrary information about a node on the peer-to-peer network.
-//
-// Records contain named keys. To store and retrieve key/values in a record, use the Entry
+// arbitrary information about a node on the peer-to-peer network. Node information is
+// stored in key/value pairs. To store and retrieve key/values in a record, use the Entry
 // interface.
 //
-// Records must be signed before transmitting them to another node. Decoding a record verifies
-// its signature. When creating a record, set the entries you want, then call Sign to add the
-// signature. Modifying a record invalidates the signature.
+// Signature Handling
+//
+// Records must be signed before transmitting them to another node.
+//
+// Decoding a record doesn't check its signature. Code working with records from an
+// untrusted source must always verify two things: that the record uses an identity scheme
+// deemed secure, and that the signature is valid according to the declared scheme.
+//
+// When creating a record, set the entries you want and use a signing function provided by
+// the identity scheme to add the signature. Modifying a record invalidates the signature.
 //
 // Package enr supports the "secp256k1-keccak" identity scheme.
 package enr
@@ -62,11 +68,6 @@ type Record struct {
 type pair struct {
 	k string
 	v rlp.RawValue
-}
-
-// Signed reports whether the record has a valid signature.
-func (r *Record) Signed() bool {
-	return r.signature != nil
 }
 
 // Seq returns the sequence number.
@@ -140,7 +141,7 @@ func (r *Record) invalidate() {
 // EncodeRLP implements rlp.Encoder. Encoding fails if
 // the record is unsigned.
 func (r Record) EncodeRLP(w io.Writer) error {
-	if !r.Signed() {
+	if r.signature == nil {
 		return errEncodeUnsigned
 	}
 	_, err := w.Write(r.raw)
@@ -151,13 +152,6 @@ func (r Record) EncodeRLP(w io.Writer) error {
 func (r *Record) DecodeRLP(s *rlp.Stream) error {
 	dec, raw, err := decodeRecord(s)
 	if err != nil {
-		return err
-	}
-	_, scheme := dec.idScheme()
-	if scheme == nil {
-		return errNoID
-	}
-	if err := scheme.Verify(&dec, dec.signature); err != nil {
 		return err
 	}
 	*r = dec
@@ -215,30 +209,21 @@ func decodeRecord(s *rlp.Stream) (dec Record, raw []byte, err error) {
 	return dec, raw, s.ListEnd()
 }
 
-// NodeAddr returns the node address. The return value will be nil if the record is
-// unsigned or uses an unknown identity scheme.
-func (r *Record) NodeAddr() []byte {
-	_, scheme := r.idScheme()
-	if scheme == nil {
-		return nil
-	}
-	return scheme.NodeAddr(r)
+// IdentityScheme returns the name of the identity scheme in the record.
+func (r *Record) IdentityScheme() string {
+	var id ID
+	r.Load(&id)
+	return string(id)
+}
+
+// VerifySignature checks whether the record is signed using the given identity scheme.
+func (r *Record) VerifySignature(s IdentityScheme) error {
+	return s.Verify(r, r.signature)
 }
 
 // SetSig sets the record signature. It returns an error if the encoded record is larger
 // than the size limit or if the signature is invalid according to the passed scheme.
-func (r *Record) SetSig(idscheme string, sig []byte) error {
-	// Check that "id" is set and matches the given scheme. This panics because
-	// inconsitencies here are always implementation bugs in the signing function calling
-	// this method.
-	id, s := r.idScheme()
-	if s == nil {
-		panic(errNoID)
-	}
-	if id != idscheme {
-		panic(fmt.Errorf("identity scheme mismatch in Sign: record has %s, want %s", id, idscheme))
-	}
-
+func (r *Record) SetSig(s IdentityScheme, sig []byte) error {
 	// Verify against the scheme.
 	if err := s.Verify(r, sig); err != nil {
 		return err
@@ -271,45 +256,4 @@ func (r *Record) encode(sig []byte) (raw []byte, err error) {
 		return nil, errTooBig
 	}
 	return raw, nil
-}
-
-func (r *Record) idScheme() (string, IdentityScheme) {
-	var id ID
-	if err := r.Load(&id); err != nil {
-		return "", nil
-	}
-	return string(id), FindIdentityScheme(string(id))
-}
-
-// InsecureRecord can be used to avoid signature verification when
-// encoding and decoding records. To decode a record without verifying,
-// use:
-//
-//     var r Record
-//     err := rlp.DecodeBytes(input, (*enr.InsecureRecord)(&r))
-type InsecureRecord Record
-
-func (ir *InsecureRecord) DecodeRLP(s *rlp.Stream) error {
-	dec, _, err := decodeRecord(s)
-	if len(dec.signature) == 0 {
-		dec.signature = nil
-	}
-	if err == nil {
-		*ir = InsecureRecord(dec)
-	}
-	return err
-}
-
-func (ir *InsecureRecord) EncodeRLP(w io.Writer) (err error) {
-	var enc []byte
-	if len(ir.raw) > 0 {
-		enc = ir.raw
-	} else {
-		enc, err = (*Record)(ir).encode(ir.signature)
-		if err != nil {
-			return err
-		}
-	}
-	_, err = w.Write(enc)
-	return err
 }

@@ -19,16 +19,12 @@ package enr
 import (
 	"crypto/ecdsa"
 	"fmt"
-	"sync"
 
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/sha3"
 	"github.com/ethereum/go-ethereum/rlp"
 )
-
-// Registry of known identity schemes.
-var schemes sync.Map
 
 // An IdentityScheme is capable of verifying record signatures and
 // deriving node addresses.
@@ -37,28 +33,27 @@ type IdentityScheme interface {
 	NodeAddr(r *Record) []byte
 }
 
-// RegisterIdentityScheme adds an identity scheme to the global registry.
-func RegisterIdentityScheme(name string, scheme IdentityScheme) {
-	if _, loaded := schemes.LoadOrStore(name, scheme); loaded {
-		panic("identity scheme " + name + " already registered")
+// SchemeMap is a registry of named identity schemes.
+type SchemeMap map[string]IdentityScheme
+
+func (m SchemeMap) Verify(r *Record, sig []byte) error {
+	s, _ := m[r.IdentityScheme()]
+	if s == nil {
+		return errInvalidSig
 	}
+	return s.Verify(r, sig)
 }
 
-// FindIdentityScheme resolves name to an identity scheme in the global registry.
-func FindIdentityScheme(name string) IdentityScheme {
-	s, ok := schemes.Load(name)
-	if !ok {
+func (m SchemeMap) NodeAddr(r *Record) []byte {
+	s, _ := m[r.IdentityScheme()]
+	if s == nil {
 		return nil
 	}
-	return s.(IdentityScheme)
+	return s.NodeAddr(r)
 }
 
 // v4ID is the "v4" identity scheme.
-type v4ID struct{}
-
-func init() {
-	RegisterIdentityScheme("v4", v4ID{})
-}
+type V4ID struct{}
 
 // SignV4 signs a record using the v4 scheme.
 func SignV4(r *Record, privkey *ecdsa.PrivateKey) error {
@@ -74,7 +69,7 @@ func SignV4(r *Record, privkey *ecdsa.PrivateKey) error {
 		return err
 	}
 	sig = sig[:len(sig)-1] // remove v
-	if err = cpy.SetSig("v4", sig); err == nil {
+	if err = cpy.SetSig(V4ID{}, sig); err == nil {
 		*r = cpy
 	}
 	return err
@@ -85,7 +80,7 @@ type s256raw []byte
 
 func (s256raw) ENRKey() string { return "secp256k1" }
 
-func (v4ID) Verify(r *Record, sig []byte) error {
+func (V4ID) Verify(r *Record, sig []byte) error {
 	var entry s256raw
 	if err := r.Load(&entry); err != nil {
 		return err
@@ -101,7 +96,7 @@ func (v4ID) Verify(r *Record, sig []byte) error {
 	return nil
 }
 
-func (v4ID) NodeAddr(r *Record) []byte {
+func (V4ID) NodeAddr(r *Record) []byte {
 	var pubkey Secp256k1
 	err := r.Load(&pubkey)
 	if err != nil {

@@ -33,6 +33,7 @@ import (
 var (
 	privkey, _ = crypto.HexToECDSA("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291")
 	pubkey     = &privkey.PublicKey
+	schemereg  = SchemeMap{"v4": V4ID{}}
 )
 
 var rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -167,23 +168,20 @@ func TestSortedGetAndSet(t *testing.T) {
 func TestDirty(t *testing.T) {
 	var r Record
 
-	if r.Signed() {
-		t.Error("Signed returned true for zero record")
-	}
 	if _, err := rlp.EncodeToBytes(r); err != errEncodeUnsigned {
 		t.Errorf("expected errEncodeUnsigned, got %#v", err)
 	}
 
 	require.NoError(t, SignV4(&r, privkey))
-	if !r.Signed() {
-		t.Error("Signed return false for signed record")
+	if len(r.signature) == 0 {
+		t.Error("record is not signed")
 	}
 	_, err := rlp.EncodeToBytes(r)
 	assert.NoError(t, err)
 
 	r.SetSeq(3)
-	if r.Signed() {
-		t.Error("Signed returned true for modified record")
+	if len(r.signature) != 0 {
+		t.Error("signature still set after modification")
 	}
 	if _, err := rlp.EncodeToBytes(r); err != errEncodeUnsigned {
 		t.Errorf("expected errEncodeUnsigned, got %#v", err)
@@ -226,13 +224,13 @@ func TestSignEncodeAndDecode(t *testing.T) {
 
 func TestNodeAddr(t *testing.T) {
 	var r Record
-	if addr := r.NodeAddr(); addr != nil {
+	if addr := schemereg.NodeAddr(&r); addr != nil {
 		t.Errorf("wrong address on empty record: got %v, want %v", addr, nil)
 	}
 
 	require.NoError(t, SignV4(&r, privkey))
 	expected := "a448f24c6d18e575453db13171562b71999873db5b286df957af199ec94617f7"
-	assert.Equal(t, expected, hex.EncodeToString(r.NodeAddr()))
+	assert.Equal(t, expected, hex.EncodeToString(schemereg.NodeAddr(&r)))
 }
 
 var pyRecord, _ = hex.DecodeString("f884b8407098ad865b00a582051940cb9cf36836572411a47278783077011599ed5cd16b76f2635f4e234738f30813a89eb9137e3e3df5266e3a1f11df72ecf1145ccb9c01826964827634826970847f00000189736563703235366b31a103ca634cae0d49acb401d8a4c6b6fe8c55b70d115bf400769cc1400f3258cd31388375647082765f")
@@ -254,7 +252,7 @@ func TestPythonInterop(t *testing.T) {
 	if r.Seq() != wantSeq {
 		t.Errorf("wrong seq: got %d, want %d", r.Seq(), wantSeq)
 	}
-	if addr := r.NodeAddr(); !bytes.Equal(addr, wantAddr) {
+	if addr := schemereg.NodeAddr(&r); !bytes.Equal(addr, wantAddr) {
 		t.Errorf("wrong addr: got %x, want %x", addr, wantAddr)
 	}
 	want := map[Entry]interface{}{new(IP): &wantIP, new(UDP): &wantUDP}
@@ -314,5 +312,4 @@ func BenchmarkDecode(b *testing.B) {
 		rlp.DecodeBytes(pyRecord, &r)
 	}
 	b.StopTimer()
-	r.NodeAddr()
 }
