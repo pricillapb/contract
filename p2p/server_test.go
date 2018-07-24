@@ -37,13 +37,13 @@ func init() {
 }
 
 type testTransport struct {
-	id enode.ID
+	rpub *ecdsa.PublicKey
 	*rlpx
 
 	closeErr error
 }
 
-func newTestTransport(id enode.ID, fd net.Conn) transport {
+func newTestTransport(rpub *ecdsa.PublicKey, fd net.Conn) transport {
 	wrapped := newRLPX(fd).(*rlpx)
 	wrapped.rw = newRLPXFrameRW(fd, secrets{
 		MAC:        zero16,
@@ -51,15 +51,16 @@ func newTestTransport(id enode.ID, fd net.Conn) transport {
 		IngressMAC: sha3.NewKeccak256(),
 		EgressMAC:  sha3.NewKeccak256(),
 	})
-	return &testTransport{id: id, rlpx: wrapped}
+	return &testTransport{rpub: rpub, rlpx: wrapped}
 }
 
-func (c *testTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (enode.ID, error) {
-	return c.id, nil
+func (c *testTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *enode.Node) (enode.ID, error) {
+	return discover.PubkeyToID(c.rpub), nil
 }
 
 func (c *testTransport) doProtoHandshake(our *protoHandshake) (*protoHandshake, error) {
-	return &protoHandshake{ID: c.id, Name: "test"}, nil
+	pubkey := crypto.FromECDSAPub(c.rpub)[1:]
+	return &protoHandshake{ID: pubkey, Name: "test"}, nil
 }
 
 func (c *testTransport) close(err error) {
@@ -67,7 +68,7 @@ func (c *testTransport) close(err error) {
 	c.closeErr = err
 }
 
-func startTestServer(t *testing.T, id enode.ID, pf func(*Peer)) *Server {
+func startTestServer(t *testing.T, remoteKey *ecdsa.PublicKey, pf func(*Peer)) *Server {
 	config := Config{
 		Name:       "test",
 		MaxPeers:   10,
@@ -77,7 +78,7 @@ func startTestServer(t *testing.T, id enode.ID, pf func(*Peer)) *Server {
 	server := &Server{
 		Config:       config,
 		newPeerHook:  pf,
-		newTransport: func(fd net.Conn) transport { return newTestTransport(id, fd) },
+		newTransport: func(fd net.Conn) transport { return newTestTransport(remoteKey, fd) },
 	}
 	if err := server.Start(); err != nil {
 		t.Fatalf("Could not start server: %v", err)
@@ -88,13 +89,10 @@ func startTestServer(t *testing.T, id enode.ID, pf func(*Peer)) *Server {
 func TestServerListen(t *testing.T) {
 	// start the test server
 	connected := make(chan *Peer)
-	remid := randomID()
+	remid := &newkey().PublicKey
 	srv := startTestServer(t, remid, func(p *Peer) {
-		if p.ID() != remid {
+		if p.ID() != discover.PubkeyToID(remid) {
 			t.Error("peer func called with wrong node id")
-		}
-		if p == nil {
-			t.Error("peer func called with nil conn")
 		}
 		connected <- p
 	})
@@ -142,15 +140,14 @@ func TestServerDial(t *testing.T) {
 
 	// start the server
 	connected := make(chan *Peer)
-	remid := randomID()
+	remid := &newkey().PublicKey
 	srv := startTestServer(t, remid, func(p *Peer) { connected <- p })
 	defer close(connected)
 	defer srv.Stop()
 
 	// tell the server to connect
 	tcpAddr := listener.Addr().(*net.TCPAddr)
-	node := &discover.Node{ID: remid, IP: tcpAddr.IP, TCP: uint16(tcpAddr.Port)}
-	srv.AddPeer(node)
+	srv.AddPeer(enode.NewV4(remid, tcpAddr.IP, tcpAddr.Port, 0))
 
 	select {
 	case conn := <-accepted:
@@ -158,7 +155,7 @@ func TestServerDial(t *testing.T) {
 
 		select {
 		case peer := <-connected:
-			if peer.ID() != remid {
+			if peer.ID() != discover.PubkeyToID(remid) {
 				t.Errorf("peer has wrong id")
 			}
 			if peer.Name() != "test" {
@@ -330,9 +327,9 @@ func (tg taskgen) newTasks(running int, peers map[enode.ID]*Peer, now time.Time)
 func (tg taskgen) taskDone(t task, now time.Time) {
 	tg.doneFunc(t)
 }
-func (tg taskgen) addStatic(*discover.Node) {
+func (tg taskgen) addStatic(*enode.Node) {
 }
-func (tg taskgen) removeStatic(*discover.Node) {
+func (tg taskgen) removeStatic(*enode.Node) {
 }
 
 type testTask struct {
@@ -354,7 +351,7 @@ func TestServerAtCap(t *testing.T) {
 			PrivateKey:   newkey(),
 			MaxPeers:     10,
 			NoDial:       true,
-			TrustedNodes: []*discover.Node{{ID: trustedID}},
+			TrustedNodes: []*enode.Node{{ID: trustedID}},
 		},
 	}
 	if err := srv.Start(); err != nil {
@@ -571,7 +568,7 @@ type setupTransport struct {
 	closeErr error
 }
 
-func (c *setupTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *discover.Node) (enode.ID, error) {
+func (c *setupTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *enode.Node) (enode.ID, error) {
 	c.calls += "doEncHandshake,"
 	return c.id, c.encHandshakeErr
 }

@@ -35,6 +35,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/bitutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/ecies"
 	"github.com/ethereum/go-ethereum/crypto/secp256k1"
@@ -166,7 +167,7 @@ func readProtocolHandshake(rw MsgReader, our *protoHandshake) (*protoHandshake, 
 	if err := msg.Decode(&hs); err != nil {
 		return nil, err
 	}
-	if (hs.ID == enode.ID{}) {
+	if len(hs.ID) != 64 || !bitutil.TestBytes(hs.ID) {
 		return nil, DiscInvalidIdentity
 	}
 	return &hs, nil

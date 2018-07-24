@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/ecies"
 	"github.com/ethereum/go-ethereum/crypto/sha3"
 	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/simulations/pipes"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -81,7 +82,7 @@ func TestEncHandshake(t *testing.T) {
 func testEncHandshake(token []byte) error {
 	type result struct {
 		side string
-		id   discover.NodeID
+		id   enode.ID
 		err  error
 	}
 	var (
@@ -97,12 +98,12 @@ func testEncHandshake(token []byte) error {
 		defer func() { output <- r }()
 		defer fd0.Close()
 
-		dest := &discover.Node{ID: discover.PubkeyID(&prv1.PublicKey)}
+		dest := enode.NewV4(&prv1.PublicKey, net.IP{}, 0, 0)
 		r.id, r.err = c0.doEncHandshake(prv0, dest)
 		if r.err != nil {
 			return
 		}
-		id1 := discover.PubkeyID(&prv1.PublicKey)
+		id1 := discover.PubkeyToID(&prv1.PublicKey)
 		if r.id != id1 {
 			r.err = fmt.Errorf("remote ID mismatch: got %v, want: %v", r.id, id1)
 		}
@@ -116,7 +117,7 @@ func testEncHandshake(token []byte) error {
 		if r.err != nil {
 			return
 		}
-		id0 := discover.PubkeyID(&prv0.PublicKey)
+		id0 := discover.PubkeyToID(&prv0.PublicKey)
 		if r.id != id0 {
 			r.err = fmt.Errorf("remote ID mismatch: got %v, want: %v", r.id, id0)
 		}
@@ -150,12 +151,14 @@ func testEncHandshake(token []byte) error {
 func TestProtocolHandshake(t *testing.T) {
 	var (
 		prv0, _ = crypto.GenerateKey()
-		node0   = &discover.Node{ID: discover.PubkeyID(&prv0.PublicKey), IP: net.IP{1, 2, 3, 4}, TCP: 33}
-		hs0     = &protoHandshake{Version: 3, ID: node0.ID, Caps: []Cap{{"a", 0}, {"b", 2}}}
+		pub0    = crypto.FromECDSAPub(&prv0.PublicKey)[1:]
+		node0   = enode.NewV4(&prv0.PublicKey, net.IP{1, 2, 3, 4}, 33, 0)
+		hs0     = &protoHandshake{Version: 3, ID: pub0, Caps: []Cap{{"a", 0}, {"b", 2}}}
 
 		prv1, _ = crypto.GenerateKey()
-		node1   = &discover.Node{ID: discover.PubkeyID(&prv1.PublicKey), IP: net.IP{5, 6, 7, 8}, TCP: 44}
-		hs1     = &protoHandshake{Version: 3, ID: node1.ID, Caps: []Cap{{"c", 1}, {"d", 3}}}
+		pub1    = crypto.FromECDSAPub(&prv1.PublicKey)[1:]
+		node1   = enode.NewV4(&prv1.PublicKey, net.IP{5, 6, 7, 8}, 44, 0)
+		hs1     = &protoHandshake{Version: 3, ID: pub1, Caps: []Cap{{"c", 1}, {"d", 3}}}
 
 		wg sync.WaitGroup
 	)
@@ -175,7 +178,7 @@ func TestProtocolHandshake(t *testing.T) {
 			t.Errorf("dial side enc handshake failed: %v", err)
 			return
 		}
-		if remid != node1.ID {
+		if remid != node1.ID() {
 			t.Errorf("dial side remote id mismatch: got %v, want %v", remid, node1.ID)
 			return
 		}
@@ -201,7 +204,7 @@ func TestProtocolHandshake(t *testing.T) {
 			t.Errorf("listen side enc handshake failed: %v", err)
 			return
 		}
-		if remid != node0.ID {
+		if remid != node0.ID() {
 			t.Errorf("listen side remote id mismatch: got %v, want %v", remid, node0.ID)
 			return
 		}

@@ -60,7 +60,7 @@ type protoHandshake struct {
 	Name       string
 	Caps       []Cap
 	ListenPort uint64
-	ID         enode.ID
+	ID         []byte
 
 	// Ignore additional fields (for forward compatibility).
 	Rest []rlp.RawValue `rlp:"tail"`
