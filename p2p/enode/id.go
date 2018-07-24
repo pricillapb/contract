@@ -29,15 +29,26 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
+var ValidSchemes = enr.SchemeMap{
+	"v4": enr.V4ID{},
+}
+
 // Node represents a host on the network.
 type Node struct {
 	enr.Record
 }
 
+// NewIncomplete returns an incomplete node with the given ID.
+func NewIncomplete(id ID) *Node {
+	var n Node
+	setID(&n, id)
+	return &n
+}
+
 // ID returns the node identifier.
 func (n *Node) ID() ID {
 	var id ID
-	copy(id[:], n.NodeAddr())
+	copy(id[:], ValidSchemes.NodeAddr(&n.Record))
 	return id
 }
 

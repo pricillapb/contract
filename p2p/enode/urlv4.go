@@ -166,7 +166,7 @@ func (n *Node) v4URL() string {
 		n.Load((*enr.Secp256k1)(&key))
 		nodeid = fmt.Sprintf("%x", crypto.FromECDSAPub(&key)[1:])
 	default:
-		nodeid = fmt.Sprintf("%s.%x", scheme, n.NodeAddr())
+		nodeid = fmt.Sprintf("%s.%x", scheme, ValidSchemes.NodeAddr(&n.Record))
 	}
 	u := url.URL{Scheme: "enode"}
 	if n.Incomplete() {
