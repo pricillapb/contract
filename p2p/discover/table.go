@@ -144,14 +144,14 @@ func (tab *Table) seedRand() {
 
 // Self returns the local node.
 // The returned node should not be modified by the caller.
-func (tab *Table) Self() *Node {
-	return tab.self
+func (tab *Table) Self() *enode.Node {
+	return &tab.self.n
 }
 
 // ReadRandomNodes fills the given slice with random nodes from the
 // table. It will not write the same node more than once. The nodes in
 // the slice are copies and can be modified by the caller.
-func (tab *Table) ReadRandomNodes(buf []*Node) (n int) {
+func (tab *Table) ReadRandomNodes(buf []*enode.Node) (n int) {
 	if !tab.isInitDone() {
 		return 0
 	}
@@ -177,7 +177,7 @@ func (tab *Table) ReadRandomNodes(buf []*Node) (n int) {
 	var i, j int
 	for ; i < len(buf); i, j = i+1, (j+1)%len(buckets) {
 		b := buckets[j]
-		buf[i] = &(*b[0])
+		buf[i] = &(b[0].n)
 		buckets[j] = b[1:]
 		if len(b) == 1 {
 			buckets = append(buckets[:j], buckets[j+1:]...)
@@ -227,30 +227,30 @@ func (tab *Table) isInitDone() bool {
 
 // Resolve searches for a specific node with the given ID.
 // It returns nil if the node could not be found.
-func (tab *Table) Resolve(targetKey encPubkey) *Node {
+func (tab *Table) Resolve(n *enode.Node) *enode.Node {
 	// If the node is present in the local table, no
 	// network interaction is required.
-	hash := targetKey.id()
+	hash := n.ID()
 	tab.mutex.Lock()
 	cl := tab.closest(hash, 1)
 	tab.mutex.Unlock()
 	if len(cl.entries) > 0 && cl.entries[0].id == hash {
-		return cl.entries[0]
+		return &cl.entries[0].n
 	}
 	// Otherwise, do a network lookup.
-	result := tab.Lookup(targetKey)
+	result := tab.Lookup(encodePubkey(n.Pubkey()))
 	for _, n := range result {
 		if n.id == hash {
-			return n
+			return &n.n
 		}
 	}
 	return nil
 }
 
-func (tab *Table) LookupRandom() []*Node {
+func (tab *Table) LookupRandom() []*enode.Node {
 	var target encPubkey
 	crand.Read(target[:])
-	return tab.Lookup(target)
+	return unwrapNodes(tab.Lookup(target))
 }
 
 // Lookup performs a network search for nodes close

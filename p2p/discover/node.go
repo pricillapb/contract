@@ -81,9 +81,17 @@ func convertNode(n *enode.Node) *Node {
 }
 
 func convertNodes(ns []*enode.Node) []*Node {
-	result := make([]*Node, 0, len(ns))
-	for _, n := range ns {
-		result = append(result, convertNode(n))
+	result := make([]*Node, len(ns))
+	for i, n := range ns {
+		result[i] = convertNode(n)
+	}
+	return result
+}
+
+func unwrapNodes(ns []*Node) []*enode.Node {
+	result := make([]*enode.Node, len(ns))
+	for i, n := range ns {
+		result[i] = &n.n
 	}
 	return result
 }

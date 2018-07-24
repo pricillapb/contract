@@ -28,32 +28,6 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
-// The "null" ENR identity scheme. This scheme stores the node
-// ID in the record without any signature.
-type nullID struct{}
-
-func (nullID) Verify(r *enr.Record, sig []byte) error {
-	return nil
-}
-
-func (nullID) NodeAddr(r *enr.Record) []byte {
-	var id enode.ID
-	r.Load(enr.WithEntry("nulladdr", &id))
-	return id[:]
-}
-
-func init() {
-	enr.RegisterIdentityScheme("null", nullID{})
-}
-
-func setID(r *enode.Node, id enode.ID) {
-	r.Set(enr.ID("null"))
-	r.Set(enr.WithEntry("nulladdr", id))
-	if err := r.SetSig("null", nil); err != nil {
-		panic(err)
-	}
-}
-
 func newTestTable(t transport) (*Table, *enode.DB) {
 	var n enode.Node
 	n.Set(enr.IP{0, 0, 0, 0})
