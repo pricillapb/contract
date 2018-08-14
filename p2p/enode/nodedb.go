@@ -259,7 +259,7 @@ func (db *DB) expireNodes() error {
 		}
 		// Skip the node if not expired yet (and not self)
 		if !bytes.Equal(id[:], db.self[:]) {
-			if seen := db.BondTime(id); seen.After(threshold) {
+			if seen := db.LastPongReceived(id); seen.After(threshold) {
 				continue
 			}
 		}
@@ -269,29 +269,24 @@ func (db *DB) expireNodes() error {
 	return nil
 }
 
-// lastPing retrieves the time of the last ping packet send to a remote node,
-// requesting binding.
-func (db *DB) LastPing(id ID) time.Time {
+// LastPingReceived retrieves the time of the last ping packet received from
+// a remote node.
+func (db *DB) LastPingReceived(id ID) time.Time {
 	return time.Unix(db.fetchInt64(makeKey(id, nodeDBDiscoverPing)), 0)
 }
 
-// updateLastPing updates the last time we tried contacting a remote node.
-func (db *DB) UpdateLastPing(id ID, instance time.Time) error {
+// UpdateLastPingReceived updates the last time we tried contacting a remote node.
+func (db *DB) UpdateLastPingReceived(id ID, instance time.Time) error {
 	return db.storeInt64(makeKey(id, nodeDBDiscoverPing), instance.Unix())
 }
 
 // bondTime retrieves the time of the last successful pong from remote node.
-func (db *DB) BondTime(id ID) time.Time {
+func (db *DB) LastPongReceived(id ID) time.Time {
 	return time.Unix(db.fetchInt64(makeKey(id, nodeDBDiscoverPong)), 0)
 }
 
-// hasBond reports whether the given node is considered bonded.
-func (db *DB) HasBond(id ID) bool {
-	return time.Since(db.BondTime(id)) < nodeDBNodeExpiration
-}
-
 // updateBondTime updates the last pong time of a node.
-func (db *DB) UpdateBondTime(id ID, instance time.Time) error {
+func (db *DB) UpdateLastPongReceived(id ID, instance time.Time) error {
 	return db.storeInt64(makeKey(id, nodeDBDiscoverPong), instance.Unix())
 }
 
@@ -334,7 +329,7 @@ seek:
 		if n.ID() == db.self {
 			continue seek
 		}
-		if now.Sub(db.BondTime(n.ID())) > maxAge {
+		if now.Sub(db.LastPongReceived(n.ID())) > maxAge {
 			continue seek
 		}
 		for i := range nodes {

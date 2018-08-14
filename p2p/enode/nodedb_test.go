@@ -113,23 +113,23 @@ func TestDBFetchStore(t *testing.T) {
 	defer db.Close()
 
 	// Check fetch/store operations on a node ping object
-	if stored := db.LastPing(node.ID()); stored.Unix() != 0 {
+	if stored := db.LastPingReceived(node.ID()); stored.Unix() != 0 {
 		t.Errorf("ping: non-existing object: %v", stored)
 	}
-	if err := db.UpdateLastPing(node.ID(), inst); err != nil {
+	if err := db.UpdateLastPingReceived(node.ID(), inst); err != nil {
 		t.Errorf("ping: failed to update: %v", err)
 	}
-	if stored := db.LastPing(node.ID()); stored.Unix() != inst.Unix() {
+	if stored := db.LastPingReceived(node.ID()); stored.Unix() != inst.Unix() {
 		t.Errorf("ping: value mismatch: have %v, want %v", stored, inst)
 	}
 	// Check fetch/store operations on a node pong object
-	if stored := db.BondTime(node.ID()); stored.Unix() != 0 {
+	if stored := db.LastPongReceived(node.ID()); stored.Unix() != 0 {
 		t.Errorf("pong: non-existing object: %v", stored)
 	}
-	if err := db.UpdateBondTime(node.ID(), inst); err != nil {
+	if err := db.UpdateLastPongReceived(node.ID(), inst); err != nil {
 		t.Errorf("pong: failed to update: %v", err)
 	}
-	if stored := db.BondTime(node.ID()); stored.Unix() != inst.Unix() {
+	if stored := db.LastPongReceived(node.ID()); stored.Unix() != inst.Unix() {
 		t.Errorf("pong: value mismatch: have %v, want %v", stored, inst)
 	}
 	// Check fetch/store operations on a node findnode-failure object
@@ -256,7 +256,7 @@ func testSeedQuery() error {
 		if err := db.UpdateNode(seed.node); err != nil {
 			return fmt.Errorf("node %d: failed to insert: %v", i, err)
 		}
-		if err := db.UpdateBondTime(seed.node.ID(), seed.pong); err != nil {
+		if err := db.UpdateLastPongReceived(seed.node.ID(), seed.pong); err != nil {
 			return fmt.Errorf("node %d: failed to insert bondTime: %v", i, err)
 		}
 	}
@@ -355,7 +355,7 @@ func TestDBExpiration(t *testing.T) {
 		if err := db.UpdateNode(seed.node); err != nil {
 			t.Fatalf("node %d: failed to insert: %v", i, err)
 		}
-		if err := db.UpdateBondTime(seed.node.ID(), seed.pong); err != nil {
+		if err := db.UpdateLastPongReceived(seed.node.ID(), seed.pong); err != nil {
 			t.Fatalf("node %d: failed to update bondTime: %v", i, err)
 		}
 	}
@@ -388,7 +388,7 @@ func TestDBSelfExpiration(t *testing.T) {
 		if err := db.UpdateNode(seed.node); err != nil {
 			t.Fatalf("node %d: failed to insert: %v", i, err)
 		}
-		if err := db.UpdateBondTime(seed.node.ID(), seed.pong); err != nil {
+		if err := db.UpdateLastPongReceived(seed.node.ID(), seed.pong); err != nil {
 			t.Fatalf("node %d: failed to update bondTime: %v", i, err)
 		}
 	}
