@@ -154,7 +154,7 @@ func parsePubkey(in string) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("wrong length, want %d hex chars", 128)
 	}
 	b = append([]byte{0x4}, b...)
-	return crypto.ToECDSAPub(b), nil
+	return crypto.UnmarshalPubkey(b)
 }
 
 func (n *Node) v4URL() string {
