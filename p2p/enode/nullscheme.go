@@ -39,10 +39,12 @@ func (nullID) NodeAddr(r *enr.Record) []byte {
 	return id[:]
 }
 
-func setID(r *Node, id ID) {
-	r.Set(enr.ID("null"))
-	r.Set(enr.WithEntry("nulladdr", id))
-	if err := r.SetSig(nullID{}, nil); err != nil {
-		panic(err)
-	}
+func setID(n *Node, id ID) *Node {
+	return n.Modify(func(r *enr.Record) {
+		r.Set(enr.ID("null"))
+		r.Set(enr.WithEntry("nulladdr", id))
+		if err := r.SetSig(nullID{}, nil); err != nil {
+			panic(err)
+		}
+	})
 }

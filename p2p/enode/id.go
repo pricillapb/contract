@@ -35,26 +35,35 @@ var ValidSchemes = enr.SchemeMap{
 
 // Node represents a host on the network.
 type Node struct {
-	enr.Record
+	r  enr.Record
+	id ID
 }
 
 // NewIncomplete returns an incomplete node with the given ID.
 func NewIncomplete(id ID) *Node {
-	var n Node
-	setID(&n, id)
-	return &n
+	return &Node{id: id}
 }
 
 // ID returns the node identifier.
 func (n *Node) ID() ID {
-	var id ID
-	copy(id[:], ValidSchemes.NodeAddr(&n.Record))
-	return id
+	return n.id
 }
 
 // Incomplete returns true for nodes with no IP address.
 func (n *Node) Incomplete() bool {
 	return n.IP() == nil
+}
+
+// Load retrieves an entry from the underlying record.
+func (n *Node) Load(k enr.Entry) error {
+	return n.r.Load(k)
+}
+
+// Modify creates a new node containing changes made by the given function.
+func (n *Node) Modify(fn func(r *enr.Record)) *Node {
+	mod := *n
+	fn(&mod.r)
+	return &mod
 }
 
 // IP returns the IP address of the node.

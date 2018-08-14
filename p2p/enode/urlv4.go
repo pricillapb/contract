@@ -81,19 +81,21 @@ func NewV4(pubkey *ecdsa.PublicKey, ip net.IP, tcp, udp int) *Node {
 }
 
 func newNodeV4(pubkey *ecdsa.PublicKey, ip net.IP, tcp, udp int) *Node {
-	var n Node
-	n.Set(enr.ID("v4"))
-	n.Set((*enr.Secp256k1)(pubkey))
+	var r enr.Record
+	r.Set(enr.ID("v4"))
+	r.Set((*enr.Secp256k1)(pubkey))
 	if ip != nil {
-		n.Set(enr.IP(ip))
+		r.Set(enr.IP(ip))
 	}
 	if udp != 0 {
-		n.Set(enr.UDP(udp))
+		r.Set(enr.UDP(udp))
 	}
 	if tcp != 0 {
-		n.Set(enr.TCP(tcp))
+		r.Set(enr.TCP(tcp))
 	}
-	return &n
+	n := &Node{r: r}
+	copy(n.id[:], enr.V4ID{}.NodeAddr(&r))
+	return n
 }
 
 func parseComplete(rawurl string) (*Node, error) {
@@ -159,14 +161,12 @@ func (n *Node) v4URL() string {
 	var scheme enr.ID
 	var nodeid string
 	switch n.Load(&scheme); scheme {
-	case "":
-		nodeid = "noid"
 	case "v4":
 		var key ecdsa.PublicKey
 		n.Load((*enr.Secp256k1)(&key))
 		nodeid = fmt.Sprintf("%x", crypto.FromECDSAPub(&key)[1:])
 	default:
-		nodeid = fmt.Sprintf("%s.%x", scheme, ValidSchemes.NodeAddr(&n.Record))
+		nodeid = fmt.Sprintf("%s.%x", scheme, n.id[:])
 	}
 	u := url.URL{Scheme: "enode"}
 	if n.Incomplete() {

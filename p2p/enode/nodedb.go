@@ -186,7 +186,7 @@ func (db *DB) Node(id ID) *Node {
 
 func mustDecodeNode(id, data []byte) *Node {
 	node := new(Node)
-	if err := rlp.DecodeBytes(data, &node.Record); err != nil {
+	if err := rlp.DecodeBytes(data, &node.r); err != nil {
 		panic(fmt.Errorf("p2p/enode: can't decode node %x in DB: %v", id, err))
 	}
 	return node
@@ -194,7 +194,7 @@ func mustDecodeNode(id, data []byte) *Node {
 
 // updateNode inserts - potentially overwriting - a node into the peer database.
 func (db *DB) UpdateNode(node *Node) error {
-	blob, err := rlp.EncodeToBytes(&node.Record)
+	blob, err := rlp.EncodeToBytes(&node.r)
 	if err != nil {
 		return err
 	}
