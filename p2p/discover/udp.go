@@ -48,8 +48,9 @@ var (
 
 // Timeouts
 const (
-	respTimeout = 500 * time.Millisecond
-	expiration  = 20 * time.Second
+	respTimeout    = 500 * time.Millisecond
+	expiration     = 20 * time.Second
+	bondExpiration = 24 * time.Hour
 
 	ntpFailureThreshold = 32               // Continuous timeouts after which to check NTP
 	ntpWarningCooldown  = 10 * time.Minute // Minimum amount of time to pass before repeating NTP warning
@@ -325,7 +326,7 @@ func (t *udp) waitping(from enode.ID) error {
 func (t *udp) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]*Node, error) {
 	// If we haven't seen a ping from the destination node for a while, it won't remember
 	// our endpoint proof and reject findnode. Solicit a ping first.
-	if time.Since(t.db.LastPingReceived(toid)) > nodeDBNodeExpiration {
+	if time.Since(t.db.LastPingReceived(toid)) > bondExpiration {
 		t.ping(toid, toaddr)
 		t.waitping(toid)
 	}
@@ -627,12 +628,12 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 	})
 	n := convertNode(enode.NewV4(key, from.IP, int(req.From.TCP), from.Port))
 	t.handleReply(n.id, pingPacket, req)
-	if time.Since(t.db.LastPongReceived(n.id)) > nodeDBNodeExpiration {
+	if time.Since(t.db.LastPongReceived(n.id)) > bondExpiration {
 		t.sendPing(n.id, from, func() { t.addThroughPing(n) })
 	} else {
 		t.addThroughPing(n)
 	}
-	t.db.UpdateLastPingReceived(fromID, time.Now())
+	t.db.UpdateLastPingReceived(n.id, time.Now())
 	return nil
 }
 
@@ -642,10 +643,11 @@ func (req *pong) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 	if expired(req.Expiration) {
 		return errExpired
 	}
-	if !t.handleReply(fromKey.id(), pongPacket, req) {
+	fromID := fromKey.id()
+	if !t.handleReply(fromID, pongPacket, req) {
 		return errUnsolicitedReply
 	}
-	t.db.updateLastPongReceived(fromID, time.Now())
+	t.db.UpdateLastPongReceived(fromID, time.Now())
 	return nil
 }
 
@@ -656,7 +658,7 @@ func (req *findnode) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []
 		return errExpired
 	}
 	fromID := fromKey.id()
-	if !t.db.HasBond(fromID) {
+	if time.Since(t.db.LastPongReceived(fromID)) > bondExpiration {
 		// No endpoint proof pong exists, we don't process the packet. This prevents an
 		// attack vector where the discovery protocol could be used to amplify traffic in a
 		// DDOS attack. A malicious actor would send a findnode request with the IP address

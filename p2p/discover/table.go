@@ -318,18 +318,18 @@ func (tab *Table) lookup(targetKey encPubkey, refreshIfEmpty bool) []*Node {
 }
 
 func (tab *Table) findnode(n *Node, targetKey encPubkey, reply chan<- []*Node) {
-	fails := tab.db.findFails(n.id)
+	fails := tab.db.FindFails(n.id)
 	r, err := tab.net.findnode(n.id, n.addr(), targetKey)
 	if err != nil || len(r) == 0 {
 		fails++
-		tab.db.updateFindFails(n.id, fails)
+		tab.db.UpdateFindFails(n.id, fails)
 		log.Trace("Findnode failed", "id", n.id, "failcount", fails, "err", err)
 		if fails >= maxFindnodeFailures {
 			log.Trace("Too many findnode failures, dropping", "id", n.id, "failcount", fails)
 			tab.delete(n)
 		}
 	} else if fails > 0 {
-		tab.db.updateFindFails(n.id, fails-1)
+		tab.db.UpdateFindFails(n.id, fails-1)
 	}
 
 	// Grab as many nodes as possible. Some of them might not be alive anymore, but we'll
@@ -447,7 +447,7 @@ func (tab *Table) loadSeedNodes() {
 	seeds = append(seeds, tab.nursery...)
 	for i := range seeds {
 		seed := seeds[i]
-		age := log.Lazy{Fn: func() interface{} { return time.Since(tab.db.BondTime(seed.id)) }}
+		age := log.Lazy{Fn: func() interface{} { return time.Since(tab.db.LastPongReceived(seed.id)) }}
 		log.Debug("Found seed node in database", "id", seed.id, "addr", seed.addr(), "age", age)
 		tab.add(seed)
 	}
@@ -465,7 +465,7 @@ func (tab *Table) doRevalidate(done chan<- struct{}) {
 	}
 
 	// Ping the selected node and wait for a pong.
-	err := tab.ping(last.id, last.addr())
+	err := tab.net.ping(last.id, last.addr())
 
 	tab.mutex.Lock()
 	defer tab.mutex.Unlock()
@@ -563,8 +563,8 @@ func (tab *Table) add(n *Node) {
 	tab.mutex.Lock()
 	defer tab.mutex.Unlock()
 
-	b := tab.bucket(new.id)
-	if !tab.bumpOrAdd(b, new) {
+	b := tab.bucket(n.id)
+	if !tab.bumpOrAdd(b, n) {
 		// Node is not in table. Add it to the replacement list.
 		tab.addReplacement(b, n)
 	}

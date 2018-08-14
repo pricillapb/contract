@@ -20,7 +20,6 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"math/rand"
-	"sync"
 
 	"net"
 	"reflect"
@@ -69,7 +68,7 @@ func testPingReplace(t *testing.T, newNodeIsResponding, lastInBucketIsResponding
 	tab.doRevalidate(make(chan struct{}, 1))
 	tab.doRevalidate(make(chan struct{}, 1))
 
-	if !transport.pinged[last.ID] {
+	if !transport.pinged[last.id] {
 		// Oldest node in bucket is pinged to see whether it is still alive.
 		t.Error("table did not ping last node in bucket")
 	}
@@ -143,7 +142,9 @@ func TestTable_IPLimit(t *testing.T) {
 
 	for i := 0; i < tableIPLimit+1; i++ {
 		n := nodeAtDistance(tab.self.id, i)
-		n.n.Set(enr.IP{172, 0, 1, byte(i)})
+		n.n = *n.n.Modify(func(r *enr.Record) {
+			r.Set(enr.IP{172, 0, 1, byte(i)})
+		})
 		tab.add(n)
 	}
 	if tab.len() > tableIPLimit {
@@ -161,90 +162,15 @@ func TestTable_BucketIPLimit(t *testing.T) {
 	d := 3
 	for i := 0; i < bucketIPLimit+1; i++ {
 		n := nodeAtDistance(tab.self.id, d)
-		n.n.Set(enr.IP{172, 0, 1, byte(i)})
+		n.n = *n.n.Modify(func(r *enr.Record) {
+			r.Set(enr.IP{172, 0, 1, byte(i)})
+		})
 		tab.add(n)
 	}
 	if tab.len() > bucketIPLimit {
 		t.Errorf("too many nodes in table")
 	}
 }
-
-// fillBucket inserts nodes into the given bucket until
-// it is full. The node's IDs dont correspond to their
-// hashes.
-func fillBucket(tab *Table, n *Node) (last *Node) {
-	ld := enode.LogDist(tab.self.id, n.id)
-	b := tab.bucket(n.id)
-	for len(b.entries) < bucketSize {
-		b.entries = append(b.entries, nodeAtDistance(tab.self.id, ld))
-	}
-	return b.entries[bucketSize-1]
-}
-
-// The "null" ENR identity scheme.
-type nullID struct{}
-
-func (nullID) Verify(r *enr.Record, sig []byte) error {
-	return nil
-}
-
-func (nullID) NodeAddr(r *enr.Record) []byte {
-	var id enode.ID
-	r.Load(enr.WithEntry("nulladdr", &id))
-	return id[:]
-}
-
-func init() {
-	enr.RegisterIdentityScheme("null", nullID{})
-}
-
-func setID(r *enode.Node, id enode.ID) {
-	r.Set(enr.ID("null"))
-	r.Set(enr.WithEntry("nulladdr", id))
-	if err := r.SetSig("null", nil); err != nil {
-		panic(err)
-	}
-}
-
-// nodeAtDistance creates a node for which enode.LogDist(base, n.id) == ld.
-func nodeAtDistance(base enode.ID, ld int) *Node {
-	n := new(enode.Node)
-	setID(n, idAtDistance(base, ld))
-	n.Set(enr.IP{byte(ld), 0, 2, byte(ld)})
-	return newNode(n)
-}
-
-type pingRecorder struct {
-	mu           sync.Mutex
-	dead, pinged map[enode.ID]bool
-}
-
-func newPingRecorder() *pingRecorder {
-	return &pingRecorder{
-		dead:   make(map[enode.ID]bool),
-		pinged: make(map[enode.ID]bool),
-	}
-}
-
-func (t *pingRecorder) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]*Node, error) {
-	return nil, nil
-}
-
-func (t *pingRecorder) close() {}
-
-func (t *pingRecorder) ping(toid enode.ID, toaddr *net.UDPAddr) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.pinged[toid] = true
-	if t.dead[toid] {
-		return errTimeout
-	} else {
-		return nil
-	}
-}
-
-func (t *pingRecorder) close() {}
 
 func TestTable_closest(t *testing.T) {
 	t.Parallel()
@@ -308,10 +234,10 @@ func TestTable_ReadRandomNodesGetAll(t *testing.T) {
 		MaxCount: 200,
 		Rand:     rand.New(rand.NewSource(time.Now().Unix())),
 		Values: func(args []reflect.Value, rand *rand.Rand) {
-			args[0] = reflect.ValueOf(make([]*Node, rand.Intn(1000)))
+			args[0] = reflect.ValueOf(make([]*enode.Node, rand.Intn(1000)))
 		},
 	}
-	test := func(buf []*Node) bool {
+	test := func(buf []*enode.Node) bool {
 		transport := newPingRecorder()
 		tab, db := newTestTable(transport)
 		defer tab.Close()
@@ -327,7 +253,7 @@ func TestTable_ReadRandomNodesGetAll(t *testing.T) {
 			t.Errorf("wrong number of nodes, got %d, want %d", gotN, tab.len())
 			return false
 		}
-		if hasDuplicates(buf[:gotN]) {
+		if hasDuplicates(convertNodes(buf[:gotN])) {
 			t.Errorf("result contains duplicates")
 			return false
 		}

@@ -276,8 +276,8 @@ func TestUDP_findnodeMultiReply(t *testing.T) {
 	test := newUDPTest(t)
 	defer test.table.Close()
 
-	rid := PubkeyID(&test.remotekey.PublicKey)
-	test.table.db.updateLastPingReceived(rid, time.Now())
+	rid := PubkeyToID(&test.remotekey.PublicKey)
+	test.table.db.UpdateLastPingReceived(rid, time.Now())
 
 	// queue a pending findnode request
 	resultc, errc := make(chan []*Node), make(chan error)
