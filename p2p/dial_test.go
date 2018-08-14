@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
@@ -71,6 +70,7 @@ func runDialTest(t *testing.T, test dialtest) {
 			t.Errorf("round %d: new tasks mismatch:\ngot %v\nwant %v\nstate: %v\nrunning: %v\n",
 				i, spew.Sdump(new), spew.Sdump(round.new), spew.Sdump(test.init), spew.Sdump(running))
 		}
+		t.Log("tasks:", spew.Sdump(new))
 
 		// Time advances by 16 seconds on every round.
 		vtime = vtime.Add(16 * time.Second)
@@ -404,19 +404,25 @@ func TestDialStateDynDialFromTable(t *testing.T) {
 	})
 }
 
+func newWithIP(id enode.ID, ip net.IP) *enode.Node {
+	return enode.NewIncomplete(id).Modify(func(r *enr.Record) {
+		r.Set(enr.IP(ip))
+	})
+}
+
 // This test checks that candidates that do not match the netrestrict list are not dialed.
 func TestDialStateNetRestrict(t *testing.T) {
 	// This table always returns the same random nodes
 	// in the order given below.
 	table := fakeTable{
-		enode.NewIncomplete(uintID(1)).Set(enr.IP(net.ParseIP("127.0.0.1"))),
-		enode.NewIncomplete(uintID(2)).Set(enr.IP(net.ParseIP("127.0.0.2"))),
-		enode.NewIncomplete(uintID(3)).Set(enr.IP(net.ParseIP("127.0.0.3"))),
-		enode.NewIncomplete(uintID(4)).Set(enr.IP(net.ParseIP("127.0.0.4"))),
-		enode.NewIncomplete(uintID(5)).Set(enr.IP(net.ParseIP("127.0.2.5"))),
-		enode.NewIncomplete(uintID(6)).Set(enr.IP(net.ParseIP("127.0.2.6"))),
-		enode.NewIncomplete(uintID(7)).Set(enr.IP(net.ParseIP("127.0.2.7"))),
-		enode.NewIncomplete(uintID(8)).Set(enr.IP(net.ParseIP("127.0.2.8"))),
+		newWithIP(uintID(1), net.ParseIP("127.0.0.1")),
+		newWithIP(uintID(2), net.ParseIP("127.0.0.2")),
+		newWithIP(uintID(3), net.ParseIP("127.0.0.3")),
+		newWithIP(uintID(4), net.ParseIP("127.0.0.4")),
+		newWithIP(uintID(5), net.ParseIP("127.0.2.5")),
+		newWithIP(uintID(6), net.ParseIP("127.0.2.6")),
+		newWithIP(uintID(7), net.ParseIP("127.0.2.7")),
+		newWithIP(uintID(8), net.ParseIP("127.0.2.8")),
 	}
 	restrict := new(netutil.Netlist)
 	restrict.Add("127.0.2.0/24")
@@ -630,12 +636,12 @@ func TestDialStateCache(t *testing.T) {
 }
 
 func TestDialResolve(t *testing.T) {
-	resolved := discover.NewNode(uintID(1), net.IP{127, 0, 55, 234}, 3333, 4444)
+	resolved := newWithIP(uintID(1), net.IP{127, 0, 55, 234})
 	table := &resolveMock{answer: resolved}
 	state := newDialState(nil, nil, table, 0, nil)
 
 	// Check that the task is generated with an incomplete ID.
-	dest := discover.NewNode(uintID(1), nil, 0, 0)
+	dest := enode.NewIncomplete(uintID(1))
 	state.addStatic(dest)
 	tasks := state.newTasks(0, nil, time.Time{})
 	if !reflect.DeepEqual(tasks, []task{&dialTask{flags: staticDialedConn, dest: dest}}) {
@@ -646,7 +652,7 @@ func TestDialResolve(t *testing.T) {
 	config := Config{Dialer: TCPDialer{&net.Dialer{Deadline: time.Now().Add(-5 * time.Minute)}}}
 	srv := &Server{ntab: table, Config: config}
 	tasks[0].Do(srv)
-	if !reflect.DeepEqual(table.resolveCalls, []discover.NodeID{dest.ID}) {
+	if !reflect.DeepEqual(table.resolveCalls, []*enode.Node{dest}) {
 		t.Fatalf("wrong resolve calls, got %v", table.resolveCalls)
 	}
 

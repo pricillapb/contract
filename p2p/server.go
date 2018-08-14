@@ -898,7 +898,7 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 		return err
 	}
 	if !bytes.Equal(crypto.Keccak256(phs.ID), c.id[:]) {
-		clog.Trace("Wrong devp2p handshake identity", "err", phs.ID)
+		clog.Trace("Wrong devp2p handshake identity", "phsid", fmt.Sprintf("%x", phs.ID))
 		return DiscUnexpectedIdentity
 	}
 	c.caps, c.name = phs.Caps, phs.Name

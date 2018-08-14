@@ -179,7 +179,7 @@ func TestProtocolHandshake(t *testing.T) {
 			return
 		}
 		if remid != node1.ID() {
-			t.Errorf("dial side remote id mismatch: got %v, want %v", remid, node1.ID)
+			t.Errorf("dial side remote id mismatch: got %v, want %v", remid, node1.ID())
 			return
 		}
 
@@ -205,7 +205,7 @@ func TestProtocolHandshake(t *testing.T) {
 			return
 		}
 		if remid != node0.ID() {
-			t.Errorf("listen side remote id mismatch: got %v, want %v", remid, node0.ID)
+			t.Errorf("listen side remote id mismatch: got %v, want %v", remid, node0.ID())
 			return
 		}
 

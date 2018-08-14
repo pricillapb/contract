@@ -198,10 +198,8 @@ func (t *rlpx) doEncHandshake(prv *ecdsa.PrivateKey, dial *enode.Node) (enode.ID
 
 // encHandshake contains the state of the encryption handshake.
 type encHandshake struct {
-	initiator bool
-	remote    *ecies.PublicKey
-
-	remotePub            *ecies.PublicKey  // remote-pubk
+	initiator            bool
+	remote               *ecies.PublicKey  // remote-pubk
 	initNonce, respNonce []byte            // nonce
 	randomPrivKey        *ecies.PrivateKey // ecdhe-random
 	remoteRandomPub      *ecies.PublicKey  // ecdhe-random-pubk
@@ -275,7 +273,7 @@ func (h *encHandshake) secrets(auth, authResp []byte) (secrets, error) {
 // staticSharedSecret returns the static shared secret, the result
 // of key agreement between the local and remote static node key.
 func (h *encHandshake) staticSharedSecret(prv *ecdsa.PrivateKey) ([]byte, error) {
-	return ecies.ImportECDSA(prv).GenerateShared(h.remotePub, sskLen, sskLen)
+	return ecies.ImportECDSA(prv).GenerateShared(h.remote, sskLen, sskLen)
 }
 
 // initiatorEncHandshake negotiates a session token on conn.
@@ -283,7 +281,7 @@ func (h *encHandshake) staticSharedSecret(prv *ecdsa.PrivateKey) ([]byte, error)
 //
 // prv is the local client's private key.
 func initiatorEncHandshake(conn io.ReadWriter, prv *ecdsa.PrivateKey, remote *ecdsa.PublicKey) (s secrets, err error) {
-	h := &encHandshake{initiator: true, remotePub: ecies.ImportECDSAPublic(remote)}
+	h := &encHandshake{initiator: true, remote: ecies.ImportECDSAPublic(remote)}
 	authMsg, err := h.makeAuthMsg(prv, token)
 	if err != nil {
 		return s, err
@@ -387,7 +385,7 @@ func (h *encHandshake) handleAuthMsg(msg *authMsgV4, prv *ecdsa.PrivateKey) erro
 		return err
 	}
 	h.initNonce = msg.Nonce[:]
-	h.remotePub = rpub
+	h.remote = rpub
 
 	// Generate random keypair for ECDH.
 	// If a private key is already set, use it instead of generating one (for testing).
@@ -433,7 +431,7 @@ func (msg *authMsgV4) sealPlain(h *encHandshake) ([]byte, error) {
 	n += copy(buf[n:], msg.InitiatorPubkey[:])
 	n += copy(buf[n:], msg.Nonce[:])
 	buf[n] = 0 // token-flag
-	return ecies.Encrypt(rand.Reader, h.remotePub, buf, nil, nil)
+	return ecies.Encrypt(rand.Reader, h.remote, buf, nil, nil)
 }
 
 func (msg *authMsgV4) decodePlain(input []byte) {
@@ -449,7 +447,7 @@ func (msg *authRespV4) sealPlain(hs *encHandshake) ([]byte, error) {
 	buf := make([]byte, authRespLen)
 	n := copy(buf, msg.RandomPubkey[:])
 	copy(buf[n:], msg.Nonce[:])
-	return ecies.Encrypt(rand.Reader, hs.remotePub, buf, nil, nil)
+	return ecies.Encrypt(rand.Reader, hs.remote, buf, nil, nil)
 }
 
 func (msg *authRespV4) decodePlain(input []byte) {
@@ -472,7 +470,7 @@ func sealEIP8(msg interface{}, h *encHandshake) ([]byte, error) {
 	prefix := make([]byte, 2)
 	binary.BigEndian.PutUint16(prefix, uint16(buf.Len()+eciesOverhead))
 
-	enc, err := ecies.Encrypt(rand.Reader, h.remotePub, buf.Bytes(), nil, prefix)
+	enc, err := ecies.Encrypt(rand.Reader, h.remote, buf.Bytes(), nil, prefix)
 	return append(prefix, enc...), err
 }
 

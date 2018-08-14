@@ -32,9 +32,9 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
-func init() {
-	// log.Root().SetHandler(log.LvlFilterHandler(log.LvlError, log.StreamHandler(os.Stderr, log.TerminalFormat(false))))
-}
+// func init() {
+// 	log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(os.Stderr, log.TerminalFormat(false))))
+// }
 
 type testTransport struct {
 	rpub *ecdsa.PublicKey
@@ -345,13 +345,14 @@ func (t *testTask) Do(srv *Server) {
 // just after the encryption handshake when the server is
 // at capacity. Trusted connections should still be accepted.
 func TestServerAtCap(t *testing.T) {
-	trustedID := randomID()
+	trustedNode := newkey()
+	trustedID := discover.PubkeyToID(&trustedNode.PublicKey)
 	srv := &Server{
 		Config: Config{
 			PrivateKey:   newkey(),
 			MaxPeers:     10,
 			NoDial:       true,
-			TrustedNodes: []*enode.Node{{ID: trustedID}},
+			TrustedNodes: []*enode.Node{enode.NewIncomplete(trustedID)},
 		},
 	}
 	if err := srv.Start(); err != nil {
@@ -361,7 +362,7 @@ func TestServerAtCap(t *testing.T) {
 
 	newconn := func(id enode.ID) *conn {
 		fd, _ := net.Pipe()
-		tx := newTestTransport(id, fd)
+		tx := newTestTransport(&trustedNode.PublicKey, fd)
 		return &conn{fd: fd, transport: tx, flags: inboundConn, id: id, cont: make(chan error)}
 	}
 
@@ -471,59 +472,63 @@ func TestServerPeerLimits(t *testing.T) {
 }
 
 func TestServerSetupConn(t *testing.T) {
-	id := randomID()
-	srvkey := newkey()
-	srvid := discover.PubkeyID(&srvkey.PublicKey)
+	var (
+		clientkey, srvkey = newkey(), newkey()
+		clientpub         = crypto.FromECDSAPub(&clientkey.PublicKey)[1:]
+		srvpub            = crypto.FromECDSAPub(&srvkey.PublicKey)[1:]
+		clientid          = discover.PubkeyToID(&clientkey.PublicKey)
+		srvid             = discover.PubkeyToID(&srvkey.PublicKey)
+	)
 	tests := []struct {
 		dontstart bool
 		tt        *setupTransport
 		flags     connFlag
-		dialDest  *discover.Node
+		dialDest  *enode.Node
 
 		wantCloseErr error
 		wantCalls    string
 	}{
 		{
 			dontstart:    true,
-			tt:           &setupTransport{id: id},
+			tt:           &setupTransport{id: clientid},
 			wantCalls:    "close,",
 			wantCloseErr: errServerStopped,
 		},
 		{
-			tt:           &setupTransport{id: id, encHandshakeErr: errors.New("read error")},
+			tt:           &setupTransport{id: clientid, encHandshakeErr: errors.New("read error")},
 			flags:        inboundConn,
 			wantCalls:    "doEncHandshake,close,",
 			wantCloseErr: errors.New("read error"),
 		},
 		{
-			tt:           &setupTransport{id: id},
-			dialDest:     &discover.Node{ID: randomID()},
+			tt:           &setupTransport{id: clientid},
+			dialDest:     enode.NewIncomplete(randomID()),
 			flags:        dynDialedConn,
 			wantCalls:    "doEncHandshake,close,",
 			wantCloseErr: DiscUnexpectedIdentity,
 		},
 		{
-			tt:           &setupTransport{id: id, phs: &protoHandshake{ID: randomID()}},
-			dialDest:     &discover.Node{ID: id},
+			tt:           &setupTransport{id: clientid, phs: &protoHandshake{ID: randomID().Bytes()}},
+			dialDest:     enode.NewIncomplete(clientid),
 			flags:        dynDialedConn,
 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
 			wantCloseErr: DiscUnexpectedIdentity,
 		},
 		{
-			tt:           &setupTransport{id: id, protoHandshakeErr: errors.New("foo")},
-			dialDest:     &discover.Node{ID: id},
+			tt:           &setupTransport{id: clientid, protoHandshakeErr: errors.New("foo")},
+			dialDest:     enode.NewIncomplete(clientid),
 			flags:        dynDialedConn,
 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
 			wantCloseErr: errors.New("foo"),
 		},
 		{
-			tt:           &setupTransport{id: srvid, phs: &protoHandshake{ID: srvid}},
+			tt:           &setupTransport{id: srvid, phs: &protoHandshake{ID: srvpub}},
 			flags:        inboundConn,
 			wantCalls:    "doEncHandshake,close,",
 			wantCloseErr: DiscSelf,
 		},
 		{
-			tt:           &setupTransport{id: id, phs: &protoHandshake{ID: id}},
+			tt:           &setupTransport{id: clientid, phs: &protoHandshake{ID: clientpub}},
 			flags:        inboundConn,
 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
 			wantCloseErr: DiscUselessPeer,
