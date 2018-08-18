@@ -22,9 +22,14 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
+// List of known secure identity schemes.
+var ValidSchemes = enr.SchemeMap{
+	"v4": enr.V4ID{},
+}
+
 var ValidSchemesForTesting = enr.SchemeMap{
 	"v4":   enr.V4ID{},
-	"null": nullID{},
+	"null": NullID{},
 }
 
 type v4CompatID struct {
@@ -43,24 +48,25 @@ func signV4Compat(r *enr.Record, pubkey *ecdsa.PublicKey) {
 	}
 }
 
-// The "null" ENR identity scheme. This scheme stores the node
+// NullID is the "null" ENR identity scheme. This scheme stores the node
 // ID in the record without any signature.
-type nullID struct{}
+type NullID struct{}
 
-func (nullID) Verify(r *enr.Record, sig []byte) error {
+func (NullID) Verify(r *enr.Record, sig []byte) error {
 	return nil
 }
 
-func (nullID) NodeAddr(r *enr.Record) []byte {
+func (NullID) NodeAddr(r *enr.Record) []byte {
 	var id ID
 	r.Load(enr.WithEntry("nulladdr", &id))
 	return id[:]
 }
 
-func signNull(r *enr.Record, id ID) {
+func SignNull(r *enr.Record, id ID) *Node {
 	r.Set(enr.ID("null"))
 	r.Set(enr.WithEntry("nulladdr", id))
-	if err := r.SetSig(nullID{}, []byte{}); err != nil {
+	if err := r.SetSig(NullID{}, []byte{}); err != nil {
 		panic(err)
 	}
+	return &Node{r: *r, id: id}
 }

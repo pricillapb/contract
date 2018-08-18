@@ -29,19 +29,21 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
-var ValidSchemes = enr.SchemeMap{
-	"v4": enr.V4ID{},
-}
-
 // Node represents a host on the network.
 type Node struct {
 	r  enr.Record
 	id ID
 }
 
-// NewIncomplete returns an incomplete node with the given ID.
-func NewIncomplete(id ID) *Node {
-	return &Node{id: id}
+// New wraps a node record. The record must be valid according to the given
+// identity scheme.
+func New(validSchemes enr.IdentityScheme, r *enr.Record) (*Node, error) {
+	if err := r.VerifySignature(validSchemes); err != nil {
+		return nil, err
+	}
+	n := &Node{r: *r}
+	n.resetID(validSchemes)
+	return n, nil
 }
 
 // ID returns the node identifier.
