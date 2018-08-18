@@ -71,31 +71,26 @@ func ParseV4(rawurl string) (*Node, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid node ID (%v)", err)
 		}
-		return newNodeV4(id, nil, 0, 0), nil
+		return NewV4(id, nil, 0, 0), nil
 	}
 	return parseComplete(rawurl)
 }
 
+// NewV4 creates a node from discovery v4 node information. The record
+// contained in the node has a zero-length signature.
 func NewV4(pubkey *ecdsa.PublicKey, ip net.IP, tcp, udp int) *Node {
-	return newNodeV4(pubkey, ip, tcp, udp)
-}
-
-func newNodeV4(pubkey *ecdsa.PublicKey, ip net.IP, tcp, udp int) *Node {
-	var r enr.Record
-	r.Set(enr.ID("v4"))
-	r.Set((*enr.Secp256k1)(pubkey))
-	if ip != nil {
-		r.Set(enr.IP(ip))
-	}
-	if udp != 0 {
-		r.Set(enr.UDP(udp))
-	}
-	if tcp != 0 {
-		r.Set(enr.TCP(tcp))
-	}
-	n := &Node{r: r}
-	copy(n.id[:], enr.V4ID{}.NodeAddr(&r))
-	return n
+	return new(Node).Modify(v4CompatID{}, func(r *enr.Record) {
+		if ip != nil {
+			r.Set(enr.IP(ip))
+		}
+		if udp != 0 {
+			r.Set(enr.UDP(udp))
+		}
+		if tcp != 0 {
+			r.Set(enr.TCP(tcp))
+		}
+		signV4Compat(r, pubkey)
+	})
 }
 
 func parseComplete(rawurl string) (*Node, error) {
@@ -142,7 +137,7 @@ func parseComplete(rawurl string) (*Node, error) {
 			return nil, errors.New("invalid discport in query")
 		}
 	}
-	return newNodeV4(id, ip, int(tcpPort), int(udpPort)), nil
+	return NewV4(id, ip, int(tcpPort), int(udpPort)), nil
 }
 
 // parsePubkey parses a hex-encoded secp256k1 public key.
@@ -158,12 +153,15 @@ func parsePubkey(in string) (*ecdsa.PublicKey, error) {
 }
 
 func (n *Node) v4URL() string {
-	var scheme enr.ID
-	var nodeid string
-	switch n.Load(&scheme); scheme {
-	case "v4":
-		var key ecdsa.PublicKey
-		n.Load((*enr.Secp256k1)(&key))
+	var (
+		scheme enr.ID
+		nodeid string
+		key    ecdsa.PublicKey
+	)
+	n.Load(&scheme)
+	n.Load((*enr.Secp256k1)(&key))
+	switch {
+	case scheme == "v4" || key != ecdsa.PublicKey{}:
 		nodeid = fmt.Sprintf("%x", crypto.FromECDSAPub(&key)[1:])
 	default:
 		nodeid = fmt.Sprintf("%s.%x", scheme, n.id[:])

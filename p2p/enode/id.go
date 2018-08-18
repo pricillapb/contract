@@ -59,11 +59,19 @@ func (n *Node) Load(k enr.Entry) error {
 	return n.r.Load(k)
 }
 
-// Modify creates a new node containing changes made by the given function.
-func (n *Node) Modify(fn func(r *enr.Record)) *Node {
+// Modify creates a new node containing changes made by the given function. You must also
+// provide an identity scheme, which is used to verify the signature and node address of
+// the modified record.
+func (n *Node) Modify(validSchemes enr.IdentityScheme, fn func(r *enr.Record)) *Node {
 	mod := *n
 	fn(&mod.r)
+	mod.resetID(validSchemes)
 	return &mod
+}
+
+func (n *Node) resetID(idscheme enr.IdentityScheme) {
+	n.id = ID{}
+	copy(n.id[:], idscheme.NodeAddr(&n.r))
 }
 
 // IP returns the IP address of the node.

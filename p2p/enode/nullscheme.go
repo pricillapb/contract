@@ -17,12 +17,30 @@
 package enode
 
 import (
+	"crypto/ecdsa"
+
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
 var ValidSchemesForTesting = enr.SchemeMap{
 	"v4":   enr.V4ID{},
 	"null": nullID{},
+}
+
+type v4CompatID struct {
+	enr.V4ID
+}
+
+func (v4CompatID) Verify(r *enr.Record, sig []byte) error {
+	var pubkey enr.Secp256k1
+	return r.Load(&pubkey)
+}
+
+func signV4Compat(r *enr.Record, pubkey *ecdsa.PublicKey) {
+	r.Set((*enr.Secp256k1)(pubkey))
+	if err := r.SetSig(v4CompatID{}, []byte{}); err != nil {
+		panic(err)
+	}
 }
 
 // The "null" ENR identity scheme. This scheme stores the node
@@ -39,12 +57,10 @@ func (nullID) NodeAddr(r *enr.Record) []byte {
 	return id[:]
 }
 
-func setID(n *Node, id ID) *Node {
-	return n.Modify(func(r *enr.Record) {
-		r.Set(enr.ID("null"))
-		r.Set(enr.WithEntry("nulladdr", id))
-		if err := r.SetSig(nullID{}, nil); err != nil {
-			panic(err)
-		}
-	})
+func signNull(r *enr.Record, id ID) {
+	r.Set(enr.ID("null"))
+	r.Set(enr.WithEntry("nulladdr", id))
+	if err := r.SetSig(nullID{}, []byte{}); err != nil {
+		panic(err)
+	}
 }
