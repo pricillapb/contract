@@ -52,6 +52,7 @@ var (
 	errDuplicateKey   = errors.New("record contains duplicate key")
 	errIncompletePair = errors.New("record contains incomplete k/v pair")
 	errTooBig         = fmt.Errorf("record bigger than %d bytes", SizeLimit)
+	errEncodeUnsigned = errors.New("can't encode unsigned record")
 	errNotFound       = errors.New("no such key in record")
 )
 
@@ -130,7 +131,7 @@ func (r *Record) Set(e Entry) {
 }
 
 func (r *Record) invalidate() {
-	if len(r.signature) == 0 {
+	if r.signature == nil {
 		r.seq++
 	}
 	r.signature = nil
@@ -140,15 +141,10 @@ func (r *Record) invalidate() {
 // EncodeRLP implements rlp.Encoder. Encoding fails if
 // the record is unsigned.
 func (r Record) EncodeRLP(w io.Writer) error {
-	var err error
-	raw := r.raw
-	if raw == nil {
-		raw, err = r.encode(r.signature)
-		if err != nil {
-			return err
-		}
+	if r.signature == nil {
+		return errEncodeUnsigned
 	}
-	_, err = w.Write(raw)
+	_, err := w.Write(r.raw)
 	return err
 }
 

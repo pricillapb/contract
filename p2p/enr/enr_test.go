@@ -168,6 +168,10 @@ func TestSortedGetAndSet(t *testing.T) {
 func TestDirty(t *testing.T) {
 	var r Record
 
+	if _, err := rlp.EncodeToBytes(r); err != errEncodeUnsigned {
+		t.Errorf("expected errEncodeUnsigned, got %#v", err)
+	}
+
 	require.NoError(t, SignV4(&r, privkey))
 	if len(r.signature) == 0 {
 		t.Error("record is not signed")
@@ -178,6 +182,9 @@ func TestDirty(t *testing.T) {
 	r.SetSeq(3)
 	if len(r.signature) != 0 {
 		t.Error("signature still set after modification")
+	}
+	if _, err := rlp.EncodeToBytes(r); err != errEncodeUnsigned {
+		t.Errorf("expected errEncodeUnsigned, got %#v", err)
 	}
 }
 
