@@ -223,16 +223,32 @@ func (r *Record) VerifySignature(s IdentityScheme) error {
 
 // SetSig sets the record signature. It returns an error if the encoded record is larger
 // than the size limit or if the signature is invalid according to the passed scheme.
+//
+// You can also use SetSig to remove the signature explicitly by passing a nil scheme
+// and signature.
+//
+// SetSig panics when either the scheme or the signature (but not both) are nil.
 func (r *Record) SetSig(s IdentityScheme, sig []byte) error {
-	// Verify against the scheme.
-	if err := s.Verify(r, sig); err != nil {
-		return err
+	switch {
+	// Prevent storing invalid data.
+	case s == nil && sig != nil:
+		panic("enr: invalid call to SetSig with non-nil signature but nil scheme")
+	case s != nil && sig == nil:
+		panic("enr: invalid call to SetSig with nil signature but non-nil scheme")
+	// Verify if we have a scheme.
+	case s != nil:
+		if err := s.Verify(r, sig); err != nil {
+			return err
+		}
+		raw, err := r.encode(sig)
+		if err != nil {
+			return err
+		}
+		r.signature, r.raw = sig, raw
+	// Reset otherwise.
+	default:
+		r.signature, r.raw = nil, nil
 	}
-	raw, err := r.encode(sig)
-	if err != nil {
-		return err
-	}
-	r.signature, r.raw = sig, raw
 	return nil
 }
 
