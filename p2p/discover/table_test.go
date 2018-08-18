@@ -142,7 +142,7 @@ func TestTable_IPLimit(t *testing.T) {
 
 	for i := 0; i < tableIPLimit+1; i++ {
 		n := nodeAtDistance(tab.self.id, i)
-		n.n = *n.n.Modify(func(r *enr.Record) {
+		n.n = *n.n.Modify(enode.NullID{}, func(r *enr.Record) {
 			r.Set(enr.IP{172, 0, 1, byte(i)})
 		})
 		tab.add(n)
@@ -162,7 +162,7 @@ func TestTable_BucketIPLimit(t *testing.T) {
 	d := 3
 	for i := 0; i < bucketIPLimit+1; i++ {
 		n := nodeAtDistance(tab.self.id, d)
-		n.n = *n.n.Modify(func(r *enr.Record) {
+		n.n = *n.n.Modify(enode.NullID{}, func(r *enr.Record) {
 			r.Set(enr.IP{172, 0, 1, byte(i)})
 		})
 		tab.add(n)

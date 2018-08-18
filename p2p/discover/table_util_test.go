@@ -29,9 +29,9 @@ import (
 )
 
 func newTestTable(t transport) (*Table, *enode.DB) {
-	n := enode.NewIncomplete(enode.ID{}).Modify(func(r *enr.Record) {
-		r.Set(enr.IP{0, 0, 0, 0})
-	})
+	var r enr.Record
+	r.Set(enr.IP{0, 0, 0, 0})
+	n := enode.SignNull(&r, enode.ID{})
 	db, _ := enode.NewDB("", enode.ID{})
 	tab, _ := newTable(t, n, db, nil)
 	return tab, db
@@ -39,10 +39,9 @@ func newTestTable(t transport) (*Table, *enode.DB) {
 
 // nodeAtDistance creates a node for which enode.LogDist(base, n.id) == ld.
 func nodeAtDistance(base enode.ID, ld int) *Node {
-	id := idAtDistance(base, ld)
-	return convertNode(enode.NewIncomplete(id).Modify(func(r *enr.Record) {
-		r.Set(enr.IP{byte(ld), 0, 2, byte(ld)})
-	}))
+	var r enr.Record
+	r.Set(enr.IP{byte(ld), 0, 2, byte(ld)})
+	return convertNode(enode.SignNull(&r, idAtDistance(base, ld)))
 }
 
 // idAtDistance returns a random hash such that enode.LogDist(a, b) == n
