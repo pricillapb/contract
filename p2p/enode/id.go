@@ -41,9 +41,11 @@ func New(validSchemes enr.IdentityScheme, r *enr.Record) (*Node, error) {
 	if err := r.VerifySignature(validSchemes); err != nil {
 		return nil, err
 	}
-	n := &Node{r: *r}
-	n.resetID(validSchemes)
-	return n, nil
+	node := &Node{r: *r}
+	if n := copy(node.id[:], validSchemes.NodeAddr(&node.r)); n != len(ID{}) {
+		return nil, fmt.Errorf("invalid node ID length %d, need %d", n, len(ID{}))
+	}
+	return node, nil
 }
 
 // ID returns the node identifier.
@@ -59,21 +61,6 @@ func (n *Node) Incomplete() bool {
 // Load retrieves an entry from the underlying record.
 func (n *Node) Load(k enr.Entry) error {
 	return n.r.Load(k)
-}
-
-// Modify creates a new node containing changes made by the given function. You must also
-// provide an identity scheme, which is used to verify the signature and node address of
-// the modified record.
-func (n *Node) Modify(validSchemes enr.IdentityScheme, fn func(r *enr.Record)) *Node {
-	mod := *n
-	fn(&mod.r)
-	mod.resetID(validSchemes)
-	return &mod
-}
-
-func (n *Node) resetID(idscheme enr.IdentityScheme) {
-	n.id = ID{}
-	copy(n.id[:], idscheme.NodeAddr(&n.r))
 }
 
 // IP returns the IP address of the node.

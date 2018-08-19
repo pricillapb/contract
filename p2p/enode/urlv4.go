@@ -79,18 +79,22 @@ func ParseV4(rawurl string) (*Node, error) {
 // NewV4 creates a node from discovery v4 node information. The record
 // contained in the node has a zero-length signature.
 func NewV4(pubkey *ecdsa.PublicKey, ip net.IP, tcp, udp int) *Node {
-	return new(Node).Modify(v4CompatID{}, func(r *enr.Record) {
-		if ip != nil {
-			r.Set(enr.IP(ip))
-		}
-		if udp != 0 {
-			r.Set(enr.UDP(udp))
-		}
-		if tcp != 0 {
-			r.Set(enr.TCP(tcp))
-		}
-		signV4Compat(r, pubkey)
-	})
+	var r enr.Record
+	if ip != nil {
+		r.Set(enr.IP(ip))
+	}
+	if udp != 0 {
+		r.Set(enr.UDP(udp))
+	}
+	if tcp != 0 {
+		r.Set(enr.TCP(tcp))
+	}
+	signV4Compat(&r, pubkey)
+	n, err := New(v4CompatID{}, &r)
+	if err != nil {
+		panic(err)
+	}
+	return n
 }
 
 func parseComplete(rawurl string) (*Node, error) {
