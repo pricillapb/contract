@@ -147,7 +147,8 @@ func TestServerDial(t *testing.T) {
 
 	// tell the server to connect
 	tcpAddr := listener.Addr().(*net.TCPAddr)
-	srv.AddPeer(enode.NewV4(remid, tcpAddr.IP, tcpAddr.Port, 0))
+	node := enode.NewV4(remid, tcpAddr.IP, tcpAddr.Port, 0)
+	srv.AddPeer(node)
 
 	select {
 	case conn := <-accepted:
@@ -352,7 +353,7 @@ func TestServerAtCap(t *testing.T) {
 			PrivateKey:   newkey(),
 			MaxPeers:     10,
 			NoDial:       true,
-			TrustedNodes: []*enode.Node{enode.NewIncomplete(trustedID)},
+			TrustedNodes: []*enode.Node{newNode(trustedID, nil)},
 		},
 	}
 	if err := srv.Start(); err != nil {
@@ -389,14 +390,14 @@ func TestServerAtCap(t *testing.T) {
 	}
 
 	// Remove from trusted set and try again
-	srv.RemoveTrustedPeer(&discover.Node{ID: trustedID})
+	srv.RemoveTrustedPeer(newNode(trustedID, nil))
 	c = newconn(trustedID)
 	if err := srv.checkpoint(c, srv.posthandshake); err != DiscTooManyPeers {
 		t.Error("wrong error for insert:", err)
 	}
 
 	// Add anotherID to trusted set and try again
-	srv.AddTrustedPeer(&discover.Node{ID: anotherID})
+	srv.AddTrustedPeer(newNode(anotherID, nil))
 	c = newconn(anotherID)
 	if err := srv.checkpoint(c, srv.posthandshake); err != nil {
 		t.Error("unexpected error for trusted conn @posthandshake:", err)
@@ -408,20 +409,17 @@ func TestServerAtCap(t *testing.T) {
 
 func TestServerPeerLimits(t *testing.T) {
 	srvkey := newkey()
+	clientkey := newkey()
+	clientnode := enode.NewV4(&clientkey.PublicKey, nil, 0, 0)
 
-	clientid := randomID()
-	clientnode := &discover.Node{ID: clientid}
-
-	var tp *setupTransport = &setupTransport{
-		id: clientid,
+	var tp = &setupTransport{
+		id: clientnode.ID(),
 		phs: &protoHandshake{
-			ID: clientid,
+			ID: crypto.FromECDSAPub(&clientkey.PublicKey)[1:],
 			// Force "DiscUselessPeer" due to unmatching caps
 			// Caps: []Cap{discard.cap()},
 		},
 	}
-	var flags connFlag = dynDialedConn
-	var dialDest *discover.Node = &discover.Node{ID: clientid}
 
 	srv := &Server{
 		Config: Config{
@@ -439,6 +437,8 @@ func TestServerPeerLimits(t *testing.T) {
 	defer srv.Stop()
 
 	// Check that server is full (MaxPeers=0)
+	flags := dynDialedConn
+	dialDest := clientnode
 	conn, _ := net.Pipe()
 	srv.SetupConn(conn, flags, dialDest)
 	if tp.closeErr != DiscTooManyPeers {
@@ -502,21 +502,21 @@ func TestServerSetupConn(t *testing.T) {
 		},
 		{
 			tt:           &setupTransport{id: clientid},
-			dialDest:     enode.NewIncomplete(randomID()),
+			dialDest:     newNode(randomID(), nil),
 			flags:        dynDialedConn,
 			wantCalls:    "doEncHandshake,close,",
 			wantCloseErr: DiscUnexpectedIdentity,
 		},
 		{
 			tt:           &setupTransport{id: clientid, phs: &protoHandshake{ID: randomID().Bytes()}},
-			dialDest:     enode.NewIncomplete(clientid),
+			dialDest:     newNode(clientid, nil),
 			flags:        dynDialedConn,
 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
 			wantCloseErr: DiscUnexpectedIdentity,
 		},
 		{
 			tt:           &setupTransport{id: clientid, protoHandshakeErr: errors.New("foo")},
-			dialDest:     enode.NewIncomplete(clientid),
+			dialDest:     newNode(clientid, nil),
 			flags:        dynDialedConn,
 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
 			wantCloseErr: errors.New("foo"),

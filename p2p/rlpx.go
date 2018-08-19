@@ -282,7 +282,7 @@ func (h *encHandshake) staticSharedSecret(prv *ecdsa.PrivateKey) ([]byte, error)
 // prv is the local client's private key.
 func initiatorEncHandshake(conn io.ReadWriter, prv *ecdsa.PrivateKey, remote *ecdsa.PublicKey) (s secrets, err error) {
 	h := &encHandshake{initiator: true, remote: ecies.ImportECDSAPublic(remote)}
-	authMsg, err := h.makeAuthMsg(prv, token)
+	authMsg, err := h.makeAuthMsg(prv)
 	if err != nil {
 		return s, err
 	}

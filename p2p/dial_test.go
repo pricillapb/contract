@@ -109,18 +109,18 @@ func TestDialStateDynDial(t *testing.T) {
 				},
 				done: []task{
 					&discoverTask{results: []*enode.Node{
-						enode.NewIncomplete(uintID(2)), // this one is already connected and not dialed.
-						enode.NewIncomplete(uintID(3)),
-						enode.NewIncomplete(uintID(4)),
-						enode.NewIncomplete(uintID(5)),
-						enode.NewIncomplete(uintID(6)), // these are not tried because max dyn dials is 5
-						enode.NewIncomplete(uintID(7)), // ...
+						newNode(uintID(2), nil), // this one is already connected and not dialed.
+						newNode(uintID(3), nil),
+						newNode(uintID(4), nil),
+						newNode(uintID(5), nil),
+						newNode(uintID(6), nil), // these are not tried because max dyn dials is 5
+						newNode(uintID(7), nil), // ...
 					}},
 				},
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(3))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(3), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
 				},
 			},
 			// Some of the dials complete but no new ones are launched yet because
@@ -134,8 +134,8 @@ func TestDialStateDynDial(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(4)}},
 				},
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(3))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(3), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
 				},
 			},
 			// No new dial tasks are launched in the this round because
@@ -150,7 +150,7 @@ func TestDialStateDynDial(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(5)}},
 				},
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
 				},
 				new: []task{
 					&waitExpireTask{Duration: 14 * time.Second},
@@ -167,7 +167,7 @@ func TestDialStateDynDial(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(5)}},
 				},
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(6))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(6), nil)},
 				},
 			},
 			// More peers (3,4) drop off and dial for ID 6 completes.
@@ -180,10 +180,10 @@ func TestDialStateDynDial(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(5)}},
 				},
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(6))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(6), nil)},
 				},
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(7))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(7), nil)},
 					&discoverTask{},
 				},
 			},
@@ -198,7 +198,7 @@ func TestDialStateDynDial(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(7)}},
 				},
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(7))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(7), nil)},
 				},
 			},
 			// Finish the running node discovery with an empty set. A new lookup
@@ -224,16 +224,16 @@ func TestDialStateDynDial(t *testing.T) {
 // Tests that bootnodes are dialed if no peers are connectd, but not otherwise.
 func TestDialStateDynDialBootnode(t *testing.T) {
 	bootnodes := []*enode.Node{
-		enode.NewIncomplete(uintID(1)),
-		enode.NewIncomplete(uintID(2)),
-		enode.NewIncomplete(uintID(3)),
+		newNode(uintID(1), nil),
+		newNode(uintID(2), nil),
+		newNode(uintID(3), nil),
 	}
 	table := fakeTable{
-		enode.NewIncomplete(uintID(4)),
-		enode.NewIncomplete(uintID(5)),
-		enode.NewIncomplete(uintID(6)),
-		enode.NewIncomplete(uintID(7)),
-		enode.NewIncomplete(uintID(8)),
+		newNode(uintID(4), nil),
+		newNode(uintID(5), nil),
+		newNode(uintID(6), nil),
+		newNode(uintID(7), nil),
+		newNode(uintID(8), nil),
 	}
 	runDialTest(t, dialtest{
 		init: newDialState(nil, bootnodes, table, 5, nil),
@@ -241,16 +241,16 @@ func TestDialStateDynDialBootnode(t *testing.T) {
 			// 2 dynamic dials attempted, bootnodes pending fallback interval
 			{
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
 					&discoverTask{},
 				},
 			},
 			// No dials succeed, bootnodes still pending fallback interval
 			{
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
 				},
 			},
 			// No dials succeed, bootnodes still pending fallback interval
@@ -258,40 +258,40 @@ func TestDialStateDynDialBootnode(t *testing.T) {
 			// No dials succeed, 2 dynamic dials attempted and 1 bootnode too as fallback interval was reached
 			{
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(1))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(1), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
 				},
 			},
 			// No dials succeed, 2nd bootnode is attempted
 			{
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(1))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(1), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
 				},
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(2))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(2), nil)},
 				},
 			},
 			// No dials succeed, 3rd bootnode is attempted
 			{
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(2))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(2), nil)},
 				},
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(3))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(3), nil)},
 				},
 			},
 			// No dials succeed, 1st bootnode is attempted again, expired random nodes retried
 			{
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(3))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(3), nil)},
 				},
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(1))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(1), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
 				},
 			},
 			// Random dial succeeds, no more bootnodes are attempted
@@ -300,9 +300,9 @@ func TestDialStateDynDialBootnode(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(4)}},
 				},
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(1))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(1), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
 				},
 			},
 		},
@@ -313,14 +313,14 @@ func TestDialStateDynDialFromTable(t *testing.T) {
 	// This table always returns the same random nodes
 	// in the order given below.
 	table := fakeTable{
-		enode.NewIncomplete(uintID(1)),
-		enode.NewIncomplete(uintID(2)),
-		enode.NewIncomplete(uintID(3)),
-		enode.NewIncomplete(uintID(4)),
-		enode.NewIncomplete(uintID(5)),
-		enode.NewIncomplete(uintID(6)),
-		enode.NewIncomplete(uintID(7)),
-		enode.NewIncomplete(uintID(8)),
+		newNode(uintID(1), nil),
+		newNode(uintID(2), nil),
+		newNode(uintID(3), nil),
+		newNode(uintID(4), nil),
+		newNode(uintID(5), nil),
+		newNode(uintID(6), nil),
+		newNode(uintID(7), nil),
+		newNode(uintID(8), nil),
 	}
 
 	runDialTest(t, dialtest{
@@ -329,11 +329,11 @@ func TestDialStateDynDialFromTable(t *testing.T) {
 			// 5 out of 8 of the nodes returned by ReadRandomNodes are dialed.
 			{
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(1))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(2))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(3))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(1), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(2), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(3), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
 					&discoverTask{},
 				},
 			},
@@ -344,18 +344,18 @@ func TestDialStateDynDialFromTable(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(2)}},
 				},
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(1))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(2))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(1), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(2), nil)},
 					&discoverTask{results: []*enode.Node{
-						enode.NewIncomplete(uintID(10)),
-						enode.NewIncomplete(uintID(11)),
-						enode.NewIncomplete(uintID(12)),
+						newNode(uintID(10), nil),
+						newNode(uintID(11), nil),
+						newNode(uintID(12), nil),
 					}},
 				},
 				new: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(10))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(11))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(12))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(10), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(11), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(12), nil)},
 					&discoverTask{},
 				},
 			},
@@ -369,12 +369,12 @@ func TestDialStateDynDialFromTable(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(12)}},
 				},
 				done: []task{
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(3))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(5))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(10))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(11))},
-					&dialTask{flags: dynDialedConn, dest: enode.NewIncomplete(uintID(12))},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(3), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(5), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(10), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(11), nil)},
+					&dialTask{flags: dynDialedConn, dest: newNode(uintID(12), nil)},
 				},
 			},
 			// Waiting for expiry. No waitExpireTask is launched because the
@@ -404,10 +404,12 @@ func TestDialStateDynDialFromTable(t *testing.T) {
 	})
 }
 
-func newWithIP(id enode.ID, ip net.IP) *enode.Node {
-	return enode.NewIncomplete(id).Modify(func(r *enr.Record) {
+func newNode(id enode.ID, ip net.IP) *enode.Node {
+	var r enr.Record
+	if ip != nil {
 		r.Set(enr.IP(ip))
-	})
+	}
+	return enode.SignNull(&r, id)
 }
 
 // This test checks that candidates that do not match the netrestrict list are not dialed.
@@ -415,14 +417,14 @@ func TestDialStateNetRestrict(t *testing.T) {
 	// This table always returns the same random nodes
 	// in the order given below.
 	table := fakeTable{
-		newWithIP(uintID(1), net.ParseIP("127.0.0.1")),
-		newWithIP(uintID(2), net.ParseIP("127.0.0.2")),
-		newWithIP(uintID(3), net.ParseIP("127.0.0.3")),
-		newWithIP(uintID(4), net.ParseIP("127.0.0.4")),
-		newWithIP(uintID(5), net.ParseIP("127.0.2.5")),
-		newWithIP(uintID(6), net.ParseIP("127.0.2.6")),
-		newWithIP(uintID(7), net.ParseIP("127.0.2.7")),
-		newWithIP(uintID(8), net.ParseIP("127.0.2.8")),
+		newNode(uintID(1), net.ParseIP("127.0.0.1")),
+		newNode(uintID(2), net.ParseIP("127.0.0.2")),
+		newNode(uintID(3), net.ParseIP("127.0.0.3")),
+		newNode(uintID(4), net.ParseIP("127.0.0.4")),
+		newNode(uintID(5), net.ParseIP("127.0.2.5")),
+		newNode(uintID(6), net.ParseIP("127.0.2.6")),
+		newNode(uintID(7), net.ParseIP("127.0.2.7")),
+		newNode(uintID(8), net.ParseIP("127.0.2.8")),
 	}
 	restrict := new(netutil.Netlist)
 	restrict.Add("127.0.2.0/24")
@@ -443,11 +445,11 @@ func TestDialStateNetRestrict(t *testing.T) {
 // This test checks that static dials are launched.
 func TestDialStateStaticDial(t *testing.T) {
 	wantStatic := []*enode.Node{
-		enode.NewIncomplete(uintID(1)),
-		enode.NewIncomplete(uintID(2)),
-		enode.NewIncomplete(uintID(3)),
-		enode.NewIncomplete(uintID(4)),
-		enode.NewIncomplete(uintID(5)),
+		newNode(uintID(1), nil),
+		newNode(uintID(2), nil),
+		newNode(uintID(3), nil),
+		newNode(uintID(4), nil),
+		newNode(uintID(5), nil),
 	}
 
 	runDialTest(t, dialtest{
@@ -461,9 +463,9 @@ func TestDialStateStaticDial(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(2)}},
 				},
 				new: []task{
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(3))},
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(3), nil)},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(5), nil)},
 				},
 			},
 			// No new tasks are launched in this round because all static
@@ -475,7 +477,7 @@ func TestDialStateStaticDial(t *testing.T) {
 					{rw: &conn{flags: staticDialedConn, id: uintID(3)}},
 				},
 				done: []task{
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(3))},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(3), nil)},
 				},
 			},
 			// No new dial tasks are launched because all static
@@ -489,8 +491,8 @@ func TestDialStateStaticDial(t *testing.T) {
 					{rw: &conn{flags: staticDialedConn, id: uintID(5)}},
 				},
 				done: []task{
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(4))},
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(5))},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(4), nil)},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(5), nil)},
 				},
 				new: []task{
 					&waitExpireTask{Duration: 14 * time.Second},
@@ -515,8 +517,8 @@ func TestDialStateStaticDial(t *testing.T) {
 					{rw: &conn{flags: staticDialedConn, id: uintID(5)}},
 				},
 				new: []task{
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(2))},
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(4))},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(2), nil)},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(4), nil)},
 				},
 			},
 		},
@@ -526,8 +528,8 @@ func TestDialStateStaticDial(t *testing.T) {
 // This test checks that static peers will be redialed immediately if they were re-added to a static list.
 func TestDialStaticAfterReset(t *testing.T) {
 	wantStatic := []*enode.Node{
-		enode.NewIncomplete(uintID(1)),
-		enode.NewIncomplete(uintID(2)),
+		newNode(uintID(1), nil),
+		newNode(uintID(2), nil),
 	}
 
 	rounds := []round{
@@ -535,8 +537,8 @@ func TestDialStaticAfterReset(t *testing.T) {
 		{
 			peers: nil,
 			new: []task{
-				&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(1))},
-				&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(2))},
+				&dialTask{flags: staticDialedConn, dest: newNode(uintID(1), nil)},
+				&dialTask{flags: staticDialedConn, dest: newNode(uintID(2), nil)},
 			},
 		},
 		// No new dial tasks, all peers are connected.
@@ -546,8 +548,8 @@ func TestDialStaticAfterReset(t *testing.T) {
 				{rw: &conn{flags: staticDialedConn, id: uintID(2)}},
 			},
 			done: []task{
-				&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(1))},
-				&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(2))},
+				&dialTask{flags: staticDialedConn, dest: newNode(uintID(1), nil)},
+				&dialTask{flags: staticDialedConn, dest: newNode(uintID(2), nil)},
 			},
 			new: []task{
 				&waitExpireTask{Duration: 30 * time.Second},
@@ -570,9 +572,9 @@ func TestDialStaticAfterReset(t *testing.T) {
 // This test checks that past dials are not retried for some time.
 func TestDialStateCache(t *testing.T) {
 	wantStatic := []*enode.Node{
-		enode.NewIncomplete(uintID(1)),
-		enode.NewIncomplete(uintID(2)),
-		enode.NewIncomplete(uintID(3)),
+		newNode(uintID(1), nil),
+		newNode(uintID(2), nil),
+		newNode(uintID(3), nil),
 	}
 
 	runDialTest(t, dialtest{
@@ -583,9 +585,9 @@ func TestDialStateCache(t *testing.T) {
 			{
 				peers: nil,
 				new: []task{
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(1))},
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(2))},
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(3))},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(1), nil)},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(2), nil)},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(3), nil)},
 				},
 			},
 			// No new tasks are launched in this round because all static
@@ -596,8 +598,8 @@ func TestDialStateCache(t *testing.T) {
 					{rw: &conn{flags: staticDialedConn, id: uintID(2)}},
 				},
 				done: []task{
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(1))},
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(2))},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(1), nil)},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(2), nil)},
 				},
 			},
 			// A salvage task is launched to wait for node 3's history
@@ -608,7 +610,7 @@ func TestDialStateCache(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(2)}},
 				},
 				done: []task{
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(3))},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(3), nil)},
 				},
 				new: []task{
 					&waitExpireTask{Duration: 14 * time.Second},
@@ -628,7 +630,7 @@ func TestDialStateCache(t *testing.T) {
 					{rw: &conn{flags: dynDialedConn, id: uintID(2)}},
 				},
 				new: []task{
-					&dialTask{flags: staticDialedConn, dest: enode.NewIncomplete(uintID(3))},
+					&dialTask{flags: staticDialedConn, dest: newNode(uintID(3), nil)},
 				},
 			},
 		},
@@ -636,12 +638,12 @@ func TestDialStateCache(t *testing.T) {
 }
 
 func TestDialResolve(t *testing.T) {
-	resolved := newWithIP(uintID(1), net.IP{127, 0, 55, 234})
+	resolved := newNode(uintID(1), net.IP{127, 0, 55, 234})
 	table := &resolveMock{answer: resolved}
 	state := newDialState(nil, nil, table, 0, nil)
 
 	// Check that the task is generated with an incomplete ID.
-	dest := enode.NewIncomplete(uintID(1))
+	dest := newNode(uintID(1), nil)
 	state.addStatic(dest)
 	tasks := state.newTasks(0, nil, time.Time{})
 	if !reflect.DeepEqual(tasks, []task{&dialTask{flags: staticDialedConn, dest: dest}}) {
