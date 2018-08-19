@@ -29,7 +29,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
 func TestTable_pingReplace(t *testing.T) {
@@ -101,7 +100,7 @@ func TestBucket_bumpNoDuplicates(t *testing.T) {
 			n := rand.Intn(bucketSize-1) + 1
 			nodes := make([]*Node, n)
 			for i := range nodes {
-				nodes[i] = nodeAtDistance(enode.ID{}, 200)
+				nodes[i] = nodeAtDistance(enode.ID{}, 200, intIP(200))
 			}
 			args[0] = reflect.ValueOf(nodes)
 			// generate random bump positions.
@@ -141,10 +140,7 @@ func TestTable_IPLimit(t *testing.T) {
 	defer db.Close()
 
 	for i := 0; i < tableIPLimit+1; i++ {
-		n := nodeAtDistance(tab.self.id, i)
-		n.n = *n.n.Modify(enode.NullID{}, func(r *enr.Record) {
-			r.Set(enr.IP{172, 0, 1, byte(i)})
-		})
+		n := nodeAtDistance(tab.self.id, i, net.IP{172, 0, 1, byte(i)})
 		tab.add(n)
 	}
 	if tab.len() > tableIPLimit {
@@ -161,10 +157,7 @@ func TestTable_BucketIPLimit(t *testing.T) {
 
 	d := 3
 	for i := 0; i < bucketIPLimit+1; i++ {
-		n := nodeAtDistance(tab.self.id, d)
-		n.n = *n.n.Modify(enode.NullID{}, func(r *enr.Record) {
-			r.Set(enr.IP{172, 0, 1, byte(i)})
-		})
+		n := nodeAtDistance(tab.self.id, d, net.IP{172, 0, 1, byte(i)})
 		tab.add(n)
 	}
 	if tab.len() > bucketIPLimit {
@@ -246,7 +239,7 @@ func TestTable_ReadRandomNodesGetAll(t *testing.T) {
 
 		for i := 0; i < len(buf); i++ {
 			ld := cfg.Rand.Intn(len(tab.buckets))
-			tab.stuff([]*Node{nodeAtDistance(tab.self.id, ld)})
+			tab.stuff([]*Node{nodeAtDistance(tab.self.id, ld, intIP(ld))})
 		}
 		gotN := tab.ReadRandomNodes(buf)
 		if gotN != tab.len() {

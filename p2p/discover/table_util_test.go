@@ -38,9 +38,9 @@ func newTestTable(t transport) (*Table, *enode.DB) {
 }
 
 // nodeAtDistance creates a node for which enode.LogDist(base, n.id) == ld.
-func nodeAtDistance(base enode.ID, ld int) *Node {
+func nodeAtDistance(base enode.ID, ld int, ip net.IP) *Node {
 	var r enr.Record
-	r.Set(enr.IP{byte(ld), 0, 2, byte(ld)})
+	r.Set(enr.IP(ip))
 	return convertNode(enode.SignNull(&r, idAtDistance(base, ld)))
 }
 
@@ -64,12 +64,16 @@ func idAtDistance(a enode.ID, n int) (b enode.ID) {
 	return b
 }
 
+func intIP(i int) net.IP {
+	return net.IP{byte(i), 0, 2, byte(i)}
+}
+
 // fillBucket inserts nodes into the given bucket until it is full.
 func fillBucket(tab *Table, n *Node) (last *Node) {
 	ld := enode.LogDist(tab.self.id, n.id)
 	b := tab.bucket(n.id)
 	for len(b.entries) < bucketSize {
-		b.entries = append(b.entries, nodeAtDistance(tab.self.id, ld))
+		b.entries = append(b.entries, nodeAtDistance(tab.self.id, ld, intIP(ld)))
 	}
 	return b.entries[bucketSize-1]
 }
