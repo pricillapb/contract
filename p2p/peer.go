@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
@@ -117,7 +118,8 @@ type Peer struct {
 // NewPeer returns a peer for testing purposes.
 func NewPeer(id enode.ID, name string, caps []Cap) *Peer {
 	pipe, _ := net.Pipe()
-	conn := &conn{fd: pipe, transport: nil, id: id, caps: caps, name: name}
+	node := enode.SignNull(new(enr.Record), id)
+	conn := &conn{fd: pipe, transport: nil, node: node, caps: caps, name: name}
 	peer := newPeer(conn, nil)
 	close(peer.closed) // ensures Disconnect doesn't block
 	return peer
@@ -125,7 +127,12 @@ func NewPeer(id enode.ID, name string, caps []Cap) *Peer {
 
 // ID returns the node's public key.
 func (p *Peer) ID() enode.ID {
-	return p.rw.id
+	return p.rw.node.ID()
+}
+
+// Node returns the peer's node descriptor.
+func (p *Peer) Node() *enode.Node {
+	return p.rw.node
 }
 
 // Name returns the node name that the remote node advertised.
@@ -160,7 +167,8 @@ func (p *Peer) Disconnect(reason DiscReason) {
 
 // String implements fmt.Stringer.
 func (p *Peer) String() string {
-	return fmt.Sprintf("Peer %x %v", p.rw.id[:8], p.RemoteAddr())
+	id := p.ID()
+	return fmt.Sprintf("Peer %x %v", id[:8], p.RemoteAddr())
 }
 
 // Inbound returns true if the peer is an inbound connection
@@ -177,7 +185,7 @@ func newPeer(conn *conn, protocols []Protocol) *Peer {
 		disc:     make(chan DiscReason),
 		protoErr: make(chan error, len(protomap)+1), // protocols + pingLoop
 		closed:   make(chan struct{}),
-		log:      log.New("id", conn.id, "conn", conn.flags),
+		log:      log.New("id", conn.node.ID(), "conn", conn.flags),
 	}
 	return p
 }

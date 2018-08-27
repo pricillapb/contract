@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
 // func init() {
@@ -54,8 +55,8 @@ func newTestTransport(rpub *ecdsa.PublicKey, fd net.Conn) transport {
 	return &testTransport{rpub: rpub, rlpx: wrapped}
 }
 
-func (c *testTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *enode.Node) (enode.ID, error) {
-	return discover.PubkeyToID(c.rpub), nil
+func (c *testTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *ecdsa.PublicKey) (*ecdsa.PublicKey, error) {
+	return c.rpub, nil
 }
 
 func (c *testTransport) doProtoHandshake(our *protoHandshake) (*protoHandshake, error) {
@@ -364,7 +365,8 @@ func TestServerAtCap(t *testing.T) {
 	newconn := func(id enode.ID) *conn {
 		fd, _ := net.Pipe()
 		tx := newTestTransport(&trustedNode.PublicKey, fd)
-		return &conn{fd: fd, transport: tx, flags: inboundConn, id: id, cont: make(chan error)}
+		node := enode.SignNull(new(enr.Record), id)
+		return &conn{fd: fd, transport: tx, flags: inboundConn, node: node, cont: make(chan error)}
 	}
 
 	// Inject a few connections to fill up the peer set.
@@ -413,8 +415,8 @@ func TestServerPeerLimits(t *testing.T) {
 	clientnode := enode.NewV4(&clientkey.PublicKey, nil, 0, 0)
 
 	var tp = &setupTransport{
-		id: clientnode.ID(),
-		phs: &protoHandshake{
+		pubkey: &clientkey.PublicKey,
+		phs: protoHandshake{
 			ID: crypto.FromECDSAPub(&clientkey.PublicKey)[1:],
 			// Force "DiscUselessPeer" due to unmatching caps
 			// Caps: []Cap{discard.cap()},
@@ -474,10 +476,8 @@ func TestServerPeerLimits(t *testing.T) {
 func TestServerSetupConn(t *testing.T) {
 	var (
 		clientkey, srvkey = newkey(), newkey()
-		clientpub         = crypto.FromECDSAPub(&clientkey.PublicKey)[1:]
-		srvpub            = crypto.FromECDSAPub(&srvkey.PublicKey)[1:]
-		clientid          = discover.PubkeyToID(&clientkey.PublicKey)
-		srvid             = discover.PubkeyToID(&srvkey.PublicKey)
+		clientpub         = &clientkey.PublicKey
+		srvpub            = &srvkey.PublicKey
 	)
 	tests := []struct {
 		dontstart bool
@@ -490,45 +490,45 @@ func TestServerSetupConn(t *testing.T) {
 	}{
 		{
 			dontstart:    true,
-			tt:           &setupTransport{id: clientid},
+			tt:           &setupTransport{pubkey: clientpub},
 			wantCalls:    "close,",
 			wantCloseErr: errServerStopped,
 		},
 		{
-			tt:           &setupTransport{id: clientid, encHandshakeErr: errors.New("read error")},
+			tt:           &setupTransport{pubkey: clientpub, encHandshakeErr: errors.New("read error")},
 			flags:        inboundConn,
 			wantCalls:    "doEncHandshake,close,",
 			wantCloseErr: errors.New("read error"),
 		},
 		{
-			tt:           &setupTransport{id: clientid},
-			dialDest:     newNode(randomID(), nil),
+			tt:           &setupTransport{pubkey: clientpub},
+			dialDest:     enode.NewV4(&newkey().PublicKey, nil, 0, 0),
 			flags:        dynDialedConn,
 			wantCalls:    "doEncHandshake,close,",
 			wantCloseErr: DiscUnexpectedIdentity,
 		},
 		{
-			tt:           &setupTransport{id: clientid, phs: &protoHandshake{ID: randomID().Bytes()}},
-			dialDest:     newNode(clientid, nil),
+			tt:           &setupTransport{pubkey: clientpub, phs: protoHandshake{ID: randomID().Bytes()}},
+			dialDest:     enode.NewV4(clientpub, nil, 0, 0),
 			flags:        dynDialedConn,
 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
 			wantCloseErr: DiscUnexpectedIdentity,
 		},
 		{
-			tt:           &setupTransport{id: clientid, protoHandshakeErr: errors.New("foo")},
-			dialDest:     newNode(clientid, nil),
+			tt:           &setupTransport{pubkey: clientpub, protoHandshakeErr: errors.New("foo")},
+			dialDest:     enode.NewV4(clientpub, nil, 0, 0),
 			flags:        dynDialedConn,
 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
 			wantCloseErr: errors.New("foo"),
 		},
 		{
-			tt:           &setupTransport{id: srvid, phs: &protoHandshake{ID: srvpub}},
+			tt:           &setupTransport{pubkey: srvpub, phs: protoHandshake{ID: crypto.FromECDSAPub(srvpub)[1:]}},
 			flags:        inboundConn,
 			wantCalls:    "doEncHandshake,close,",
 			wantCloseErr: DiscSelf,
 		},
 		{
-			tt:           &setupTransport{id: clientid, phs: &protoHandshake{ID: clientpub}},
+			tt:           &setupTransport{pubkey: clientpub, phs: protoHandshake{ID: crypto.FromECDSAPub(clientpub)[1:]}},
 			flags:        inboundConn,
 			wantCalls:    "doEncHandshake,doProtoHandshake,close,",
 			wantCloseErr: DiscUselessPeer,
@@ -563,26 +563,26 @@ func TestServerSetupConn(t *testing.T) {
 }
 
 type setupTransport struct {
-	id              enode.ID
-	encHandshakeErr error
-
-	phs               *protoHandshake
+	pubkey            *ecdsa.PublicKey
+	encHandshakeErr   error
+	phs               protoHandshake
 	protoHandshakeErr error
 
 	calls    string
 	closeErr error
 }
 
-func (c *setupTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *enode.Node) (enode.ID, error) {
+func (c *setupTransport) doEncHandshake(prv *ecdsa.PrivateKey, dialDest *ecdsa.PublicKey) (*ecdsa.PublicKey, error) {
 	c.calls += "doEncHandshake,"
-	return c.id, c.encHandshakeErr
+	return c.pubkey, c.encHandshakeErr
 }
+
 func (c *setupTransport) doProtoHandshake(our *protoHandshake) (*protoHandshake, error) {
 	c.calls += "doProtoHandshake,"
 	if c.protoHandshakeErr != nil {
 		return nil, c.protoHandshakeErr
 	}
-	return c.phs, nil
+	return &c.phs, nil
 }
 func (c *setupTransport) close(err error) {
 	c.calls += "close,"

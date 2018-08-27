@@ -40,8 +40,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/ecies"
 	"github.com/ethereum/go-ethereum/crypto/secp256k1"
 	"github.com/ethereum/go-ethereum/crypto/sha3"
-	"github.com/ethereum/go-ethereum/p2p/discover"
-	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/golang/snappy"
 )
@@ -177,7 +175,7 @@ func readProtocolHandshake(rw MsgReader, our *protoHandshake) (*protoHandshake, 
 // messages. the protocol handshake is the first authenticated message
 // and also verifies whether the encryption handshake 'worked' and the
 // remote side actually provided the right public key.
-func (t *rlpx) doEncHandshake(prv *ecdsa.PrivateKey, dial *enode.Node) (enode.ID, error) {
+func (t *rlpx) doEncHandshake(prv *ecdsa.PrivateKey, dial *ecdsa.PublicKey) (*ecdsa.PublicKey, error) {
 	var (
 		sec secrets
 		err error
@@ -185,15 +183,15 @@ func (t *rlpx) doEncHandshake(prv *ecdsa.PrivateKey, dial *enode.Node) (enode.ID
 	if dial == nil {
 		sec, err = receiverEncHandshake(t.fd, prv)
 	} else {
-		sec, err = initiatorEncHandshake(t.fd, prv, dial.Pubkey())
+		sec, err = initiatorEncHandshake(t.fd, prv, dial)
 	}
 	if err != nil {
-		return enode.ID{}, err
+		return nil, err
 	}
 	t.wmu.Lock()
 	t.rw = newRLPXFrameRW(t.fd, sec)
 	t.wmu.Unlock()
-	return discover.PubkeyToID(sec.Remote.ExportECDSA()), nil
+	return sec.Remote.ExportECDSA(), nil
 }
 
 // encHandshake contains the state of the encryption handshake.

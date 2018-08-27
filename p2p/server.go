@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/discv5"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/nat"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 )
@@ -205,16 +206,16 @@ const (
 type conn struct {
 	fd net.Conn
 	transport
+	node  *enode.Node
 	flags connFlag
 	cont  chan error // The run loop uses cont to signal errors to SetupConn.
-	id    enode.ID   // valid after the encryption handshake
 	caps  []Cap      // valid after the protocol handshake
 	name  string     // valid after the protocol handshake
 }
 
 type transport interface {
 	// The two handshakes.
-	doEncHandshake(prv *ecdsa.PrivateKey, dialDest *enode.Node) (enode.ID, error)
+	doEncHandshake(prv *ecdsa.PrivateKey, dialDest *ecdsa.PublicKey) (*ecdsa.PublicKey, error)
 	doProtoHandshake(our *protoHandshake) (*protoHandshake, error)
 	// The MsgReadWriter can only be used after the encryption
 	// handshake has completed. The code uses conn.id to track this
@@ -228,8 +229,8 @@ type transport interface {
 
 func (c *conn) String() string {
 	s := c.flags.String()
-	if (c.id != enode.ID{}) {
-		s += " " + c.id.String()
+	if (c.node.ID() != enode.ID{}) {
+		s += " " + c.node.ID().String()
 	}
 	s += " " + c.fd.RemoteAddr().String()
 	return s
@@ -679,7 +680,7 @@ running:
 		case c := <-srv.posthandshake:
 			// A connection has passed the encryption handshake so
 			// the remote identity is known (but hasn't been verified yet).
-			if trusted[c.id] {
+			if trusted[c.node.ID()] {
 				// Ensure that the trusted flag is set before checking against MaxPeers.
 				c.flags |= trustedConn
 			}
@@ -704,7 +705,7 @@ running:
 				name := truncateName(c.name)
 				srv.log.Debug("Adding p2p peer", "name", name, "addr", c.fd.RemoteAddr(), "peers", len(peers)+1)
 				go srv.runPeer(p)
-				peers[c.id] = p
+				peers[c.node.ID()] = p
 				if p.Inbound() {
 					inboundCount++
 				}
@@ -767,9 +768,9 @@ func (srv *Server) encHandshakeChecks(peers map[enode.ID]*Peer, inboundCount int
 		return DiscTooManyPeers
 	case !c.is(trustedConn) && c.is(inboundConn) && inboundCount >= srv.maxInboundConns():
 		return DiscTooManyPeers
-	case peers[c.id] != nil:
+	case peers[c.node.ID()] != nil:
 		return DiscAlreadyConnected
-	case c.id == srv.Self().ID():
+	case c.node.ID() == srv.Self().ID():
 		return DiscSelf
 	default:
 		return nil
@@ -779,7 +780,6 @@ func (srv *Server) encHandshakeChecks(peers map[enode.ID]*Peer, inboundCount int
 func (srv *Server) maxInboundConns() int {
 	return srv.MaxPeers - srv.maxDialedConns()
 }
-
 func (srv *Server) maxDialedConns() int {
 	if srv.NoDiscovery || srv.NoDial {
 		return 0
@@ -861,7 +861,7 @@ func (srv *Server) SetupConn(fd net.Conn, flags connFlag, dialDest *enode.Node) 
 	err := srv.setupConn(c, flags, dialDest)
 	if err != nil {
 		c.close(err)
-		srv.log.Trace("Setting up connection failed", "id", c.id, "err", err)
+		srv.log.Trace("Setting up connection failed", "addr", fd.RemoteAddr(), "err", err)
 	}
 	return err
 }
@@ -874,18 +874,30 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 	if !running {
 		return errServerStopped
 	}
+	// If dialing, figure out the remote public key.
+	var dialPubkey *ecdsa.PublicKey
+	if dialDest != nil {
+		dialPubkey = new(ecdsa.PublicKey)
+		if err := dialDest.Load((*enr.Secp256k1)(dialPubkey)); err != nil {
+			return fmt.Errorf("dial destination doesn't have a secp256k1 public key")
+		}
+	}
 	// Run the encryption handshake.
-	var err error
-	if c.id, err = c.doEncHandshake(srv.PrivateKey, dialDest); err != nil {
+	remotePubkey, err := c.doEncHandshake(srv.PrivateKey, dialPubkey)
+	if err != nil {
 		srv.log.Trace("Failed RLPx handshake", "addr", c.fd.RemoteAddr(), "conn", c.flags, "err", err)
 		return err
 	}
-	clog := srv.log.New("id", c.id, "addr", c.fd.RemoteAddr(), "conn", c.flags)
-	// For dialed connections, check that the remote public key matches.
-	if dialDest != nil && c.id != dialDest.ID() {
-		clog.Trace("Dialed identity mismatch", "want", c, dialDest.ID)
-		return DiscUnexpectedIdentity
+	if dialDest != nil {
+		// For dialed connections, check that the remote public key matches.
+		if dialPubkey.X.Cmp(remotePubkey.X) != 0 || dialPubkey.Y.Cmp(remotePubkey.Y) != 0 {
+			return DiscUnexpectedIdentity
+		}
+		c.node = dialDest
+	} else {
+		c.node = nodeFromConn(remotePubkey, c.fd)
 	}
+	clog := srv.log.New("id", c.node.ID(), "addr", c.fd.RemoteAddr(), "conn", c.flags)
 	err = srv.checkpoint(c, srv.posthandshake)
 	if err != nil {
 		clog.Trace("Rejected peer before protocol handshake", "err", err)
@@ -897,7 +909,7 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 		clog.Trace("Failed proto handshake", "err", err)
 		return err
 	}
-	if !bytes.Equal(crypto.Keccak256(phs.ID), c.id[:]) {
+	if id := c.node.ID(); !bytes.Equal(crypto.Keccak256(phs.ID), id[:]) {
 		clog.Trace("Wrong devp2p handshake identity", "phsid", fmt.Sprintf("%x", phs.ID))
 		return DiscUnexpectedIdentity
 	}
@@ -911,6 +923,16 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 	// launched by run.
 	clog.Trace("connection set up", "inbound", dialDest == nil)
 	return nil
+}
+
+func nodeFromConn(pubkey *ecdsa.PublicKey, conn net.Conn) *enode.Node {
+	var ip net.IP
+	var port int
+	if tcp, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		ip = tcp.IP
+		port = tcp.Port
+	}
+	return enode.NewV4(pubkey, ip, port, port)
 }
 
 func truncateName(s string) string {
