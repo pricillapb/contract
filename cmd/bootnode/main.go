@@ -85,7 +85,7 @@ func main() {
 	}
 
 	if *writeAddr {
-		fmt.Printf("%v\n", discover.PubkeyID(&nodeKey.PublicKey))
+		fmt.Printf("%v\n", discover.PubkeyToID(&nodeKey.PublicKey))
 		os.Exit(0)
 	}
 
