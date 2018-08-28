@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/swarm/log"
@@ -58,7 +59,7 @@ type Registry struct {
 	peersMu        sync.RWMutex
 	serverFuncs    map[string]func(*Peer, string, bool) (Server, error)
 	clientFuncs    map[string]func(*Peer, string, bool) (Client, error)
-	peers          map[discover.NodeID]*Peer
+	peers          map[enode.ID]*Peer
 	delivery       *Delivery
 	intervalsStore state.Store
 	doRetrieve     bool

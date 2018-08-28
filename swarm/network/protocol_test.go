@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	p2ptest "github.com/ethereum/go-ethereum/p2p/testing"
 )
@@ -115,7 +116,7 @@ func newBzzBaseTester(t *testing.T, n int, addr *BzzAddr, spec *protocols.Spec, 
 		})
 	}
 
-	s := p2ptest.NewProtocolTester(t, NewNodeIDFromAddr(addr), n, protocol)
+	s := p2ptest.NewProtocolTester(t, addr.ID(), n, protocol)
 
 	for _, id := range s.IDs {
 		cs[id.String()] = make(chan bool)
@@ -150,7 +151,7 @@ func newBzz(addr *BzzAddr, lightNode bool) *Bzz {
 
 func newBzzHandshakeTester(t *testing.T, n int, addr *BzzAddr, lightNode bool) *bzzTester {
 	bzz := newBzz(addr, lightNode)
-	pt := p2ptest.NewProtocolTester(t, NewNodeIDFromAddr(addr), n, bzz.runBzz)
+	pt := p2ptest.NewProtocolTester(t, addr.ID(), n, bzz.runBzz)
 
 	return &bzzTester{
 		addr:           addr,
@@ -161,14 +162,14 @@ func newBzzHandshakeTester(t *testing.T, n int, addr *BzzAddr, lightNode bool) *
 
 // should test handshakes in one exchange? parallelisation
 func (s *bzzTester) testHandshake(lhs, rhs *HandshakeMsg, disconnects ...*p2ptest.Disconnect) error {
-	var peers []discover.NodeID
-	id := NewNodeIDFromAddr(rhs.Addr)
+	var peers []enode.ID
+	id := rhs.Addr.ID()
 	if len(disconnects) > 0 {
 		for _, d := range disconnects {
 			peers = append(peers, d.Peer)
 		}
 	} else {
-		peers = []discover.NodeID{id}
+		peers = []enode.ID{id}
 	}
 
 	if err := s.TestExchanges(HandshakeMsgExchange(lhs, rhs, id)...); err != nil {

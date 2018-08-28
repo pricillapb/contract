@@ -114,7 +114,7 @@ func newStreamerTester(t *testing.T) (*p2ptest.ProtocolTester, *Registry, *stora
 		streamer.Close()
 		removeDataDir()
 	}
-	protocolTester := p2ptest.NewProtocolTester(t, network.NewNodeIDFromAddr(addr), 1, streamer.runProtocol)
+	protocolTester := p2ptest.NewProtocolTester(t, addr.ID(), 1, streamer.runProtocol)
 
 	err = waitForPeers(streamer, 1*time.Second, 1)
 	if err != nil {

@@ -26,7 +26,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/swarm/log"
@@ -80,7 +81,7 @@ type Peer interface {
 
 // Conn interface represents an live peer connection
 type Conn interface {
-	ID() discover.NodeID                                                                  // the key that uniquely identifies the Node for the peerPool
+	ID() enode.ID                                                                         // the key that uniquely identifies the Node for the peerPool
 	Handshake(context.Context, interface{}, func(interface{}) error) (interface{}, error) // can send messages
 	Send(context.Context, interface{}) error                                              // can send messages
 	Drop(error)                                                                           // disconnect this peer
@@ -104,7 +105,7 @@ type Bzz struct {
 	LightNode    bool
 	localAddr    *BzzAddr
 	mtx          sync.Mutex
-	handshakes   map[discover.NodeID]*HandshakeMsg
+	handshakes   map[enode.ID]*HandshakeMsg
 	streamerSpec *protocols.Spec
 	streamerRun  func(*BzzPeer) error
 }
@@ -120,7 +121,7 @@ func NewBzz(config *BzzConfig, kad Overlay, store state.Store, streamerSpec *pro
 		NetworkID:    config.NetworkID,
 		LightNode:    config.LightNode,
 		localAddr:    &BzzAddr{config.OverlayAddr, config.UnderlayAddr},
-		handshakes:   make(map[discover.NodeID]*HandshakeMsg),
+		handshakes:   make(map[enode.ID]*HandshakeMsg),
 		streamerRun:  streamerRun,
 		streamerSpec: streamerSpec,
 	}
@@ -244,14 +245,14 @@ func (b *Bzz) performHandshake(p *protocols.Peer, handshake *HandshakeMsg) error
 func (b *Bzz) runBzz(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 	handshake, _ := b.GetHandshake(p.ID())
 	if !<-handshake.init {
-		return fmt.Errorf("%08x: bzz already started on peer %08x", b.localAddr.Over()[:4], ToOverlayAddr(p.ID().Bytes())[:4])
+		return fmt.Errorf("%08x: bzz already started on peer %08x", b.localAddr.Over()[:4], p.ID().Bytes()[:4])
 	}
 	close(handshake.init)
 	defer b.removeHandshake(p.ID())
 	peer := protocols.NewPeer(p, rw, BzzSpec)
 	err := b.performHandshake(peer, handshake)
 	if err != nil {
-		log.Warn(fmt.Sprintf("%08x: handshake failed with remote peer %08x: %v", b.localAddr.Over()[:4], ToOverlayAddr(p.ID().Bytes())[:4], err))
+		log.Warn(fmt.Sprintf("%08x: handshake failed with remote peer %08x: %v", b.localAddr.Over()[:4], p.ID().Bytes()[:4], err))
 
 		return err
 	}
@@ -332,14 +333,14 @@ func (b *Bzz) checkHandshake(hs interface{}) error {
 
 // removeHandshake removes handshake for peer with peerID
 // from the bzz handshake store
-func (b *Bzz) removeHandshake(peerID discover.NodeID) {
+func (b *Bzz) removeHandshake(peerID enode.ID) {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
 	delete(b.handshakes, peerID)
 }
 
 // GetHandshake returns the bzz handhake that the remote peer with peerID sent
-func (b *Bzz) GetHandshake(peerID discover.NodeID) (*HandshakeMsg, bool) {
+func (b *Bzz) GetHandshake(peerID enode.ID) (*HandshakeMsg, bool) {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
 	handshake, found := b.handshakes[peerID]
@@ -383,8 +384,10 @@ func (a *BzzAddr) Under() []byte {
 }
 
 // ID returns the nodeID from the underlay enode address
-func (a *BzzAddr) ID() discover.NodeID {
-	return discover.MustParseNode(string(a.UAddr)).ID
+func (a *BzzAddr) ID() enode.ID {
+	var id enode.ID
+	copy(id[:], a.OAddr)
+	return id
 }
 
 // Update updates the underlay address of a peer record
@@ -403,38 +406,17 @@ func RandomAddr() *BzzAddr {
 	if err != nil {
 		panic("unable to generate key")
 	}
-	pubkey := crypto.FromECDSAPub(&key.PublicKey)
-	var id discover.NodeID
-	copy(id[:], pubkey[1:])
-	return NewAddrFromNodeID(id)
+	node := enode.NewV4(&key.PublicKey, net.IP{127, 0, 0, 1}, 30303, 30303)
+	return &BzzAddr{OAddr: node.ID().Bytes(), UAddr: []byte(node.String())}
 }
 
-// NewNodeIDFromAddr transforms the underlay address to an adapters.NodeID
-func NewNodeIDFromAddr(addr Addr) discover.NodeID {
-	log.Info(fmt.Sprintf("uaddr=%s", string(addr.Under())))
-	node := discover.MustParseNode(string(addr.Under()))
-	return node.ID
+// NewAddr constucts a BzzAddr from a node record.
+func NewAddr(node *enode.Node) *BzzAddr {
+	return &BzzAddr{OAddr: node.ID().Bytes(), UAddr: []byte(node.String())}
 }
 
-// NewAddrFromNodeID constucts a BzzAddr from a discover.NodeID
-// the overlay address is derived as the hash of the nodeID
-func NewAddrFromNodeID(id discover.NodeID) *BzzAddr {
-	return &BzzAddr{
-		OAddr: ToOverlayAddr(id.Bytes()),
-		UAddr: []byte(discover.NewNode(id, net.IP{127, 0, 0, 1}, 30303, 30303).String()),
-	}
-}
-
-// NewAddrFromNodeIDAndPort constucts a BzzAddr from a discover.NodeID and port uint16
-// the overlay address is derived as the hash of the nodeID
-func NewAddrFromNodeIDAndPort(id discover.NodeID, host net.IP, port uint16) *BzzAddr {
-	return &BzzAddr{
-		OAddr: ToOverlayAddr(id.Bytes()),
-		UAddr: []byte(discover.NewNode(id, host, port, port).String()),
-	}
-}
-
-// ToOverlayAddr creates an overlayaddress from a byte slice
-func ToOverlayAddr(id []byte) []byte {
-	return crypto.Keccak256(id)
+// Deprecated: the underlay address in this addr doesn't contain a public key.
+func NewAddrFromNodeID(id enode.ID) *BzzAddr {
+	node := enode.SignNull(new(enr.Record), id)
+	return &BzzAddr{OAddr: id.Bytes(), UAddr: []byte(node.String())}
 }

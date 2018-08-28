@@ -23,7 +23,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/swarm/log"
 	"github.com/ethereum/go-ethereum/swarm/state"
 )
@@ -77,10 +77,10 @@ func NewHiveParams() *HiveParams {
 
 // Hive manages network connections of the swarm node
 type Hive struct {
-	*HiveParams                      // settings
-	Overlay                          // the overlay connectiviy driver
-	Store       state.Store          // storage interface to save peers across sessions
-	addPeer     func(*discover.Node) // server callback to connect to a peer
+	*HiveParams                   // settings
+	Overlay                       // the overlay connectiviy driver
+	Store       state.Store       // storage interface to save peers across sessions
+	addPeer     func(*enode.Node) // server callback to connect to a peer
 	// bookkeeping
 	lock   sync.Mutex
 	ticker *time.Ticker
@@ -158,7 +158,7 @@ func (h *Hive) connect() {
 		}
 
 		log.Trace(fmt.Sprintf("%08x hive connect() suggested %08x", h.BaseAddr()[:4], addr.Address()[:4]))
-		under, err := discover.ParseNode(string(addr.(Addr).Under()))
+		under, err := enode.ParseV4(string(addr.(Addr).Under()))
 		if err != nil {
 			log.Warn(fmt.Sprintf("%08x unable to connect to bee %08x: invalid node URL: %v", h.BaseAddr()[:4], addr.Address()[:4], err))
 			continue
@@ -195,7 +195,7 @@ func (h *Hive) NodeInfo() interface{} {
 
 // PeerInfo function is used by the p2p.server RPC interface to display
 // protocol specific information any connected peer referred to by their NodeID
-func (h *Hive) PeerInfo(id discover.NodeID) interface{} {
+func (h *Hive) PeerInfo(id enode.ID) interface{} {
 	addr := NewAddrFromNodeID(id)
 	return struct {
 		OAddr hexutil.Bytes
