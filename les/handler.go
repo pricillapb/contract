@@ -213,8 +213,7 @@ func (pm *ProtocolManager) runPeer(version uint, p *p2p.Peer, rw p2p.MsgReadWrit
 	var entry *poolEntry
 	peer := pm.newPeer(int(version), pm.networkId, p, rw)
 	if pm.serverPool != nil {
-		addr := p.RemoteAddr().(*net.TCPAddr)
-		entry = pm.serverPool.connect(peer, addr.IP, uint16(addr.Port))
+		entry = pm.serverPool.connect(peer, peer.Node())
 	}
 	peer.poolEntry = entry
 	select {
