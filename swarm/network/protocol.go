@@ -279,7 +279,7 @@ func NewBzzTestPeer(p *protocols.Peer, addr *BzzAddr) *BzzPeer {
 	return &BzzPeer{
 		Peer:      p,
 		localAddr: addr,
-		BzzAddr:   NewAddrFromNodeID(p.ID()),
+		BzzAddr:   NewAddr(p.Node()),
 	}
 }
 

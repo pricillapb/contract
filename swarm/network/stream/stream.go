@@ -25,7 +25,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -86,7 +85,7 @@ func NewRegistry(addr *network.BzzAddr, delivery *Delivery, db *storage.DBAPI, i
 		skipCheck:      options.SkipCheck,
 		serverFuncs:    make(map[string]func(*Peer, string, bool) (Server, error)),
 		clientFuncs:    make(map[string]func(*Peer, string, bool) (Client, error)),
-		peers:          make(map[discover.NodeID]*Peer),
+		peers:          make(map[enode.ID]*Peer),
 		delivery:       delivery,
 		intervalsStore: intervalsStore,
 		doRetrieve:     options.DoRetrieve,
@@ -223,7 +222,7 @@ func (r *Registry) GetServerFunc(stream string) (func(*Peer, string, bool) (Serv
 	return f, nil
 }
 
-func (r *Registry) RequestSubscription(peerId discover.NodeID, s Stream, h *Range, prio uint8) error {
+func (r *Registry) RequestSubscription(peerId enode.ID, s Stream, h *Range, prio uint8) error {
 	// check if the stream is registered
 	if _, err := r.GetServerFunc(s.Name); err != nil {
 		return err
@@ -251,7 +250,7 @@ func (r *Registry) RequestSubscription(peerId discover.NodeID, s Stream, h *Rang
 }
 
 // Subscribe initiates the streamer
-func (r *Registry) Subscribe(peerId discover.NodeID, s Stream, h *Range, priority uint8) error {
+func (r *Registry) Subscribe(peerId enode.ID, s Stream, h *Range, priority uint8) error {
 	// check if the stream is registered
 	if _, err := r.GetClientFunc(s.Name); err != nil {
 		return err
@@ -291,7 +290,7 @@ func (r *Registry) Subscribe(peerId discover.NodeID, s Stream, h *Range, priorit
 	return peer.SendPriority(context.TODO(), msg, priority)
 }
 
-func (r *Registry) Unsubscribe(peerId discover.NodeID, s Stream) error {
+func (r *Registry) Unsubscribe(peerId enode.ID, s Stream) error {
 	peer := r.getPeer(peerId)
 	if peer == nil {
 		return fmt.Errorf("peer not found %v", peerId)
@@ -310,7 +309,7 @@ func (r *Registry) Unsubscribe(peerId discover.NodeID, s Stream) error {
 
 // Quit sends the QuitMsg to the peer to remove the
 // stream peer client and terminate the streaming.
-func (r *Registry) Quit(peerId discover.NodeID, s Stream) error {
+func (r *Registry) Quit(peerId enode.ID, s Stream) error {
 	peer := r.getPeer(peerId)
 	if peer == nil {
 		log.Debug("stream quit: peer not found", "peer", peerId, "stream", s)
@@ -340,7 +339,7 @@ func (r *Registry) NodeInfo() interface{} {
 	return nil
 }
 
-func (r *Registry) PeerInfo(id discover.NodeID) interface{} {
+func (r *Registry) PeerInfo(id enode.ID) interface{} {
 	return nil
 }
 
@@ -348,7 +347,7 @@ func (r *Registry) Close() error {
 	return r.intervalsStore.Close()
 }
 
-func (r *Registry) getPeer(peerId discover.NodeID) *Peer {
+func (r *Registry) getPeer(peerId enode.ID) *Peer {
 	r.peersMu.RLock()
 	defer r.peersMu.RUnlock()
 
@@ -405,7 +404,7 @@ func (r *Registry) updateSyncing() {
 	// map of all SYNC streams for all peers
 	// used at the and of the function to remove servers
 	// that are not needed anymore
-	subs := make(map[discover.NodeID]map[Stream]struct{})
+	subs := make(map[enode.ID]map[Stream]struct{})
 	r.peersMu.RLock()
 	for id, peer := range r.peers {
 		peer.serverMu.RLock()
@@ -739,10 +738,10 @@ func NewAPI(r *Registry) *API {
 	}
 }
 
-func (api *API) SubscribeStream(peerId discover.NodeID, s Stream, history *Range, priority uint8) error {
+func (api *API) SubscribeStream(peerId enode.ID, s Stream, history *Range, priority uint8) error {
 	return api.streamer.Subscribe(peerId, s, history, priority)
 }
 
-func (api *API) UnsubscribeStream(peerId discover.NodeID, s Stream) error {
+func (api *API) UnsubscribeStream(peerId enode.ID, s Stream) error {
 	return api.streamer.Unsubscribe(peerId, s)
 }

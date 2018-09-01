@@ -36,7 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -125,15 +125,12 @@ func NewSwarm(config *api.Config, mockStore *mock.NodeStore) (self *Swarm, err e
 
 	config.HiveParams.Discovery = true
 
-	nodeID, err := discover.HexID(config.NodeID)
-	if err != nil {
+	var nodeID enode.ID
+	if err := nodeID.UnmarshalText([]byte(config.NodeID)); err != nil {
 		return nil, err
 	}
-	addr := &network.BzzAddr{
-		OAddr: common.FromHex(config.BzzKey),
-		UAddr: []byte(discover.NewNode(nodeID, net.IP{127, 0, 0, 1}, 30303, 30303).String()),
-	}
-
+	addr := network.NewAddrFromNodeID(nodeID)
+	addr.OAddr = common.FromHex(config.BzzKey)
 	bzzconfig := &network.BzzConfig{
 		NetworkID:    config.NetworkID,
 		OverlayAddr:  addr.OAddr,

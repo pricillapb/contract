@@ -23,7 +23,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/metrics"
-	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	cp "github.com/ethereum/go-ethereum/swarm/chunk"
 	"github.com/ethereum/go-ethereum/swarm/log"
 	"github.com/ethereum/go-ethereum/swarm/network"
@@ -49,7 +49,7 @@ type Delivery struct {
 	db       *storage.DBAPI
 	overlay  network.Overlay
 	receiveC chan *ChunkDeliveryMsg
-	getPeer  func(discover.NodeID) *Peer
+	getPeer  func(enode.ID) *Peer
 }
 
 func NewDelivery(overlay network.Overlay, db *storage.DBAPI) *Delivery {
@@ -264,7 +264,7 @@ R:
 }
 
 // RequestFromPeers sends a chunk retrieve request to
-func (d *Delivery) RequestFromPeers(ctx context.Context, hash []byte, skipCheck bool, peersToSkip ...discover.NodeID) error {
+func (d *Delivery) RequestFromPeers(ctx context.Context, hash []byte, skipCheck bool, peersToSkip ...enode.ID) error {
 	var success bool
 	var err error
 	requestFromPeersCount.Inc(1)

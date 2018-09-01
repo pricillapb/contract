@@ -29,7 +29,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
-	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/simulations"
 	"github.com/ethereum/go-ethereum/p2p/simulations/adapters"
 	"github.com/ethereum/go-ethereum/swarm/network"
@@ -51,25 +51,24 @@ func init() {
 	//provide -vmodule as param, and comma-separated values, e.g.:
 	//-vmodule overlay_test.go=4,simulations=3
 	//above examples sets overlay_test.go logs to level 4, while packages ending with "simulations" to 3
-	if *vmodule != "" {
-		//only enable the pattern matching handler if the flag has been provided
-		glogger := log.NewGlogHandler(log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true)))
-		if *verbosity > 0 {
-			glogger.Verbosity(log.Lvl(*verbosity))
-		}
-		glogger.Vmodule(*vmodule)
-		log.Root().SetHandler(glogger)
+	//only enable the pattern matching handler if the flag has been provided
+	glogger := log.NewGlogHandler(log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true)))
+	if *verbosity > 0 {
+		glogger.Verbosity(log.Lvl(*verbosity))
 	}
+	glogger.Vmodule(*vmodule)
+	log.PrintOrigins(true)
+	log.Root().SetHandler(glogger)
 }
 
 type Simulation struct {
 	mtx    sync.Mutex
-	stores map[discover.NodeID]*state.InmemoryStore
+	stores map[enode.ID]*state.InmemoryStore
 }
 
 func NewSimulation() *Simulation {
 	return &Simulation{
-		stores: make(map[discover.NodeID]*state.InmemoryStore),
+		stores: make(map[enode.ID]*state.InmemoryStore),
 	}
 }
 
