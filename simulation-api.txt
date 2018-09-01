@@ -1,0 +1,22 @@
+# -*- mode: restclient -*-
+
+# Start the simulation
+
+POST http://127.0.0.1:8888/start
+
+# Start the mocker
+
+POST http://127.0.0.1:8888/mocker/start
+Content-Type: application/x-www-form-urlencoded
+
+node-count=10&mocker-type=probabilistic&
+
+# Get Node Count
+
+GET http://127.0.0.1:8888/nodes
+
+# Stop the simulation
+
+POST http://127.0.0.1:8888/stop
+
+
