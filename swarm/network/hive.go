@@ -17,7 +17,6 @@
 package network
 
 import (
-	"bytes"
 	"fmt"
 	"sync"
 	"time"
@@ -84,6 +83,7 @@ type Hive struct {
 	addPeer     func(*enode.Node) // server callback to connect to a peer
 	// bookkeeping
 	lock   sync.Mutex
+	peers  map[enode.ID]*BzzPeer
 	ticker *time.Ticker
 }
 
@@ -96,6 +96,7 @@ func NewHive(params *HiveParams, overlay Overlay, store state.Store) *Hive {
 		HiveParams: params,
 		Overlay:    overlay,
 		Store:      store,
+		peers:      make(map[enode.ID]*BzzPeer),
 	}
 }
 
@@ -171,6 +172,9 @@ func (h *Hive) connect() {
 
 // Run protocol run function
 func (h *Hive) Run(p *BzzPeer) error {
+	h.trackPeer(p)
+	defer h.untrackPeer(p)
+
 	dp := newDiscovery(p, h)
 	depth, changed := h.On(dp)
 	// if we want discovery, advertise change of depth
@@ -188,6 +192,18 @@ func (h *Hive) Run(p *BzzPeer) error {
 	return dp.Run(dp.HandleMsg)
 }
 
+func (h *Hive) trackPeer(p *BzzPeer) {
+	h.lock.Lock()
+	h.peers[p.ID()] = p
+	h.lock.Unlock()
+}
+
+func (h *Hive) untrackPeer(p *BzzPeer) {
+	h.lock.Lock()
+	delete(h.peers, p.ID())
+	h.lock.Unlock()
+}
+
 // NodeInfo function is used by the p2p.server RPC interface to display
 // protocol specific node information
 func (h *Hive) NodeInfo() interface{} {
@@ -197,23 +213,21 @@ func (h *Hive) NodeInfo() interface{} {
 // PeerInfo function is used by the p2p.server RPC interface to display
 // protocol specific information any connected peer referred to by their NodeID
 func (h *Hive) PeerInfo(id enode.ID) interface{} {
-	var addr *BzzAddr
-	h.Overlay.EachConn(id[:], len(id), func(c OverlayConn, po int, ok bool) bool {
-		if a := ToAddr(c); bytes.Equal(a.Over(), id[:]) {
-			addr = a
-		}
-		return true
-	})
-	if addr != nil {
-		return struct {
-			OAddr hexutil.Bytes
-			UAddr hexutil.Bytes
-		}{
-			OAddr: addr.OAddr,
-			UAddr: addr.UAddr,
-		}
+	h.lock.Lock()
+	p := h.peers[id]
+	h.lock.Unlock()
+
+	if p == nil {
+		return nil
 	}
-	return nil
+	addr := NewAddr(p.Node())
+	return struct {
+		OAddr hexutil.Bytes
+		UAddr hexutil.Bytes
+	}{
+		OAddr: addr.OAddr,
+		UAddr: addr.UAddr,
+	}
 }
 
 // ToAddr returns the serialisable version of u
