@@ -209,7 +209,6 @@ func (b *Bzz) RunProtocol(spec *protocols.Spec, run func(*BzzPeer) error) func(*
 		// the handshake has succeeded so construct the BzzPeer and run the protocol
 		peer := &BzzPeer{
 			Peer:       protocols.NewPeer(p, rw, spec),
-			localAddr:  b.localAddr,
 			BzzAddr:    handshake.peerAddr,
 			lastActive: time.Now(),
 			LightNode:  handshake.LightNode,
@@ -268,18 +267,13 @@ func (b *Bzz) runBzz(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 // implements the Peer interface and all interfaces Peer implements: Addr, OverlayPeer
 type BzzPeer struct {
 	*protocols.Peer           // represents the connection for online peers
-	localAddr       *BzzAddr  // local Peers address
 	*BzzAddr                  // remote address -> implements Addr interface = protocols.Peer
 	lastActive      time.Time // time is updated whenever mutexes are releasing
 	LightNode       bool
 }
 
-func NewBzzTestPeer(p *protocols.Peer, addr *BzzAddr) *BzzPeer {
-	return &BzzPeer{
-		Peer:      p,
-		localAddr: addr,
-		BzzAddr:   NewAddr(p.Node()),
-	}
+func NewBzzTestPeer(p *protocols.Peer) *BzzPeer {
+	return &BzzPeer{Peer: p, BzzAddr: NewAddr(p.Node())}
 }
 
 // Off returns the overlay peer record for offline persistence

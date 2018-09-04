@@ -108,11 +108,7 @@ func newBzzBaseTester(t *testing.T, n int, addr *BzzAddr, spec *protocols.Spec, 
 	}
 
 	protocol := func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
-		return srv(&BzzPeer{
-			Peer:      protocols.NewPeer(p, rw, spec),
-			localAddr: addr,
-			BzzAddr:   NewAddr(p.Node()),
-		})
+		return srv(&BzzPeer{Peer: protocols.NewPeer(p, rw, spec), BzzAddr: NewAddr(p.Node())})
 	}
 
 	s := p2ptest.NewProtocolTester(t, addr.ID(), n, protocol)

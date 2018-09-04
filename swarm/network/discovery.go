@@ -93,7 +93,7 @@ func NotifyPeer(p OverlayAddr, k Overlay) {
 // unless already notified during the connection session
 func (d *discPeer) NotifyPeer(a OverlayAddr, po uint8) {
 	// immediately return
-	if (po < d.getDepth() && pot.ProxCmp(d.localAddr, d, a) != 1) || d.seen(a) {
+	if (po < d.getDepth() && pot.ProxCmp(d.overlay.BaseAddr(), d, a) != 1) || d.seen(a) {
 		return
 	}
 	// log.Trace(fmt.Sprintf("%08x peer %08x notified of peer %08x", d.localAddr.Over()[:4], d.Address()[:4], a.Address()[:4]))
@@ -169,7 +169,7 @@ func (d *discPeer) handleSubPeersMsg(msg *subPeersMsg) error {
 		d.setDepth(msg.Depth)
 		var peers []*BzzAddr
 		d.overlay.EachConn(d.Over(), 255, func(p OverlayConn, po int, isproxbin bool) bool {
-			if pob, _ := pof(d, d.localAddr, 0); pob > po {
+			if pob, _ := pof(d, d.overlay.BaseAddr(), 0); pob > po {
 				return false
 			}
 			if !d.seen(p) {
