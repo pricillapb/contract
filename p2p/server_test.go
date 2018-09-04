@@ -92,7 +92,7 @@ func TestServerListen(t *testing.T) {
 	connected := make(chan *Peer)
 	remid := &newkey().PublicKey
 	srv := startTestServer(t, remid, func(p *Peer) {
-		if p.ID() != discover.PubkeyToID(remid) {
+		if p.ID() != enode.PubkeyToIDV4(remid) {
 			t.Error("peer func called with wrong node id")
 		}
 		connected <- p
@@ -157,7 +157,7 @@ func TestServerDial(t *testing.T) {
 
 		select {
 		case peer := <-connected:
-			if peer.ID() != discover.PubkeyToID(remid) {
+			if peer.ID() != enode.PubkeyToIDV4(remid) {
 				t.Errorf("peer has wrong id")
 			}
 			if peer.Name() != "test" {
@@ -348,7 +348,7 @@ func (t *testTask) Do(srv *Server) {
 // at capacity. Trusted connections should still be accepted.
 func TestServerAtCap(t *testing.T) {
 	trustedNode := newkey()
-	trustedID := discover.PubkeyToID(&trustedNode.PublicKey)
+	trustedID := enode.PubkeyToIDV4(&trustedNode.PublicKey)
 	srv := &Server{
 		Config: Config{
 			PrivateKey:   newkey(),

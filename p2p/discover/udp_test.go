@@ -276,7 +276,7 @@ func TestUDP_findnodeMultiReply(t *testing.T) {
 	test := newUDPTest(t)
 	defer test.table.Close()
 
-	rid := PubkeyToID(&test.remotekey.PublicKey)
+	rid := enode.PubkeyToIDV4(&test.remotekey.PublicKey)
 	test.table.db.UpdateLastPingReceived(rid, time.Now())
 
 	// queue a pending findnode request

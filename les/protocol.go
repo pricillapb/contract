@@ -28,7 +28,6 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -157,7 +156,7 @@ func (a *announceData) checkSignature(id enode.ID) error {
 	if err != nil {
 		return err
 	}
-	if id == discover.PubkeyToID(recPubkey) {
+	if id == enode.PubkeyToIDV4(recPubkey) {
 		return nil
 	}
 	return errors.New("wrong signature")

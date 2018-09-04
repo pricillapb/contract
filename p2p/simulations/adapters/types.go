@@ -29,7 +29,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -177,7 +176,7 @@ func RandomNodeConfig() *NodeConfig {
 		panic("unable to generate key")
 	}
 
-	id := discover.PubkeyToID(&key.PublicKey)
+	id := enode.PubkeyToIDV4(&key.PublicKey)
 	port, err := assignTCPPort()
 	if err != nil {
 		panic("unable to assign tcp port")

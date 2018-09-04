@@ -1637,7 +1637,7 @@ func newServices(allowRaw bool) adapters.Services {
 }
 
 func newTestPss(privkey *ecdsa.PrivateKey, overlay network.Overlay, ppextra *PssParams) *Pss {
-	nid := discover.PubkeyToID(&privkey.PublicKey)
+	nid := enode.PubkeyToIDV4(&privkey.PublicKey)
 
 	// set up routing if kademlia is not passed to us
 	if overlay == nil {
