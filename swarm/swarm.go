@@ -125,18 +125,11 @@ func NewSwarm(config *api.Config, mockStore *mock.NodeStore) (self *Swarm, err e
 
 	config.HiveParams.Discovery = true
 
-	var nodeID enode.ID
-	if err := nodeID.UnmarshalText([]byte(config.NodeID)); err != nil {
-		return nil, err
-	}
-	addr := network.NewAddrFromNodeID(nodeID)
-	addr.OAddr = common.FromHex(config.BzzKey)
 	bzzconfig := &network.BzzConfig{
-		NetworkID:    config.NetworkID,
-		OverlayAddr:  addr.OAddr,
-		UnderlayAddr: addr.UAddr,
-		HiveParams:   config.HiveParams,
-		LightNode:    config.LightNodeEnabled,
+		NetworkID:   config.NetworkID,
+		OverlayAddr: common.FromHex(config.BzzKey),
+		HiveParams:  config.HiveParams,
+		LightNode:   config.LightNodeEnabled,
 	}
 
 	stateStore, err := state.NewDBStore(filepath.Join(config.Path, "state-store.db"))
@@ -173,7 +166,11 @@ func NewSwarm(config *api.Config, mockStore *mock.NodeStore) (self *Swarm, err e
 	)
 	delivery := stream.NewDelivery(to, db)
 
-	self.streamer = stream.NewRegistry(addr, delivery, db, stateStore, &stream.RegistryOptions{
+	var nodeID enode.ID
+	if err := nodeID.UnmarshalText([]byte(config.NodeID)); err != nil {
+		return nil, err
+	}
+	self.streamer = stream.NewRegistry(nodeID, delivery, db, stateStore, &stream.RegistryOptions{
 		SkipCheck:       config.DeliverySkipCheck,
 		DoSync:          config.SyncEnabled,
 		DoRetrieve:      true,
