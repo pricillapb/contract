@@ -76,17 +76,17 @@ func NewProtocolTester(t *testing.T, id enode.ID, n int, run func(*p2p.Peer, p2p
 
 	node := net.GetNode(id).Node.(*adapters.SimNode)
 	peers := make([]*adapters.NodeConfig, n)
-	peerIDs := make([]enode.ID, n)
+	nodes := make([]*enode.Node, n)
 	for i := 0; i < n; i++ {
 		peers[i] = adapters.RandomNodeConfig()
 		peers[i].Services = []string{"mock"}
-		peerIDs[i] = peers[i].ID
+		nodes[i] = peers[i].Node()
 	}
 	events := make(chan *p2p.PeerEvent, 1000)
 	node.SubscribeEvents(events)
 	ps := &ProtocolSession{
 		Server:  node.Server(),
-		IDs:     peerIDs,
+		Nodes:   nodes,
 		adapter: adapter,
 		events:  events,
 	}

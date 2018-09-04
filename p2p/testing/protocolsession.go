@@ -35,7 +35,7 @@ var errTimedOut = errors.New("timed out")
 // receive (expect) messages
 type ProtocolSession struct {
 	Server  *p2p.Server
-	IDs     []enode.ID
+	Nodes   []*enode.Node
 	adapter *adapters.SimAdapter
 	events  chan *p2p.PeerEvent
 }
@@ -81,7 +81,7 @@ type Disconnect struct {
 func (s *ProtocolSession) trigger(trig Trigger) error {
 	simNode, ok := s.adapter.GetNode(trig.Peer)
 	if !ok {
-		return fmt.Errorf("trigger: peer %v does not exist (1- %v)", trig.Peer, len(s.IDs))
+		return fmt.Errorf("trigger: peer %v does not exist (1- %v)", trig.Peer, len(s.Nodes))
 	}
 	mockNode, ok := simNode.Services()[0].(*mockNode)
 	if !ok {
@@ -124,7 +124,7 @@ func (s *ProtocolSession) expect(exps []Expect) error {
 	for nodeID := range peerExpects {
 		simNode, ok := s.adapter.GetNode(nodeID)
 		if !ok {
-			return fmt.Errorf("trigger: peer %v does not exist (1- %v)", nodeID, len(s.IDs))
+			return fmt.Errorf("trigger: peer %v does not exist (1- %v)", nodeID, len(s.Nodes))
 		}
 		mockNode, ok := simNode.Services()[0].(*mockNode)
 		if !ok {
