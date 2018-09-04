@@ -24,7 +24,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/node"
-	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/simulations/adapters"
 	"github.com/ethereum/go-ethereum/swarm/log"
 	"github.com/ethereum/go-ethereum/swarm/network"
@@ -116,10 +116,9 @@ The snapshot should have 'streamer' in its service list.
 func runFileRetrievalTest(nodeCount int) error {
 	sim := simulation.New(map[string]simulation.ServiceFunc{
 		"streamer": func(ctx *adapters.ServiceContext, bucket *sync.Map) (s node.Service, cleanup func(), err error) {
-
-			id := ctx.Config.ID
-			addr := network.NewAddrFromNodeID(id)
-			store, datadir, err := createTestLocalStorageForID(id, addr)
+			node := ctx.Config.Node()
+			addr := network.NewAddr(node)
+			store, datadir, err := createTestLocalStorageForID(node.ID(), addr)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -151,9 +150,9 @@ func runFileRetrievalTest(nodeCount int) error {
 
 	conf := &synctestConfig{}
 	//map of discover ID to indexes of chunks expected at that ID
-	conf.idToChunksMap = make(map[discover.NodeID][]int)
+	conf.idToChunksMap = make(map[enode.ID][]int)
 	//map of overlay address to discover ID
-	conf.addrToIDMap = make(map[string]discover.NodeID)
+	conf.addrToIDMap = make(map[string]enode.ID)
 	//array where the generated chunk hashes will be stored
 	conf.hashes = make([]storage.Address, 0)
 
@@ -169,11 +168,11 @@ func runFileRetrievalTest(nodeCount int) error {
 		nodeIDs := sim.UpNodeIDs()
 		for _, n := range nodeIDs {
 			//get the kademlia overlay address from this ID
-			a := network.ToOverlayAddr(n.Bytes())
+			a := n.Bytes()
 			//append it to the array of all overlay addresses
 			conf.addrs = append(conf.addrs, a)
 			//the proximity calculation is on overlay addr,
-			//the p2p/simulations check func triggers on discover.NodeID,
+			//the p2p/simulations check func triggers on enode.ID,
 			//so we need to know which overlay addr maps to which nodeID
 			conf.addrToIDMap[string(a)] = n
 		}
@@ -259,10 +258,9 @@ The snapshot should have 'streamer' in its service list.
 func runRetrievalTest(chunkCount int, nodeCount int) error {
 	sim := simulation.New(map[string]simulation.ServiceFunc{
 		"streamer": func(ctx *adapters.ServiceContext, bucket *sync.Map) (s node.Service, cleanup func(), err error) {
-
-			id := ctx.Config.ID
-			addr := network.NewAddrFromNodeID(id)
-			store, datadir, err := createTestLocalStorageForID(id, addr)
+			node := ctx.Config.Node()
+			addr := network.NewAddr(node)
+			store, datadir, err := createTestLocalStorageForID(node.ID(), addr)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -293,9 +291,9 @@ func runRetrievalTest(chunkCount int, nodeCount int) error {
 
 	conf := &synctestConfig{}
 	//map of discover ID to indexes of chunks expected at that ID
-	conf.idToChunksMap = make(map[discover.NodeID][]int)
+	conf.idToChunksMap = make(map[enode.ID][]int)
 	//map of overlay address to discover ID
-	conf.addrToIDMap = make(map[string]discover.NodeID)
+	conf.addrToIDMap = make(map[string]enode.ID)
 	//array where the generated chunk hashes will be stored
 	conf.hashes = make([]storage.Address, 0)
 
@@ -309,11 +307,11 @@ func runRetrievalTest(chunkCount int, nodeCount int) error {
 		nodeIDs := sim.UpNodeIDs()
 		for _, n := range nodeIDs {
 			//get the kademlia overlay address from this ID
-			a := network.ToOverlayAddr(n.Bytes())
+			a := n.Bytes()
 			//append it to the array of all overlay addresses
 			conf.addrs = append(conf.addrs, a)
 			//the proximity calculation is on overlay addr,
-			//the p2p/simulations check func triggers on discover.NodeID,
+			//the p2p/simulations check func triggers on enode.ID,
 			//so we need to know which overlay addr maps to which nodeID
 			conf.addrToIDMap[string(a)] = n
 		}

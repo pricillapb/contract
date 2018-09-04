@@ -29,7 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/simulations/adapters"
 	"github.com/ethereum/go-ethereum/swarm/network"
 	"github.com/ethereum/go-ethereum/swarm/network/simulation"
@@ -45,9 +45,9 @@ const MaxTimeout = 600
 type synctestConfig struct {
 	addrs            [][]byte
 	hashes           []storage.Address
-	idToChunksMap    map[discover.NodeID][]int
+	idToChunksMap    map[enode.ID][]int
 	chunksToNodesMap map[string][]int
-	addrToIDMap      map[string]discover.NodeID
+	addrToIDMap      map[string]enode.ID
 }
 
 //This test is a syncing test for nodes.
@@ -122,10 +122,9 @@ func TestSyncingViaDirectSubscribe(t *testing.T) {
 func testSyncingViaGlobalSync(t *testing.T, chunkCount int, nodeCount int) {
 	sim := simulation.New(map[string]simulation.ServiceFunc{
 		"streamer": func(ctx *adapters.ServiceContext, bucket *sync.Map) (s node.Service, cleanup func(), err error) {
-
-			id := ctx.Config.ID
-			addr := network.NewAddrFromNodeID(id)
-			store, datadir, err := createTestLocalStorageForID(id, addr)
+			n := ctx.Config.Node()
+			addr := network.NewAddr(n)
+			store, datadir, err := createTestLocalStorageForID(n.ID(), addr)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -155,9 +154,9 @@ func testSyncingViaGlobalSync(t *testing.T, chunkCount int, nodeCount int) {
 
 	conf := &synctestConfig{}
 	//map of discover ID to indexes of chunks expected at that ID
-	conf.idToChunksMap = make(map[discover.NodeID][]int)
+	conf.idToChunksMap = make(map[enode.ID][]int)
 	//map of overlay address to discover ID
-	conf.addrToIDMap = make(map[string]discover.NodeID)
+	conf.addrToIDMap = make(map[string]enode.ID)
 	//array where the generated chunk hashes will be stored
 	conf.hashes = make([]storage.Address, 0)
 
@@ -173,11 +172,11 @@ func testSyncingViaGlobalSync(t *testing.T, chunkCount int, nodeCount int) {
 		nodeIDs := sim.UpNodeIDs()
 		for _, n := range nodeIDs {
 			//get the kademlia overlay address from this ID
-			a := network.ToOverlayAddr(n.Bytes())
+			a := n.Bytes()
 			//append it to the array of all overlay addresses
 			conf.addrs = append(conf.addrs, a)
 			//the proximity calculation is on overlay addr,
-			//the p2p/simulations check func triggers on discover.NodeID,
+			//the p2p/simulations check func triggers on enode.ID,
 			//so we need to know which overlay addr maps to which nodeID
 			conf.addrToIDMap[string(a)] = n
 		}
@@ -280,10 +279,9 @@ kademlia network. The snapshot should have 'streamer' in its service list.
 func testSyncingViaDirectSubscribe(chunkCount int, nodeCount int) error {
 	sim := simulation.New(map[string]simulation.ServiceFunc{
 		"streamer": func(ctx *adapters.ServiceContext, bucket *sync.Map) (s node.Service, cleanup func(), err error) {
-
-			id := ctx.Config.ID
-			addr := network.NewAddrFromNodeID(id)
-			store, datadir, err := createTestLocalStorageForID(id, addr)
+			n := ctx.Config.Node()
+			addr := network.NewAddr(n)
+			store, datadir, err := createTestLocalStorageForID(n.ID(), addr)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -314,9 +312,9 @@ func testSyncingViaDirectSubscribe(chunkCount int, nodeCount int) error {
 
 	conf := &synctestConfig{}
 	//map of discover ID to indexes of chunks expected at that ID
-	conf.idToChunksMap = make(map[discover.NodeID][]int)
+	conf.idToChunksMap = make(map[enode.ID][]int)
 	//map of overlay address to discover ID
-	conf.addrToIDMap = make(map[string]discover.NodeID)
+	conf.addrToIDMap = make(map[string]enode.ID)
 	//array where the generated chunk hashes will be stored
 	conf.hashes = make([]storage.Address, 0)
 
@@ -329,11 +327,11 @@ func testSyncingViaDirectSubscribe(chunkCount int, nodeCount int) error {
 		nodeIDs := sim.UpNodeIDs()
 		for _, n := range nodeIDs {
 			//get the kademlia overlay address from this ID
-			a := network.ToOverlayAddr(n.Bytes())
+			a := n.Bytes()
 			//append it to the array of all overlay addresses
 			conf.addrs = append(conf.addrs, a)
 			//the proximity calculation is on overlay addr,
-			//the p2p/simulations check func triggers on discover.NodeID,
+			//the p2p/simulations check func triggers on enode.ID,
 			//so we need to know which overlay addr maps to which nodeID
 			conf.addrToIDMap[string(a)] = n
 		}
@@ -525,7 +523,7 @@ func mapKeysToNodes(conf *synctestConfig) {
 }
 
 //upload a file(chunks) to a single local node store
-func uploadFileToSingleNodeStore(id discover.NodeID, chunkCount int, lstore *storage.LocalStore) ([]storage.Address, error) {
+func uploadFileToSingleNodeStore(id enode.ID, chunkCount int, lstore *storage.LocalStore) ([]storage.Address, error) {
 	log.Debug(fmt.Sprintf("Uploading to node id: %s", id))
 	fileStore := storage.NewFileStore(lstore, storage.NewFileStoreParams())
 	size := chunkSize
