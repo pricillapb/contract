@@ -430,8 +430,7 @@ func (p *Pss) process(pssmsg *PssMsg) error {
 
 func (p *Pss) executeHandlers(topic Topic, payload []byte, from *PssAddress, asymmetric bool, keyid string) {
 	handlers := p.getHandlers(topic)
-	nid := enode.HexID("0x00") // this hack is needed to satisfy the p2p method
-	peer := p2p.NewPeer(nid, fmt.Sprintf("%x", from), []p2p.Cap{})
+	peer := p2p.NewPeer(enode.ID{}, fmt.Sprintf("%x", from), []p2p.Cap{})
 	for f := range handlers {
 		err := (*f)(payload, peer, asymmetric, keyid)
 		if err != nil {
