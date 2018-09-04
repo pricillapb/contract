@@ -17,6 +17,7 @@
 package network
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"time"
@@ -196,14 +197,23 @@ func (h *Hive) NodeInfo() interface{} {
 // PeerInfo function is used by the p2p.server RPC interface to display
 // protocol specific information any connected peer referred to by their NodeID
 func (h *Hive) PeerInfo(id enode.ID) interface{} {
-	addr := NewAddrFromNodeID(id)
-	return struct {
-		OAddr hexutil.Bytes
-		UAddr hexutil.Bytes
-	}{
-		OAddr: addr.OAddr,
-		UAddr: addr.UAddr,
+	var addr *BzzAddr
+	h.Overlay.EachConn(id[:], len(id), func(c OverlayConn, po int, ok bool) bool {
+		if a := ToAddr(c); bytes.Equal(a.Over(), id[:]) {
+			addr = a
+		}
+		return true
+	})
+	if addr != nil {
+		return struct {
+			OAddr hexutil.Bytes
+			UAddr hexutil.Bytes
+		}{
+			OAddr: addr.OAddr,
+			UAddr: addr.UAddr,
+		}
 	}
+	return nil
 }
 
 // ToAddr returns the serialisable version of u

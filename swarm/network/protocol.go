@@ -27,7 +27,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/swarm/log"
@@ -413,10 +412,4 @@ func RandomAddr() *BzzAddr {
 // NewAddr constucts a BzzAddr from a node record.
 func NewAddr(node *enode.Node) *BzzAddr {
 	return &BzzAddr{OAddr: node.ID().Bytes(), UAddr: []byte(node.String())}
-}
-
-// Deprecated: the underlay address in this addr doesn't contain a public key.
-func NewAddrFromNodeID(id enode.ID) *BzzAddr {
-	node := enode.SignNull(new(enr.Record), id)
-	return &BzzAddr{OAddr: id.Bytes(), UAddr: []byte(node.String())}
 }
