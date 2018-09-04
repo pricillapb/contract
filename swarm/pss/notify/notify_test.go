@@ -208,7 +208,6 @@ func newServices(allowRaw bool) adapters.Services {
 		if k, ok := kademlias[id]; ok {
 			return k
 		}
-		addr := network.NewAddrFromNodeID(id)
 		params := network.NewKadParams()
 		params.MinProxBinSize = 2
 		params.MaxBinSize = 3
@@ -216,7 +215,7 @@ func newServices(allowRaw bool) adapters.Services {
 		params.MaxRetries = 1000
 		params.RetryExponent = 2
 		params.RetryInterval = 1000000
-		kademlias[id] = network.NewKademlia(addr.Over(), params)
+		kademlias[id] = network.NewKademlia(id[:], params)
 		return kademlias[id]
 	}
 	return adapters.Services{
@@ -238,7 +237,7 @@ func newServices(allowRaw bool) adapters.Services {
 			return ps, nil
 		},
 		"bzz": func(ctx *adapters.ServiceContext) (node.Service, error) {
-			addr := network.NewAddrFromNodeID(ctx.Config.ID)
+			addr := network.NewAddr(ctx.Config.Node())
 			hp := network.NewHiveParams()
 			hp.Discovery = false
 			config := &network.BzzConfig{
