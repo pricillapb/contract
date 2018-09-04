@@ -50,8 +50,8 @@ const (
 
 // Registry registry for outgoing and incoming streamer constructors
 type Registry struct {
+	addr           enode.ID
 	api            *API
-	addr           *network.BzzAddr
 	skipCheck      bool
 	clientMu       sync.RWMutex
 	serverMu       sync.RWMutex
@@ -73,7 +73,7 @@ type RegistryOptions struct {
 }
 
 // NewRegistry is Streamer constructor
-func NewRegistry(addr *network.BzzAddr, delivery *Delivery, db *storage.DBAPI, intervalsStore state.Store, options *RegistryOptions) *Registry {
+func NewRegistry(localID enode.ID, delivery *Delivery, db *storage.DBAPI, intervalsStore state.Store, options *RegistryOptions) *Registry {
 	if options == nil {
 		options = &RegistryOptions{}
 	}
@@ -81,7 +81,7 @@ func NewRegistry(addr *network.BzzAddr, delivery *Delivery, db *storage.DBAPI, i
 		options.SyncUpdateDelay = 15 * time.Second
 	}
 	streamer := &Registry{
-		addr:           addr,
+		addr:           localID,
 		skipCheck:      options.SkipCheck,
 		serverFuncs:    make(map[string]func(*Peer, string, bool) (Server, error)),
 		clientFuncs:    make(map[string]func(*Peer, string, bool) (Client, error)),
@@ -421,9 +421,9 @@ func (r *Registry) updateSyncing() {
 	r.peersMu.RUnlock()
 
 	// request subscriptions for all nodes and bins
-	kad.EachBin(r.addr.Over(), pot.DefaultPof(256), 0, func(conn network.OverlayConn, bin int) bool {
+	kad.EachBin(r.addr[:], pot.DefaultPof(256), 0, func(conn network.OverlayConn, bin int) bool {
 		p := conn.(network.Peer)
-		log.Debug(fmt.Sprintf("Requesting subscription by: registry %s from peer %s for bin: %d", r.addr.ID(), p.ID(), bin))
+		log.Debug(fmt.Sprintf("Requesting subscription by: registry %s from peer %s for bin: %d", r.addr, p.ID(), bin))
 
 		// bin is always less then 256 and it is safe to convert it to type uint8
 		stream := NewStream("SYNC", FormatSyncBinKey(uint8(bin)), true)
@@ -461,7 +461,7 @@ func (r *Registry) updateSyncing() {
 
 func (r *Registry) runProtocol(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 	peer := protocols.NewPeer(p, rw, Spec)
-	bzzPeer := network.NewBzzTestPeer(peer, r.addr)
+	bzzPeer := network.NewBzzTestPeer(peer)
 	r.delivery.overlay.On(bzzPeer)
 	defer r.delivery.overlay.Off(bzzPeer)
 	return r.Run(bzzPeer)

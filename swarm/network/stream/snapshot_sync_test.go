@@ -138,7 +138,7 @@ func testSyncingViaGlobalSync(t *testing.T, chunkCount int, nodeCount int) {
 			kad := network.NewKademlia(addr.Over(), network.NewKadParams())
 			delivery := NewDelivery(kad, db)
 
-			r := NewRegistry(addr, delivery, db, state.NewInmemoryStore(), &RegistryOptions{
+			r := NewRegistry(addr.ID(), delivery, db, state.NewInmemoryStore(), &RegistryOptions{
 				DoSync:          true,
 				SyncUpdateDelay: 3 * time.Second,
 			})
@@ -295,7 +295,7 @@ func testSyncingViaDirectSubscribe(chunkCount int, nodeCount int) error {
 			kad := network.NewKademlia(addr.Over(), network.NewKadParams())
 			delivery := NewDelivery(kad, db)
 
-			r := NewRegistry(addr, delivery, db, state.NewInmemoryStore(), nil)
+			r := NewRegistry(addr.ID(), delivery, db, state.NewInmemoryStore(), nil)
 			bucket.Store(bucketKeyRegistry, r)
 
 			fileStore := storage.NewFileStore(storage.NewNetStore(localStore, nil), storage.NewFileStoreParams())
@@ -463,7 +463,7 @@ func startSyncing(r *Registry, conf *synctestConfig) (int, error) {
 
 	subCnt := 0
 	//iterate over each bin and solicit needed subscription to bins
-	kad.EachBin(r.addr.Over(), pof, 0, func(conn network.OverlayConn, po int) bool {
+	kad.EachBin(r.addr[:], pof, 0, func(conn network.OverlayConn, po int) bool {
 		//identify begin and start index of the bin(s) we want to subscribe to
 		histRange := &Range{}
 
