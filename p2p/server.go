@@ -367,6 +367,11 @@ func (srv *Server) makeSelf(listener net.Listener, ntab discoverTable) *enode.No
 		} else {
 			// Otherwise inject the listener address too.
 			addr = listener.Addr().(*net.TCPAddr)
+			if srv.NAT != nil {
+				if ip, err := srv.NAT.ExternalIP(); err == nil {
+					addr.IP = ip
+				}
+			}
 		}
 		return enode.NewV4(&srv.PrivateKey.PublicKey, addr.IP, addr.Port, 0)
 	}
