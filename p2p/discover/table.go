@@ -246,6 +246,7 @@ func (tab *Table) Resolve(n *enode.Node) *enode.Node {
 	return nil
 }
 
+// LookupRandom finds random nodes in the network.
 func (tab *Table) LookupRandom() []*enode.Node {
 	var target encPubkey
 	crand.Read(target[:])
