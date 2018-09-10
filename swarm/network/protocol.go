@@ -286,6 +286,14 @@ func (p *BzzPeer) LastActive() time.Time {
 	return p.lastActive
 }
 
+// ID returns the peer's underlay node identifier.
+func (p *BzzPeer) ID() enode.ID {
+	// This is here to resolve a method tie: both protocols.Peer and BzzAddr are embedded
+	// into the struct and provide ID(). The protocols.Peer version is faster, ensure it
+	// gets used.
+	return p.Peer.ID()
+}
+
 /*
  Handshake
 
@@ -361,26 +369,28 @@ type BzzAddr struct {
 	UAddr []byte
 }
 
-// Address implements OverlayPeer interface to be used in Overlay
+// Address implements OverlayPeer interface to be used in Overlay.
 func (a *BzzAddr) Address() []byte {
 	return a.OAddr
 }
 
-// Over returns the overlay address
+// Over returns the overlay address.
 func (a *BzzAddr) Over() []byte {
 	return a.OAddr
 }
 
-// Under returns the underlay address
+// Under returns the underlay address.
 func (a *BzzAddr) Under() []byte {
 	return a.UAddr
 }
 
-// ID returns the nodeID from the underlay enode address
+// ID returns the node identifier in the underlay.
 func (a *BzzAddr) ID() enode.ID {
-	var id enode.ID
-	copy(id[:], a.OAddr)
-	return id
+	n, err := enode.ParseV4(string(a.UAddr))
+	if err != nil {
+		return enode.ID{}
+	}
+	return n.ID()
 }
 
 // Update updates the underlay address of a peer record
