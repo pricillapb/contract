@@ -175,7 +175,7 @@ func (db *DB) storeInt64(key []byte, n int64) error {
 	return db.lvl.Put(key, blob, nil)
 }
 
-// node retrieves a node with a given id from the database.
+// Node retrieves a node with a given id from the database.
 func (db *DB) Node(id ID) *Node {
 	blob, err := db.lvl.Get(makeKey(id, nodeDBDiscoverRoot), nil)
 	if err != nil {
@@ -194,7 +194,7 @@ func mustDecodeNode(id, data []byte) *Node {
 	return node
 }
 
-// updateNode inserts - potentially overwriting - a node into the peer database.
+// UpdateNode inserts - potentially overwriting - a node into the peer database.
 func (db *DB) UpdateNode(node *Node) error {
 	blob, err := rlp.EncodeToBytes(&node.r)
 	if err != nil {
@@ -203,7 +203,7 @@ func (db *DB) UpdateNode(node *Node) error {
 	return db.lvl.Put(makeKey(node.ID(), nodeDBDiscoverRoot), blob, nil)
 }
 
-// deleteNode deletes all information/keys associated with a node.
+// DeleteNode deletes all information/keys associated with a node.
 func (db *DB) DeleteNode(id ID) error {
 	deleter := db.lvl.NewIterator(util.BytesPrefix(makeKey(id, "")), nil)
 	for deleter.Next() {
@@ -282,27 +282,29 @@ func (db *DB) UpdateLastPingReceived(id ID, instance time.Time) error {
 	return db.storeInt64(makeKey(id, nodeDBDiscoverPing), instance.Unix())
 }
 
-// bondTime retrieves the time of the last successful pong from remote node.
+// LastPongReceived retrieves the time of the last successful pong from remote node.
 func (db *DB) LastPongReceived(id ID) time.Time {
+	// Launch expirer
+	db.ensureExpirer()
 	return time.Unix(db.fetchInt64(makeKey(id, nodeDBDiscoverPong)), 0)
 }
 
-// updateBondTime updates the last pong time of a node.
+// UpdateLastPongReceived updates the last pong time of a node.
 func (db *DB) UpdateLastPongReceived(id ID, instance time.Time) error {
 	return db.storeInt64(makeKey(id, nodeDBDiscoverPong), instance.Unix())
 }
 
-// findFails retrieves the number of findnode failures since bonding.
+// FindFails retrieves the number of findnode failures since bonding.
 func (db *DB) FindFails(id ID) int {
 	return int(db.fetchInt64(makeKey(id, nodeDBDiscoverFindFails)))
 }
 
-// updateFindFails updates the number of findnode failures since bonding.
+// UpdateFindFails updates the number of findnode failures since bonding.
 func (db *DB) UpdateFindFails(id ID, fails int) error {
 	return db.storeInt64(makeKey(id, nodeDBDiscoverFindFails), int64(fails))
 }
 
-// querySeeds retrieves random nodes to be used as potential seed nodes
+// QuerySeeds retrieves random nodes to be used as potential seed nodes
 // for bootstrapping.
 func (db *DB) QuerySeeds(n int, maxAge time.Duration) []*Node {
 	var (
