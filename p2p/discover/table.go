@@ -37,7 +37,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 )
 
@@ -425,7 +424,7 @@ func (tab *Table) doRefresh(done chan struct{}) {
 	// Run self lookup to discover new neighbor nodes.
 	// We can only do this if we have a secp256k1 identity.
 	var key ecdsa.PublicKey
-	if err := tab.self.n.Load((*enr.Secp256k1)(&key)); err == nil {
+	if err := tab.self.n.Load((*enode.Secp256k1)(&key)); err == nil {
 		tab.lookup(encodePubkey(&key), false)
 	}
 

@@ -28,7 +28,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/nat"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -148,7 +147,7 @@ func (t *udp) nodeFromRPC(sender *net.UDPAddr, rn rpcNode) (*Node, error) {
 func nodeToRPC(n *Node) rpcNode {
 	var key ecdsa.PublicKey
 	var ekey encPubkey
-	if err := n.n.Load((*enr.Secp256k1)(&key)); err == nil {
+	if err := n.n.Load((*enode.Secp256k1)(&key)); err == nil {
 		ekey = encodePubkey(&key)
 	}
 	return rpcNode{ID: ekey, IP: n.n.IP(), UDP: uint16(n.n.UDP()), TCP: uint16(n.n.TCP())}

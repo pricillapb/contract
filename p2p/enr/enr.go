@@ -46,8 +46,7 @@ import (
 const SizeLimit = 300 // maximum encoded size of a node record in bytes
 
 var (
-	errNoID           = errors.New("unknown or unspecified identity scheme")
-	errInvalidSig     = errors.New("invalid signature")
+	ErrInvalidSig     = errors.New("invalid signature on node record")
 	errNotSorted      = errors.New("record key/value pairs are not sorted by key")
 	errDuplicateKey   = errors.New("record contains duplicate key")
 	errIncompletePair = errors.New("record contains incomplete k/v pair")
@@ -55,6 +54,32 @@ var (
 	errEncodeUnsigned = errors.New("can't encode unsigned record")
 	errNotFound       = errors.New("no such key in record")
 )
+
+// An IdentityScheme is capable of verifying record signatures and
+// deriving node addresses.
+type IdentityScheme interface {
+	Verify(r *Record, sig []byte) error
+	NodeAddr(r *Record) []byte
+}
+
+// SchemeMap is a registry of named identity schemes.
+type SchemeMap map[string]IdentityScheme
+
+func (m SchemeMap) Verify(r *Record, sig []byte) error {
+	s, _ := m[r.IdentityScheme()]
+	if s == nil {
+		return ErrInvalidSig
+	}
+	return s.Verify(r, sig)
+}
+
+func (m SchemeMap) NodeAddr(r *Record) []byte {
+	s, _ := m[r.IdentityScheme()]
+	if s == nil {
+		return nil
+	}
+	return s.NodeAddr(r)
+}
 
 // Record represents a node record. The zero value is an empty record.
 type Record struct {

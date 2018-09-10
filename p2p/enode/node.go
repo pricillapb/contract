@@ -53,6 +53,11 @@ func (n *Node) ID() ID {
 	return n.id
 }
 
+// Seq returns the sequence number of the underlying record.
+func (n *Node) Seq() uint64 {
+	return n.r.Seq()
+}
+
 // Incomplete returns true for nodes with no IP address.
 func (n *Node) Incomplete() bool {
 	return n.IP() == nil
@@ -70,21 +75,26 @@ func (n *Node) IP() net.IP {
 	return ip
 }
 
+// UDP returns the UDP port of the node.
 func (n *Node) UDP() int {
 	var port enr.UDP
 	n.Load(&port)
 	return int(port)
 }
 
+// UDP returns the TCP port of the node.
 func (n *Node) TCP() int {
 	var port enr.TCP
 	n.Load(&port)
 	return int(port)
 }
 
+// Pubkey returns the secp256k1 public key of the node, if present.
 func (n *Node) Pubkey() *ecdsa.PublicKey {
 	var key ecdsa.PublicKey
-	n.Load((*enr.Secp256k1)(&key))
+	if n.Load((*Secp256k1)(&key)) != nil {
+		return nil
+	}
 	return &key
 }
 
@@ -101,7 +111,7 @@ func (n *Node) ValidateComplete() error {
 		return errors.New("invalid IP (multicast/unspecified)")
 	}
 	// Validate the node key (on curve, etc.).
-	var key enr.Secp256k1
+	var key Secp256k1
 	return n.Load(&key)
 }
 

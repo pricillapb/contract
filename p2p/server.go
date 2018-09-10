@@ -35,7 +35,6 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/discv5"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/nat"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 )
@@ -892,7 +891,7 @@ func (srv *Server) setupConn(c *conn, flags connFlag, dialDest *enode.Node) erro
 	var dialPubkey *ecdsa.PublicKey
 	if dialDest != nil {
 		dialPubkey = new(ecdsa.PublicKey)
-		if err := dialDest.Load((*enr.Secp256k1)(dialPubkey)); err != nil {
+		if err := dialDest.Load((*enode.Secp256k1)(dialPubkey)); err != nil {
 			return fmt.Errorf("dial destination doesn't have a secp256k1 public key")
 		}
 	}
