@@ -348,35 +348,44 @@ func (srv *Server) SubscribeEvents(ch chan *PeerEvent) event.Subscription {
 // Self returns the local node's endpoint information.
 func (srv *Server) Self() *enode.Node {
 	srv.lock.Lock()
-	defer srv.lock.Unlock()
+	running, listener, ntab := srv.running, srv.listener, srv.ntab
+	srv.lock.Unlock()
 
-	if !srv.running {
+	if !running {
 		return enode.NewV4(&srv.PrivateKey.PublicKey, net.ParseIP("0.0.0.0"), 0, 0)
 	}
-	return srv.makeSelf(srv.listener, srv.ntab)
+	return srv.makeSelf(listener, ntab)
 }
 
 func (srv *Server) makeSelf(listener net.Listener, ntab discoverTable) *enode.Node {
 	// If the server's not running, return an empty node.
 	// If the node is running but discovery is off, manually assemble the node infos.
 	if ntab == nil {
-		var addr *net.TCPAddr
-		if listener == nil {
-			// Inbound connections disabled, use zero address.
-			addr = &net.TCPAddr{IP: net.IP{0, 0, 0, 0}, Port: 0}
-		} else {
-			// Otherwise inject the listener address too.
-			addr = listener.Addr().(*net.TCPAddr)
-			if srv.NAT != nil {
-				if ip, err := srv.NAT.ExternalIP(); err == nil {
-					addr.IP = ip
-				}
-			}
-		}
+		addr := srv.tcpAddr(listener)
 		return enode.NewV4(&srv.PrivateKey.PublicKey, addr.IP, addr.Port, 0)
 	}
 	// Otherwise return the discovery node.
 	return ntab.Self()
+}
+
+func (srv *Server) tcpAddr(listener net.Listener) net.TCPAddr {
+	addr := net.TCPAddr{IP: net.IP{0, 0, 0, 0}}
+	if listener == nil {
+		return addr // Inbound connections disabled, use zero address.
+	}
+	// Otherwise inject the listener address too.
+	if a, ok := listener.Addr().(*net.TCPAddr); ok {
+		addr = *a
+	}
+	if srv.NAT != nil {
+		if ip, err := srv.NAT.ExternalIP(); err == nil {
+			addr.IP = ip
+		}
+	}
+	if addr.IP.IsUnspecified() {
+		addr.IP = net.IP{127, 0, 0, 1}
+	}
+	return addr
 }
 
 // Stop terminates the server and all active peer connections.
