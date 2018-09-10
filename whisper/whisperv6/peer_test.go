@@ -510,7 +510,7 @@ func waitForServersToStart(t *testing.T) {
 //two generic whisper node handshake
 func TestPeerHandshakeWithTwoFullNode(t *testing.T) {
 	w1 := Whisper{}
-	p1 := newPeer(&w1, p2p.NewPeer(discover.NodeID{}, "test", []p2p.Cap{}), &rwStub{[]interface{}{ProtocolVersion, uint64(123), make([]byte, BloomFilterSize), false}})
+	p1 := newPeer(&w1, p2p.NewPeer(enode.ID{}, "test", []p2p.Cap{}), &rwStub{[]interface{}{ProtocolVersion, uint64(123), make([]byte, BloomFilterSize), false}})
 	err := p1.handshake()
 	if err != nil {
 		t.Fatal()
@@ -520,7 +520,7 @@ func TestPeerHandshakeWithTwoFullNode(t *testing.T) {
 //two generic whisper node handshake. one don't send light flag
 func TestHandshakeWithOldVersionWithoutLightModeFlag(t *testing.T) {
 	w1 := Whisper{}
-	p1 := newPeer(&w1, p2p.NewPeer(discover.NodeID{}, "test", []p2p.Cap{}), &rwStub{[]interface{}{ProtocolVersion, uint64(123), make([]byte, BloomFilterSize)}})
+	p1 := newPeer(&w1, p2p.NewPeer(enode.ID{}, "test", []p2p.Cap{}), &rwStub{[]interface{}{ProtocolVersion, uint64(123), make([]byte, BloomFilterSize)}})
 	err := p1.handshake()
 	if err != nil {
 		t.Fatal()
@@ -532,7 +532,7 @@ func TestTwoLightPeerHandshakeRestrictionOff(t *testing.T) {
 	w1 := Whisper{}
 	w1.settings.Store(restrictConnectionBetweenLightClientsIdx, false)
 	w1.SetLightClientMode(true)
-	p1 := newPeer(&w1, p2p.NewPeer(discover.NodeID{}, "test", []p2p.Cap{}), &rwStub{[]interface{}{ProtocolVersion, uint64(123), make([]byte, BloomFilterSize), true}})
+	p1 := newPeer(&w1, p2p.NewPeer(enode.ID{}, "test", []p2p.Cap{}), &rwStub{[]interface{}{ProtocolVersion, uint64(123), make([]byte, BloomFilterSize), true}})
 	err := p1.handshake()
 	if err != nil {
 		t.FailNow()
@@ -544,7 +544,7 @@ func TestTwoLightPeerHandshakeError(t *testing.T) {
 	w1 := Whisper{}
 	w1.settings.Store(restrictConnectionBetweenLightClientsIdx, true)
 	w1.SetLightClientMode(true)
-	p1 := newPeer(&w1, p2p.NewPeer(discover.NodeID{}, "test", []p2p.Cap{}), &rwStub{[]interface{}{ProtocolVersion, uint64(123), make([]byte, BloomFilterSize), true}})
+	p1 := newPeer(&w1, p2p.NewPeer(enode.ID{}, "test", []p2p.Cap{}), &rwStub{[]interface{}{ProtocolVersion, uint64(123), make([]byte, BloomFilterSize), true}})
 	err := p1.handshake()
 	if err == nil {
 		t.FailNow()
