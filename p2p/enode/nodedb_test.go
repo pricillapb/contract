@@ -77,7 +77,7 @@ var nodeDBInt64Tests = []struct {
 }
 
 func TestDBInt64(t *testing.T) {
-	db, _ := NewDB("", ID{})
+	db, _ := OpenDB("")
 	defer db.Close()
 
 	tests := nodeDBInt64Tests
@@ -109,7 +109,7 @@ func TestDBFetchStore(t *testing.T) {
 	inst := time.Now()
 	num := 314
 
-	db, _ := NewDB("", ID{})
+	db, _ := OpenDB("")
 	defer db.Close()
 
 	// Check fetch/store operations on a node ping object
@@ -248,7 +248,7 @@ func TestDBSeedQuery(t *testing.T) {
 }
 
 func testSeedQuery() error {
-	db, _ := NewDB("", nodeDBSeedQueryNodes[1].node.ID())
+	db, _ := OpenDB("")
 	defer db.Close()
 
 	// Insert a batch of nodes for querying
@@ -268,7 +268,7 @@ func testSeedQuery() error {
 		have[seed.ID()] = struct{}{}
 	}
 	want := make(map[ID]struct{})
-	for _, seed := range nodeDBSeedQueryNodes[2:] {
+	for _, seed := range nodeDBSeedQueryNodes[1:] {
 		want[seed.node.ID()] = struct{}{}
 	}
 	if len(seeds) != len(want) {
@@ -300,7 +300,7 @@ func TestDBPersistency(t *testing.T) {
 	)
 
 	// Create a persistent database and store some values
-	db, err := NewDB(filepath.Join(root, "database"), ID{})
+	db, err := OpenDB(filepath.Join(root, "database"))
 	if err != nil {
 		t.Fatalf("failed to create persistent database: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestDBPersistency(t *testing.T) {
 	db.Close()
 
 	// Reopen the database and check the value
-	db, err = NewDB(filepath.Join(root, "database"), ID{})
+	db, err = OpenDB(filepath.Join(root, "database"))
 	if err != nil {
 		t.Fatalf("failed to open persistent database: %v", err)
 	}
@@ -347,7 +347,7 @@ var nodeDBExpirationNodes = []struct {
 }
 
 func TestDBExpiration(t *testing.T) {
-	db, _ := NewDB("", ID{})
+	db, _ := OpenDB("")
 	defer db.Close()
 
 	// Add all the test nodes and set their last pong time
@@ -368,36 +368,5 @@ func TestDBExpiration(t *testing.T) {
 		if (node == nil && !seed.exp) || (node != nil && seed.exp) {
 			t.Errorf("node %d: expiration mismatch: have %v, want %v", i, node, seed.exp)
 		}
-	}
-}
-
-func TestDBSelfExpiration(t *testing.T) {
-	// Find a node in the tests that shouldn't expire, and assign it as self
-	var self ID
-	for _, node := range nodeDBExpirationNodes {
-		if !node.exp {
-			self = node.node.ID()
-			break
-		}
-	}
-	db, _ := NewDB("", self)
-	defer db.Close()
-
-	// Add all the test nodes and set their last pong time
-	for i, seed := range nodeDBExpirationNodes {
-		if err := db.UpdateNode(seed.node); err != nil {
-			t.Fatalf("node %d: failed to insert: %v", i, err)
-		}
-		if err := db.UpdateLastPongReceived(seed.node.ID(), seed.pong); err != nil {
-			t.Fatalf("node %d: failed to update bondTime: %v", i, err)
-		}
-	}
-	// Expire the nodes and make sure self has been evacuated too
-	if err := db.expireNodes(); err != nil {
-		t.Fatalf("failed to expire nodes: %v", err)
-	}
-	node := db.Node(self)
-	if node != nil {
-		t.Errorf("self not evacuated")
 	}
 }

@@ -32,7 +32,7 @@ func newTestTable(t transport) (*Table, *enode.DB) {
 	var r enr.Record
 	r.Set(enr.IP{0, 0, 0, 0})
 	n := enode.SignNull(&r, enode.ID{})
-	db, _ := enode.NewDB("", enode.ID{})
+	db, _ := enode.OpenDB("")
 	tab, _ := newTable(t, n, db, nil)
 	return tab, db
 }

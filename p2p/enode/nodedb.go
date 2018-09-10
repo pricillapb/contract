@@ -41,13 +41,12 @@ var (
 	nodeDBNilID          = ID{}           // Special node ID to use as a nil element.
 	nodeDBNodeExpiration = 24 * time.Hour // Time after which an unseen node should be dropped.
 	nodeDBCleanupCycle   = time.Hour      // Time period for running the expiration task.
-	nodeDBVersion        = 5
+	nodeDBVersion        = 6
 )
 
 // DB stores all nodes we know about.
 type DB struct {
 	lvl    *leveldb.DB   // Interface to the database itself
-	self   ID            // Own node id to prevent adding it into the database
 	runner sync.Once     // Ensures we can start at most one expirer
 	quit   chan struct{} // Channel to signal the expiring thread to stop
 }
@@ -63,33 +62,27 @@ var (
 	nodeDBDiscoverFindFails = nodeDBDiscoverRoot + ":findfail"
 )
 
-// NewDB creates a new node database for storing and retrieving infos about
-// known peers in the network. If no path is given, an in-memory, temporary
-// database is constructed.
-func NewDB(path string, self ID) (*DB, error) {
+// OpenDB opens a node database for storing and retrieving infos about known peers in the
+// network. If no path is given an in-memory, temporary database is constructed.
+func OpenDB(path string) (*DB, error) {
 	if path == "" {
-		return newMemoryDB(self)
+		return newMemoryDB()
 	}
-	return newPersistentDB(path, self)
+	return newPersistentDB(path)
 }
 
-// newMemoryNodeDB creates a new in-memory node database without a persistent
-// backend.
-func newMemoryDB(self ID) (*DB, error) {
+// newMemoryNodeDB creates a new in-memory node database without a persistent backend.
+func newMemoryDB() (*DB, error) {
 	db, err := leveldb.Open(storage.NewMemStorage(), nil)
 	if err != nil {
 		return nil, err
 	}
-	return &DB{
-		lvl:  db,
-		self: self,
-		quit: make(chan struct{}),
-	}, nil
+	return &DB{lvl: db, quit: make(chan struct{})}, nil
 }
 
 // newPersistentNodeDB creates/opens a leveldb backed persistent node database,
 // also flushing its contents in case of a version mismatch.
-func newPersistentDB(path string, self ID) (*DB, error) {
+func newPersistentDB(path string) (*DB, error) {
 	opts := &opt.Options{OpenFilesCacheCapacity: 5}
 	db, err := leveldb.OpenFile(path, opts)
 	if _, iscorrupted := err.(*errors.ErrCorrupted); iscorrupted {
@@ -119,14 +112,10 @@ func newPersistentDB(path string, self ID) (*DB, error) {
 			if err = os.RemoveAll(path); err != nil {
 				return nil, err
 			}
-			return newPersistentDB(path, self)
+			return newPersistentDB(path)
 		}
 	}
-	return &DB{
-		lvl:  db,
-		self: self,
-		quit: make(chan struct{}),
-	}, nil
+	return &DB{lvl: db, quit: make(chan struct{})}, nil
 }
 
 // makeKey generates the leveldb key-blob from a node id and its particular
@@ -260,10 +249,8 @@ func (db *DB) expireNodes() error {
 			continue
 		}
 		// Skip the node if not expired yet (and not self)
-		if !bytes.Equal(id[:], db.self[:]) {
-			if seen := db.LastPongReceived(id); seen.After(threshold) {
-				continue
-			}
+		if seen := db.LastPongReceived(id); seen.After(threshold) {
+			continue
 		}
 		// Otherwise delete all associated information
 		db.DeleteNode(id)
@@ -329,9 +316,6 @@ seek:
 		if n == nil {
 			id[0] = 0
 			continue seek // iterator exhausted
-		}
-		if n.ID() == db.self {
-			continue seek
 		}
 		if now.Sub(db.LastPongReceived(n.ID())) > maxAge {
 			continue seek

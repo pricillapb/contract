@@ -252,8 +252,8 @@ func newUDP(c conn, cfg Config) (*Table, *udp, error) {
 	if cfg.AnnounceAddr != nil {
 		realaddr = cfg.AnnounceAddr
 	}
-	self := enode.NewV4(&cfg.PrivateKey.PublicKey, realaddr.IP, 0, realaddr.Port)
-	db, err := enode.NewDB(cfg.NodeDBPath, self.ID())
+	self := enode.NewV4(&cfg.PrivateKey.PublicKey, realaddr.IP, realaddr.Port, realaddr.Port)
+	db, err := enode.OpenDB(cfg.NodeDBPath)
 	if err != nil {
 		return nil, nil, err
 	}
