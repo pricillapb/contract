@@ -38,10 +38,10 @@ func newTestTable(t transport) (*Table, *enode.DB) {
 }
 
 // nodeAtDistance creates a node for which enode.LogDist(base, n.id) == ld.
-func nodeAtDistance(base enode.ID, ld int, ip net.IP) *Node {
+func nodeAtDistance(base enode.ID, ld int, ip net.IP) *node {
 	var r enr.Record
 	r.Set(enr.IP(ip))
-	return convertNode(enode.SignNull(&r, idAtDistance(base, ld)))
+	return wrapNode(enode.SignNull(&r, idAtDistance(base, ld)))
 }
 
 // idAtDistance returns a random hash such that enode.LogDist(a, b) == n
@@ -69,11 +69,11 @@ func intIP(i int) net.IP {
 }
 
 // fillBucket inserts nodes into the given bucket until it is full.
-func fillBucket(tab *Table, n *Node) (last *Node) {
-	ld := enode.LogDist(tab.self.id, n.id)
-	b := tab.bucket(n.id)
+func fillBucket(tab *Table, n *node) (last *node) {
+	ld := enode.LogDist(tab.self.ID(), n.ID())
+	b := tab.bucket(n.ID())
 	for len(b.entries) < bucketSize {
-		b.entries = append(b.entries, nodeAtDistance(tab.self.id, ld, intIP(ld)))
+		b.entries = append(b.entries, nodeAtDistance(tab.self.ID(), ld, intIP(ld)))
 	}
 	return b.entries[bucketSize-1]
 }
@@ -90,7 +90,7 @@ func newPingRecorder() *pingRecorder {
 	}
 }
 
-func (t *pingRecorder) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]*Node, error) {
+func (t *pingRecorder) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]*node, error) {
 	return nil, nil
 }
 
@@ -112,36 +112,36 @@ func (t *pingRecorder) ping(toid enode.ID, toaddr *net.UDPAddr) error {
 
 func (t *pingRecorder) close() {}
 
-func hasDuplicates(slice []*Node) bool {
+func hasDuplicates(slice []*node) bool {
 	seen := make(map[enode.ID]bool)
 	for i, e := range slice {
 		if e == nil {
 			panic(fmt.Sprintf("nil *Node at %d", i))
 		}
-		if seen[e.id] {
+		if seen[e.ID()] {
 			return true
 		}
-		seen[e.id] = true
+		seen[e.ID()] = true
 	}
 	return false
 }
 
-func contains(ns []*Node, id enode.ID) bool {
+func contains(ns []*node, id enode.ID) bool {
 	for _, n := range ns {
-		if n.id == id {
+		if n.ID() == id {
 			return true
 		}
 	}
 	return false
 }
 
-func sortedByDistanceTo(distbase enode.ID, slice []*Node) bool {
+func sortedByDistanceTo(distbase enode.ID, slice []*node) bool {
 	var last enode.ID
 	for i, e := range slice {
-		if i > 0 && enode.DistCmp(distbase, e.id, last) < 0 {
+		if i > 0 && enode.DistCmp(distbase, e.ID(), last) < 0 {
 			return false
 		}
-		last = e.id
+		last = e.ID()
 	}
 	return true
 }

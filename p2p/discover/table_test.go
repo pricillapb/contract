@@ -29,6 +29,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
 func TestTable_pingReplace(t *testing.T) {
@@ -56,18 +57,18 @@ func testPingReplace(t *testing.T, newNodeIsResponding, lastInBucketIsResponding
 
 	// Fill up the sender's bucket.
 	pingKey, _ := crypto.HexToECDSA("45a915e4d060149eb4365960e6a7a45f334393093061116b197e3240065ff2d8")
-	pingSender := convertNode(enode.NewV4(&pingKey.PublicKey, net.IP{}, 99, 99))
+	pingSender := wrapNode(enode.NewV4(&pingKey.PublicKey, net.IP{}, 99, 99))
 	last := fillBucket(tab, pingSender)
 
 	// Add the sender as if it just pinged us. Revalidate should replace the last node in
 	// its bucket if it is unresponsive. Revalidate again to ensure that
-	transport.dead[last.id] = !lastInBucketIsResponding
-	transport.dead[pingSender.id] = !newNodeIsResponding
+	transport.dead[last.ID()] = !lastInBucketIsResponding
+	transport.dead[pingSender.ID()] = !newNodeIsResponding
 	tab.add(pingSender)
 	tab.doRevalidate(make(chan struct{}, 1))
 	tab.doRevalidate(make(chan struct{}, 1))
 
-	if !transport.pinged[last.id] {
+	if !transport.pinged[last.ID()] {
 		// Oldest node in bucket is pinged to see whether it is still alive.
 		t.Error("table did not ping last node in bucket")
 	}
@@ -78,14 +79,14 @@ func testPingReplace(t *testing.T, newNodeIsResponding, lastInBucketIsResponding
 	if !lastInBucketIsResponding && !newNodeIsResponding {
 		wantSize--
 	}
-	if l := len(tab.bucket(pingSender.id).entries); l != wantSize {
+	if l := len(tab.bucket(pingSender.ID()).entries); l != wantSize {
 		t.Errorf("wrong bucket size after bond: got %d, want %d", l, wantSize)
 	}
-	if found := contains(tab.bucket(pingSender.id).entries, last.id); found != lastInBucketIsResponding {
+	if found := contains(tab.bucket(pingSender.ID()).entries, last.ID()); found != lastInBucketIsResponding {
 		t.Errorf("last entry found: %t, want: %t", found, lastInBucketIsResponding)
 	}
 	wantNewEntry := newNodeIsResponding && !lastInBucketIsResponding
-	if found := contains(tab.bucket(pingSender.id).entries, pingSender.id); found != wantNewEntry {
+	if found := contains(tab.bucket(pingSender.ID()).entries, pingSender.ID()); found != wantNewEntry {
 		t.Errorf("new entry found: %t, want: %t", found, wantNewEntry)
 	}
 }
@@ -98,7 +99,7 @@ func TestBucket_bumpNoDuplicates(t *testing.T) {
 		Values: func(args []reflect.Value, rand *rand.Rand) {
 			// generate a random list of nodes. this will be the content of the bucket.
 			n := rand.Intn(bucketSize-1) + 1
-			nodes := make([]*Node, n)
+			nodes := make([]*node, n)
 			for i := range nodes {
 				nodes[i] = nodeAtDistance(enode.ID{}, 200, intIP(200))
 			}
@@ -112,8 +113,8 @@ func TestBucket_bumpNoDuplicates(t *testing.T) {
 		},
 	}
 
-	prop := func(nodes []*Node, bumps []int) (ok bool) {
-		b := &bucket{entries: make([]*Node, len(nodes))}
+	prop := func(nodes []*node, bumps []int) (ok bool) {
+		b := &bucket{entries: make([]*node, len(nodes))}
 		copy(b.entries, nodes)
 		for i, pos := range bumps {
 			b.bump(b.entries[pos])
@@ -140,7 +141,7 @@ func TestTable_IPLimit(t *testing.T) {
 	defer db.Close()
 
 	for i := 0; i < tableIPLimit+1; i++ {
-		n := nodeAtDistance(tab.self.id, i, net.IP{172, 0, 1, byte(i)})
+		n := nodeAtDistance(tab.self.ID(), i, net.IP{172, 0, 1, byte(i)})
 		tab.add(n)
 	}
 	if tab.len() > tableIPLimit {
@@ -157,7 +158,7 @@ func TestTable_BucketIPLimit(t *testing.T) {
 
 	d := 3
 	for i := 0; i < bucketIPLimit+1; i++ {
-		n := nodeAtDistance(tab.self.id, d, net.IP{172, 0, 1, byte(i)})
+		n := nodeAtDistance(tab.self.ID(), d, net.IP{172, 0, 1, byte(i)})
 		tab.add(n)
 	}
 	if tab.len() > bucketIPLimit {
@@ -202,15 +203,15 @@ func TestTable_closest(t *testing.T) {
 		// check that the result nodes have minimum distance to target.
 		for _, b := range tab.buckets {
 			for _, n := range b.entries {
-				if contains(result, n.id) {
+				if contains(result, n.ID()) {
 					continue // don't run the check below for nodes in result
 				}
-				farthestResult := result[len(result)-1].id
-				if enode.DistCmp(test.Target, n.id, farthestResult) < 0 {
+				farthestResult := result[len(result)-1].ID()
+				if enode.DistCmp(test.Target, n.ID(), farthestResult) < 0 {
 					t.Errorf("table contains node that is closer to target but it's not in result")
 					t.Logf("  Target:          %v", test.Target)
 					t.Logf("  Farthest Result: %v", farthestResult)
-					t.Logf("  ID:              %v", n.id)
+					t.Logf("  ID:              %v", n.ID())
 					return false
 				}
 			}
@@ -239,14 +240,14 @@ func TestTable_ReadRandomNodesGetAll(t *testing.T) {
 
 		for i := 0; i < len(buf); i++ {
 			ld := cfg.Rand.Intn(len(tab.buckets))
-			tab.stuff([]*Node{nodeAtDistance(tab.self.id, ld, intIP(ld))})
+			tab.stuff([]*node{nodeAtDistance(tab.self.ID(), ld, intIP(ld))})
 		}
 		gotN := tab.ReadRandomNodes(buf)
 		if gotN != tab.len() {
 			t.Errorf("wrong number of nodes, got %d, want %d", gotN, tab.len())
 			return false
 		}
-		if hasDuplicates(convertNodes(buf[:gotN])) {
+		if hasDuplicates(wrapNodes(buf[:gotN])) {
 			t.Errorf("result contains duplicates")
 			return false
 		}
@@ -260,7 +261,7 @@ func TestTable_ReadRandomNodesGetAll(t *testing.T) {
 type closeTest struct {
 	Self   enode.ID
 	Target enode.ID
-	All    []*Node
+	All    []*node
 	N      int
 }
 
@@ -271,7 +272,8 @@ func (*closeTest) Generate(rand *rand.Rand, size int) reflect.Value {
 		N:      rand.Intn(bucketSize),
 	}
 	for _, id := range gen([]enode.ID{}, rand).([]enode.ID) {
-		t.All = append(t.All, &Node{id: id})
+		n := enode.SignNull(new(enr.Record), id)
+		t.All = append(t.All, wrapNode(n))
 	}
 	return reflect.ValueOf(t)
 }
@@ -282,18 +284,18 @@ func TestTable_Lookup(t *testing.T) {
 	defer db.Close()
 
 	// lookup on empty table returns no nodes
-	if results := tab.Lookup(lookupTestnet.target); len(results) > 0 {
+	if results := tab.lookup(lookupTestnet.target, false); len(results) > 0 {
 		t.Fatalf("lookup on empty table returned %d results: %#v", len(results), results)
 	}
 	// seed table with initial node (otherwise lookup will terminate immediately)
 	seedKey, _ := decodePubkey(lookupTestnet.dists[256][0])
-	seed := convertNode(enode.NewV4(seedKey, net.IP{}, 0, 256))
-	tab.stuff([]*Node{seed})
+	seed := wrapNode(enode.NewV4(seedKey, net.IP{}, 0, 256))
+	tab.stuff([]*node{seed})
 
-	results := tab.Lookup(lookupTestnet.target)
+	results := tab.lookup(lookupTestnet.target, true)
 	t.Logf("results:")
 	for _, e := range results {
-		t.Logf("  ld=%d, %x", enode.LogDist(lookupTestnet.targetSha, e.id), e.id[:])
+		t.Logf("  ld=%d, %x", enode.LogDist(lookupTestnet.targetSha, e.ID()), e.ID().Bytes())
 	}
 	if len(results) != bucketSize {
 		t.Errorf("wrong number of results: got %d, want %d", len(results), bucketSize)
@@ -508,17 +510,17 @@ type preminedTestnet struct {
 	dists     [hashBits + 1][]encPubkey
 }
 
-func (tn *preminedTestnet) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]*Node, error) {
+func (tn *preminedTestnet) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]*node, error) {
 	// current log distance is encoded in port number
 	// fmt.Println("findnode query at dist", toaddr.Port)
 	if toaddr.Port == 0 {
 		panic("query to node at distance 0")
 	}
 	next := toaddr.Port - 1
-	var result []*Node
+	var result []*node
 	for i, ekey := range tn.dists[toaddr.Port] {
 		key, _ := decodePubkey(ekey)
-		node := convertNode(enode.NewV4(key, net.ParseIP("127.0.0.1"), i, next))
+		node := wrapNode(enode.NewV4(key, net.ParseIP("127.0.0.1"), i, next))
 		result = append(result, node)
 	}
 	return result, nil

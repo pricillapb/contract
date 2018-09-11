@@ -29,11 +29,10 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
-// Node represents a host on the network.
+// node represents a host on the network.
 // The fields of Node may not be modified.
-type Node struct {
-	n       enode.Node
-	id      enode.ID  // cached copy of the node ID
+type node struct {
+	enode.Node
 	addedAt time.Time // time when the node was added to the table
 }
 
@@ -72,30 +71,34 @@ func recoverNodeKey(hash, sig []byte) (key encPubkey, err error) {
 	return key, nil
 }
 
-func convertNode(n *enode.Node) *Node {
-	return &Node{n: *n, id: n.ID()}
+func wrapNode(n *enode.Node) *node {
+	return &node{Node: *n}
 }
 
-func convertNodes(ns []*enode.Node) []*Node {
-	result := make([]*Node, len(ns))
+func wrapNodes(ns []*enode.Node) []*node {
+	result := make([]*node, len(ns))
 	for i, n := range ns {
-		result[i] = convertNode(n)
+		result[i] = wrapNode(n)
 	}
 	return result
 }
 
-func unwrapNodes(ns []*Node) []*enode.Node {
+func unwrapNode(n *node) *enode.Node {
+	return &n.Node
+}
+
+func unwrapNodes(ns []*node) []*enode.Node {
 	result := make([]*enode.Node, len(ns))
 	for i, n := range ns {
-		result[i] = &n.n
+		result[i] = unwrapNode(n)
 	}
 	return result
 }
 
-func (n *Node) addr() *net.UDPAddr {
-	return &net.UDPAddr{IP: n.n.IP(), Port: n.n.UDP()}
+func (n *node) addr() *net.UDPAddr {
+	return &net.UDPAddr{IP: n.IP(), Port: n.UDP()}
 }
 
-func (n *Node) String() string {
-	return n.n.String()
+func (n *node) String() string {
+	return n.String()
 }

@@ -125,7 +125,7 @@ func makeEndpoint(addr *net.UDPAddr, tcpPort uint16) rpcEndpoint {
 	return rpcEndpoint{IP: ip, UDP: uint16(addr.Port), TCP: tcpPort}
 }
 
-func (t *udp) nodeFromRPC(sender *net.UDPAddr, rn rpcNode) (*Node, error) {
+func (t *udp) nodeFromRPC(sender *net.UDPAddr, rn rpcNode) (*node, error) {
 	if rn.UDP <= 1024 {
 		return nil, errors.New("low port")
 	}
@@ -139,18 +139,18 @@ func (t *udp) nodeFromRPC(sender *net.UDPAddr, rn rpcNode) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	n := convertNode(enode.NewV4(key, rn.IP, int(rn.TCP), int(rn.UDP)))
-	err = n.n.ValidateComplete()
+	n := wrapNode(enode.NewV4(key, rn.IP, int(rn.TCP), int(rn.UDP)))
+	err = n.ValidateComplete()
 	return n, err
 }
 
-func nodeToRPC(n *Node) rpcNode {
+func nodeToRPC(n *node) rpcNode {
 	var key ecdsa.PublicKey
 	var ekey encPubkey
-	if err := n.n.Load((*enode.Secp256k1)(&key)); err == nil {
+	if err := n.Load((*enode.Secp256k1)(&key)); err == nil {
 		ekey = encodePubkey(&key)
 	}
-	return rpcNode{ID: ekey, IP: n.n.IP(), UDP: uint16(n.n.UDP()), TCP: uint16(n.n.TCP())}
+	return rpcNode{ID: ekey, IP: n.IP(), UDP: uint16(n.UDP()), TCP: uint16(n.TCP())}
 }
 
 type packet interface {
@@ -322,7 +322,7 @@ func (t *udp) waitping(from enode.ID) error {
 
 // findnode sends a findnode request to the given node and waits until
 // the node has sent up to k neighbors.
-func (t *udp) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]*Node, error) {
+func (t *udp) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]*node, error) {
 	// If we haven't seen a ping from the destination node for a while, it won't remember
 	// our endpoint proof and reject findnode. Solicit a ping first.
 	if time.Since(t.db.LastPingReceived(toid)) > bondExpiration {
@@ -330,7 +330,7 @@ func (t *udp) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]
 		t.waitping(toid)
 	}
 
-	nodes := make([]*Node, 0, bucketSize)
+	nodes := make([]*node, 0, bucketSize)
 	nreceived := 0
 	errc := t.pending(toid, neighborsPacket, func(r interface{}) bool {
 		reply := r.(*neighbors)
@@ -625,14 +625,14 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 		ReplyTok:   mac,
 		Expiration: uint64(time.Now().Add(expiration).Unix()),
 	})
-	n := convertNode(enode.NewV4(key, from.IP, int(req.From.TCP), from.Port))
-	t.handleReply(n.id, pingPacket, req)
-	if time.Since(t.db.LastPongReceived(n.id)) > bondExpiration {
-		t.sendPing(n.id, from, func() { t.addThroughPing(n) })
+	n := wrapNode(enode.NewV4(key, from.IP, int(req.From.TCP), from.Port))
+	t.handleReply(n.ID(), pingPacket, req)
+	if time.Since(t.db.LastPongReceived(n.ID())) > bondExpiration {
+		t.sendPing(n.ID(), from, func() { t.addThroughPing(n) })
 	} else {
 		t.addThroughPing(n)
 	}
-	t.db.UpdateLastPingReceived(n.id, time.Now())
+	t.db.UpdateLastPingReceived(n.ID(), time.Now())
 	return nil
 }
 
@@ -676,7 +676,7 @@ func (req *findnode) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []
 	// Send neighbors in chunks with at most maxNeighbors per packet
 	// to stay below the 1280 byte limit.
 	for _, n := range closest {
-		if netutil.CheckRelayIP(from.IP, n.n.IP()) == nil {
+		if netutil.CheckRelayIP(from.IP, n.IP()) == nil {
 			p.Nodes = append(p.Nodes, nodeToRPC(n))
 		}
 		if len(p.Nodes) == maxNeighbors {
