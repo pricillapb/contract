@@ -549,9 +549,12 @@ func (tab *Table) bucket(id enode.ID) *bucket {
 //
 // The caller must not hold tab.mutex.
 func (tab *Table) add(n *node) {
+	if n.ID() == tab.self.ID() {
+		return
+	}
+
 	tab.mutex.Lock()
 	defer tab.mutex.Unlock()
-
 	b := tab.bucket(n.ID())
 	if !tab.bumpOrAdd(b, n) {
 		// Node is not in table. Add it to the replacement list.
