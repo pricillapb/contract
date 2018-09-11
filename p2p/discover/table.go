@@ -142,14 +142,12 @@ func (tab *Table) seedRand() {
 }
 
 // Self returns the local node.
-// The returned node should not be modified by the caller.
 func (tab *Table) Self() *enode.Node {
 	return unwrapNode(tab.self)
 }
 
-// ReadRandomNodes fills the given slice with random nodes from the
-// table. It will not write the same node more than once. The nodes in
-// the slice are copies and can be modified by the caller.
+// ReadRandomNodes fills the given slice with random nodes from the table. The results
+// are guaranteed to be unique for a single invocation, no node will appear twice.
 func (tab *Table) ReadRandomNodes(buf []*enode.Node) (n int) {
 	if !tab.isInitDone() {
 		return 0
