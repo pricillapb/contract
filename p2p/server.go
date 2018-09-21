@@ -160,6 +160,8 @@ type Server struct {
 	lock    sync.Mutex // protects running
 	running bool
 
+	nodedb       *enode.DB
+	localnode    *enode.LocalNode
 	ntab         discoverTable
 	listener     net.Listener
 	ourHandshake *protoHandshake
@@ -363,7 +365,7 @@ func (srv *Server) makeSelf(listener net.Listener, ntab discoverTable) *enode.No
 		return enode.NewV4(&srv.PrivateKey.PublicKey, addr.IP, addr.Port, 0)
 	}
 	// Otherwise return the discovery node.
-	return ntab.Self()
+	return srv.localnode.Node()
 }
 
 func (srv *Server) tcpAddr(listener net.Listener) net.TCPAddr {
@@ -466,6 +468,13 @@ func (srv *Server) Start() (err error) {
 	srv.peerOp = make(chan peerOpFunc)
 	srv.peerOpDone = make(chan struct{})
 
+	db, err := enode.OpenDB(srv.Config.NodeDatabase)
+	if err != nil {
+		return err
+	}
+	srv.nodedb = db
+	srv.localnode = enode.NewLocalNode(db, srv.PrivateKey)
+
 	var (
 		conn      *net.UDPConn
 		sconn     *sharedUDPConn
@@ -502,14 +511,12 @@ func (srv *Server) Start() (err error) {
 	// node table
 	if !srv.NoDiscovery {
 		cfg := discover.Config{
-			PrivateKey:   srv.PrivateKey,
-			AnnounceAddr: realaddr,
-			NodeDBPath:   srv.NodeDatabase,
-			NetRestrict:  srv.NetRestrict,
-			Bootnodes:    srv.BootstrapNodes,
-			Unhandled:    unhandled,
+			PrivateKey:  srv.PrivateKey,
+			NetRestrict: srv.NetRestrict,
+			Bootnodes:   srv.BootstrapNodes,
+			Unhandled:   unhandled,
 		}
-		ntab, err := discover.ListenUDP(conn, cfg)
+		ntab, err := discover.ListenUDP(conn, srv.localnode, cfg)
 		if err != nil {
 			return err
 		}
@@ -536,7 +543,7 @@ func (srv *Server) Start() (err error) {
 	}
 
 	dynPeers := srv.maxDialedConns()
-	dialer := newDialState(srv.StaticNodes, srv.BootstrapNodes, srv.ntab, dynPeers, srv.NetRestrict)
+	dialer := newDialState(srv.localnode.ID(), srv.StaticNodes, srv.BootstrapNodes, srv.ntab, dynPeers, srv.NetRestrict)
 
 	// handshake
 	pubkey := crypto.FromECDSAPub(&srv.PrivateKey.PublicKey)
