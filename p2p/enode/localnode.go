@@ -118,21 +118,21 @@ func (ln *LocalNode) SetStaticEndpoint(addr *net.UDPAddr) {
 
 // UDPEndpointStatement should be called whenever a statement about the local node's
 // UDP endpoint is received. It feeds the local endpoint predictor.
-func (ln *LocalNode) UDPEndpointStatement(from, local *net.UDPAddr) {
+func (ln *LocalNode) UDPEndpointStatement(fromaddr, endpoint *net.UDPAddr) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	ln.udpTrack.AddStatement(from.String(), local.String())
+	ln.udpTrack.AddStatement(fromaddr.String(), endpoint.String())
 	ln.updateEndpoints()
 }
 
-// UDPContact should be called whenever the local node is in contact
-// with another node via UDP. It feeds the local endpoint predictor.
-func (ln *LocalNode) UDPContact(addr *net.UDPAddr) {
+// UDPContact should be called whenever the local node has announced itself to another node
+// via UDP. It feeds the local endpoint predictor.
+func (ln *LocalNode) UDPContact(toaddr *net.UDPAddr) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	ln.udpTrack.AddContact(addr.String())
+	ln.udpTrack.AddContact(toaddr.String())
 	ln.updateEndpoints()
 }
 
