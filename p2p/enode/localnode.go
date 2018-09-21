@@ -20,6 +20,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"net"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -40,29 +41,32 @@ const (
 // LocalNode produces the signed node record of a local node, i.e. a node
 // run in the current process.
 type LocalNode struct {
-	cur atomic.Value
+	cur atomic.Value // holds a non-nil node pointer while the record is up-to-date.
+	id  ID
 	key *ecdsa.PrivateKey
 	db  *DB
 
-	// Everything below is protected by a lock.
-	mu sync.Mutex
-	// Record data.
-	seq     uint64
-	entries map[string]enr.Entry
-	// Endpoint determination.
-	udpTrack       *netutil.IPTracker
-	staticEndpoint string
+	// everything below is protected by a lock
+	mu          sync.Mutex
+	seq         uint64
+	entries     map[string]enr.Entry
+	udpTrack    *netutil.IPTracker // predicts external UDP endpoint
+	staticIP    net.IP
+	staticTCP   int
+	fallbackIP  net.IP
+	fallbackUDP int
 }
 
 func NewLocalNode(db *DB, key *ecdsa.PrivateKey) *LocalNode {
 	ln := &LocalNode{
+		id:       PubkeyToIDV4(&key.PublicKey),
 		db:       db,
 		key:      key,
 		seq:      db.LocalSeq(),
 		udpTrack: netutil.NewIPTracker(iptrackWindow, iptrackContactWindow, iptrackMinStatements),
 		entries:  make(map[string]enr.Entry),
 	}
-	ln.sign()
+	ln.cur.Store((*Node)(nil))
 	return ln
 }
 
@@ -73,12 +77,20 @@ func (ln *LocalNode) Database() *DB {
 
 // Node returns the current version of the local node record.
 func (ln *LocalNode) Node() *Node {
+	n := ln.cur.Load().(*Node)
+	if n != nil {
+		return n
+	}
+	// Record was invalidated, sign a new copy.
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+	ln.sign()
 	return ln.cur.Load().(*Node)
 }
 
 // ID returns the local node ID.
 func (ln *LocalNode) ID() ID {
-	return ln.cur.Load().(*Node).ID()
+	return ln.id
 }
 
 // Set puts the given entry into the local record, overwriting
@@ -88,11 +100,14 @@ func (ln *LocalNode) Set(e enr.Entry) {
 	defer ln.mu.Unlock()
 
 	ln.set(e)
-	ln.sign()
 }
 
 func (ln *LocalNode) set(e enr.Entry) {
-	ln.entries[e.ENRKey()] = e
+	val, exists := ln.entries[e.ENRKey()]
+	if !exists || !reflect.DeepEqual(val, e) {
+		ln.entries[e.ENRKey()] = e
+		ln.cur.Store((*Node)(nil))
+	}
 }
 
 // Delete removes the given entry from the local record.
@@ -101,18 +116,45 @@ func (ln *LocalNode) Delete(e enr.Entry) {
 	defer ln.mu.Unlock()
 
 	ln.delete(e)
-	ln.sign()
 }
 
 func (ln *LocalNode) delete(e enr.Entry) {
-	delete(ln.entries, e.ENRKey())
+	_, exists := ln.entries[e.ENRKey()]
+	if exists {
+		delete(ln.entries, e.ENRKey())
+		ln.cur.Store((*Node)(nil))
+	}
 }
 
-func (ln *LocalNode) SetStaticEndpoint(addr *net.UDPAddr) {
+func (ln *LocalNode) SetStaticIP(ip net.IP) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	ln.staticEndpoint = addr.String()
+	ln.staticIP = ip
+	ln.updateEndpoints()
+}
+
+func (ln *LocalNode) SetFallbackIP(ip net.IP) {
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+
+	ln.fallbackIP = ip
+	ln.updateEndpoints()
+}
+
+func (ln *LocalNode) SetFallbackUDP(port int) {
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+
+	ln.fallbackUDP = port
+	ln.updateEndpoints()
+}
+
+func (ln *LocalNode) SetStaticTCP(port int) {
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+
+	ln.staticTCP = port
 	ln.updateEndpoints()
 }
 
@@ -137,36 +179,53 @@ func (ln *LocalNode) UDPContact(toaddr *net.UDPAddr) {
 }
 
 func (ln *LocalNode) updateEndpoints() {
-	n := ln.Node()
-	currentEndpoint := &net.UDPAddr{IP: n.IP(), Port: n.UDP()}
+	// Determine the endpoints.
+	newIP := ln.fallbackIP
+	newUDP := ln.fallbackUDP
+	if ip, port := predictAddr(ln.udpTrack); ip != nil {
+		newIP = ip
+		newUDP = port
+	}
+	if ln.staticIP != nil {
+		newIP = ln.staticIP
+	}
 
-	// Use static IP if set and prediction otherwise.
-	var newEndpoint string
-	if ln.staticEndpoint != "" {
-		newEndpoint = ln.staticEndpoint
+	// Update the record.
+	if newIP != nil && !newIP.IsUnspecified() {
+		ln.set(enr.IP(newIP))
 	} else {
-		newEndpoint = ln.udpTrack.PredictEndpoint()
-	}
-
-	switch newEndpoint {
-	case currentEndpoint.String():
-		// no changes
-		return
-	case "":
-		// can't determine, unset endpoint entries
 		ln.delete(enr.IP{})
-		ln.delete(enr.UDP(0))
-	default:
-		ipString, portString, _ := net.SplitHostPort(newEndpoint)
-		ip := net.ParseIP(ipString)
-		port, _ := strconv.Atoi(portString)
-		ln.set(enr.IP(ip))
-		ln.set(enr.UDP(port))
 	}
-	ln.sign()
+	if newUDP != 0 {
+		ln.set(enr.UDP(newUDP))
+	} else {
+		ln.delete(enr.UDP(0))
+	}
+	if ln.staticTCP != 0 {
+		ln.set(enr.TCP(ln.staticTCP))
+	} else {
+		ln.delete(enr.TCP(0))
+	}
+}
+
+// predictAddr wraps IPTracker.PredictEndpoint, converting from its string-based
+// endpoint representation to IP and port types.
+func predictAddr(t *netutil.IPTracker) (net.IP, int) {
+	ep := t.PredictEndpoint()
+	if ep == "" {
+		return nil, 0
+	}
+	ipString, portString, _ := net.SplitHostPort(ep)
+	ip := net.ParseIP(ipString)
+	port, _ := strconv.Atoi(portString)
+	return ip, port
 }
 
 func (ln *LocalNode) sign() {
+	if n := ln.cur.Load().(*Node); n != nil {
+		return // no changes
+	}
+
 	var r enr.Record
 	for _, e := range ln.entries {
 		r.Set(e)
@@ -181,7 +240,7 @@ func (ln *LocalNode) sign() {
 		panic(fmt.Errorf("enode: can't verify local record: %v", err))
 	}
 	ln.cur.Store(n)
-	log.Info("New local node record", "seq", ln.seq, "ip", n.IP(), "udp", n.UDP())
+	log.Info("New local node record", "seq", ln.seq, "id", n.ID(), "ip", n.IP(), "udp", n.UDP(), "tcp", n.TCP())
 }
 
 func (ln *LocalNode) bumpSeq() {
