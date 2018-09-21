@@ -242,7 +242,7 @@ func ListenUDP(c conn, ln *enode.LocalNode, cfg Config) (*Table, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info("UDP listener up", "self", tab.self)
+	log.Info("UDP listener up", "self", ln.Node())
 	return tab, nil
 }
 
@@ -619,10 +619,7 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 	if err != nil {
 		return fmt.Errorf("invalid public key: %v", err)
 	}
-
-	t.localNode.AddContactUDP(from)
-	t.localNode.AddEndpointStatementUDP(from, &net.UDPAddr{IP: req.To.IP, Port: int(req.To.UDP)})
-
+	t.localNode.UDPContact(from)
 	t.send(from, pongPacket, &pong{
 		To:         makeEndpoint(from, req.From.TCP),
 		ReplyTok:   mac,
@@ -645,14 +642,12 @@ func (req *pong) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 	if expired(req.Expiration) {
 		return errExpired
 	}
-
-	t.localNode.AddContactUDP(from)
-	t.localNode.AddEndpointStatementUDP(from, &net.UDPAddr{IP: req.To.IP, Port: int(req.To.UDP)})
-
 	fromID := fromKey.id()
 	if !t.handleReply(fromID, pongPacket, req) {
 		return errUnsolicitedReply
 	}
+	t.localNode.UDPContact(from)
+	t.localNode.UDPEndpointStatement(from, &net.UDPAddr{IP: req.To.IP, Port: int(req.To.UDP)})
 	t.db.UpdateLastPongReceived(fromID, time.Now())
 	return nil
 }
