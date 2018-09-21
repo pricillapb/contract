@@ -30,6 +30,13 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 )
 
+const (
+	// IP tracker configuration
+	iptrackMinStatements = 10
+	iptrackWindow        = 5 * time.Minute
+	iptrackContactWindow = 10 * time.Minute
+)
+
 // LocalNode produces the signed node record of a local node, i.e. a node
 // run in the current process.
 type LocalNode struct {
@@ -37,10 +44,14 @@ type LocalNode struct {
 	key *ecdsa.PrivateKey
 	db  *DB
 
-	mu       sync.Mutex
-	seq      uint64
-	entries  map[string]enr.Entry
-	udpTrack *netutil.IPTracker
+	// Everything below is protected by a lock.
+	mu sync.Mutex
+	// Record data.
+	seq     uint64
+	entries map[string]enr.Entry
+	// Endpoint determination.
+	udpTrack       *netutil.IPTracker
+	staticEndpoint string
 }
 
 func NewLocalNode(db *DB, key *ecdsa.PrivateKey) *LocalNode {
@@ -48,7 +59,7 @@ func NewLocalNode(db *DB, key *ecdsa.PrivateKey) *LocalNode {
 		db:       db,
 		key:      key,
 		seq:      db.LocalSeq(),
-		udpTrack: netutil.NewIPTracker(20*time.Second, 60*time.Second, 0),
+		udpTrack: netutil.NewIPTracker(iptrackWindow, iptrackContactWindow, iptrackMinStatements),
 		entries:  make(map[string]enr.Entry),
 	}
 	ln.sign()
@@ -97,38 +108,56 @@ func (ln *LocalNode) delete(e enr.Entry) {
 	delete(ln.entries, e.ENRKey())
 }
 
-// AddEndpointStatementUDP should be called whenever a statement about the local node's
+func (ln *LocalNode) SetStaticEndpoint(addr *net.UDPAddr) {
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+
+	ln.staticEndpoint = addr.String()
+	ln.updateEndpoints()
+}
+
+// UDPEndpointStatement should be called whenever a statement about the local node's
 // UDP endpoint is received. It feeds the local endpoint predictor.
-func (ln *LocalNode) AddEndpointStatementUDP(from, local *net.UDPAddr) {
+func (ln *LocalNode) UDPEndpointStatement(from, local *net.UDPAddr) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
 	ln.udpTrack.AddStatement(from.String(), local.String())
-	ln.updateIP()
+	ln.updateEndpoints()
 }
 
-// AddContactUDP should be called whenever the local node is in contact
+// UDPContact should be called whenever the local node is in contact
 // with another node via UDP. It feeds the local endpoint predictor.
-func (ln *LocalNode) AddContactUDP(addr *net.UDPAddr) {
+func (ln *LocalNode) UDPContact(addr *net.UDPAddr) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
 	ln.udpTrack.AddContact(addr.String())
-	ln.updateIP()
+	ln.updateEndpoints()
 }
 
-func (ln *LocalNode) updateIP() {
-	cur := ln.Node()
-	curep := &net.UDPAddr{IP: cur.IP(), Port: cur.UDP()}
-	newep := ln.udpTrack.PredictEndpoint()
-	if newep == curep.String() {
-		return // no changes
+func (ln *LocalNode) updateEndpoints() {
+	n := ln.Node()
+	currentEndpoint := &net.UDPAddr{IP: n.IP(), Port: n.UDP()}
+
+	// Use static IP if set and prediction otherwise.
+	var newEndpoint string
+	if ln.staticEndpoint != "" {
+		newEndpoint = ln.staticEndpoint
+	} else {
+		newEndpoint = ln.udpTrack.PredictEndpoint()
 	}
-	if newep == "" {
+
+	switch newEndpoint {
+	case currentEndpoint.String():
+		// no changes
+		return
+	case "":
+		// can't determine, unset endpoint entries
 		ln.delete(enr.IP{})
 		ln.delete(enr.UDP(0))
-	} else {
-		ipString, portString, _ := net.SplitHostPort(newep)
+	default:
+		ipString, portString, _ := net.SplitHostPort(newEndpoint)
 		ip := net.ParseIP(ipString)
 		port, _ := strconv.Atoi(portString)
 		ln.set(enr.IP(ip))
