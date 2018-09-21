@@ -19,10 +19,15 @@ package enode
 import (
 	"crypto/ecdsa"
 	"fmt"
+	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enr"
+	"github.com/ethereum/go-ethereum/p2p/netutil"
 )
 
 // LocalNode produces the signed node record of a local node, i.e. a node
@@ -32,14 +37,20 @@ type LocalNode struct {
 	key *ecdsa.PrivateKey
 	db  *DB
 
-	mu      sync.Mutex
-	seq     uint64
-	entries map[string]enr.Entry
+	mu       sync.Mutex
+	seq      uint64
+	entries  map[string]enr.Entry
+	udpTrack *netutil.IPTracker
 }
 
 func NewLocalNode(db *DB, key *ecdsa.PrivateKey) *LocalNode {
-	ln := &LocalNode{db: db, key: key, entries: make(map[string]enr.Entry)}
-	ln.seq = db.LocalSeq()
+	ln := &LocalNode{
+		db:       db,
+		key:      key,
+		seq:      db.LocalSeq(),
+		udpTrack: netutil.NewIPTracker(20*time.Second, 60*time.Second, 0),
+		entries:  make(map[string]enr.Entry),
+	}
 	ln.sign()
 	return ln
 }
@@ -65,8 +76,12 @@ func (ln *LocalNode) Set(e enr.Entry) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	ln.entries[e.ENRKey()] = e
+	ln.set(e)
 	ln.sign()
+}
+
+func (ln *LocalNode) set(e enr.Entry) {
+	ln.entries[e.ENRKey()] = e
 }
 
 // Delete removes the given entry from the local record.
@@ -74,7 +89,51 @@ func (ln *LocalNode) Delete(e enr.Entry) {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
+	ln.delete(e)
+	ln.sign()
+}
+
+func (ln *LocalNode) delete(e enr.Entry) {
 	delete(ln.entries, e.ENRKey())
+}
+
+// AddEndpointStatementUDP should be called whenever a statement about the local node's
+// UDP endpoint is received. It feeds the local endpoint predictor.
+func (ln *LocalNode) AddEndpointStatementUDP(from, local *net.UDPAddr) {
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+
+	ln.udpTrack.AddStatement(from.String(), local.String())
+	ln.updateIP()
+}
+
+// AddContactUDP should be called whenever the local node is in contact
+// with another node via UDP. It feeds the local endpoint predictor.
+func (ln *LocalNode) AddContactUDP(addr *net.UDPAddr) {
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+
+	ln.udpTrack.AddContact(addr.String())
+	ln.updateIP()
+}
+
+func (ln *LocalNode) updateIP() {
+	cur := ln.Node()
+	curep := &net.UDPAddr{IP: cur.IP(), Port: cur.UDP()}
+	newep := ln.udpTrack.PredictEndpoint()
+	if newep == curep.String() {
+		return // no changes
+	}
+	if newep == "" {
+		ln.delete(enr.IP{})
+		ln.delete(enr.UDP(0))
+	} else {
+		ipString, portString, _ := net.SplitHostPort(newep)
+		ip := net.ParseIP(ipString)
+		port, _ := strconv.Atoi(portString)
+		ln.set(enr.IP(ip))
+		ln.set(enr.UDP(port))
+	}
 	ln.sign()
 }
 
@@ -93,6 +152,7 @@ func (ln *LocalNode) sign() {
 		panic(fmt.Errorf("enode: can't verify local record: %v", err))
 	}
 	ln.cur.Store(n)
+	log.Info("New local node record", "seq", ln.seq, "ip", n.IP(), "udp", n.UDP())
 }
 
 func (ln *LocalNode) bumpSeq() {
