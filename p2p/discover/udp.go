@@ -311,6 +311,7 @@ func (t *udp) sendPing(toid enode.ID, toaddr *net.UDPAddr, callback func()) <-ch
 		}
 		return ok
 	})
+	t.localNode.UDPContact(toaddr)
 	t.write(toaddr, req.name(), packet)
 	return errc
 }
@@ -619,7 +620,6 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 	if err != nil {
 		return fmt.Errorf("invalid public key: %v", err)
 	}
-	t.localNode.UDPContact(from)
 	t.send(from, pongPacket, &pong{
 		To:         makeEndpoint(from, req.From.TCP),
 		ReplyTok:   mac,
@@ -646,7 +646,6 @@ func (req *pong) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 	if !t.handleReply(fromID, pongPacket, req) {
 		return errUnsolicitedReply
 	}
-	t.localNode.UDPContact(from)
 	t.localNode.UDPEndpointStatement(from, &net.UDPAddr{IP: req.To.IP, Port: int(req.To.UDP)})
 	t.db.UpdateLastPongReceived(fromID, time.Now())
 	return nil
