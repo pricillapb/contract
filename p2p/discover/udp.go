@@ -619,6 +619,10 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 	if err != nil {
 		return fmt.Errorf("invalid public key: %v", err)
 	}
+
+	t.localNode.AddContactUDP(from)
+	t.localNode.AddEndpointStatementUDP(from, &net.UDPAddr{IP: req.To.IP, Port: int(req.To.UDP)})
+
 	t.send(from, pongPacket, &pong{
 		To:         makeEndpoint(from, req.From.TCP),
 		ReplyTok:   mac,
@@ -641,6 +645,10 @@ func (req *pong) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 	if expired(req.Expiration) {
 		return errExpired
 	}
+
+	t.localNode.AddContactUDP(from)
+	t.localNode.AddEndpointStatementUDP(from, &net.UDPAddr{IP: req.To.IP, Port: int(req.To.UDP)})
+
 	fromID := fromKey.id()
 	if !t.handleReply(fromID, pongPacket, req) {
 		return errUnsolicitedReply
