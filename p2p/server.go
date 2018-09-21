@@ -805,10 +805,6 @@ func (srv *Server) maxDialedConns() int {
 	return srv.MaxPeers / r
 }
 
-type tempError interface {
-	Temporary() bool
-}
-
 // listenLoop runs in its own goroutine and accepts
 // inbound connections.
 func (srv *Server) listenLoop() {
@@ -834,7 +830,7 @@ func (srv *Server) listenLoop() {
 		)
 		for {
 			fd, err = srv.listener.Accept()
-			if tempErr, ok := err.(tempError); ok && tempErr.Temporary() {
+			if netutil.IsTemporaryError(err) {
 				srv.log.Debug("Temporary read error", "err", err)
 				continue
 			} else if err != nil {
