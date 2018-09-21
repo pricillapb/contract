@@ -22,8 +22,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/mclock"
 )
 
-// IPTracker predicts the endpoint (IP address and port) of the local host based on
-// statements from other nodes.
+// IPTracker predicts the external endpoint (IP address and port) of the local host based
+// on statements made by other nodes.
 type IPTracker struct {
 	window        time.Duration
 	contactWindow time.Duration
@@ -38,6 +38,13 @@ type ipStatement struct {
 	time     mclock.AbsTime
 }
 
+// NewIPTracker creates an IP tracker.
+//
+// The window parameters configure the amount of past network events which are kept. The
+// minStatements parameter enforces a minimum number of statements which must be recorded
+// before any prediction is made. Higher values for these parameters decrease 'flapping' of
+// predictions as network conditions change. Window duration values should typically be in
+// the range of minutes.
 func NewIPTracker(window, contactWindow time.Duration, minStatements int) *IPTracker {
 	return &IPTracker{
 		window:        window,
@@ -49,6 +56,7 @@ func NewIPTracker(window, contactWindow time.Duration, minStatements int) *IPTra
 	}
 }
 
+// PredictFullConeNAT checks whether the local node is behind full cone NAT.
 func (it *IPTracker) PredictFullConeNAT() bool {
 	now := it.clock.Now()
 	it.gcContact(now)
@@ -61,10 +69,11 @@ func (it *IPTracker) PredictFullConeNAT() bool {
 	return false
 }
 
+// PredictEndpoint returns the current prediction of the external endpoint.
 func (it *IPTracker) PredictEndpoint() string {
 	it.gcStatements(it.clock.Now())
 
-	// Find IP with most statements.
+	// The current strategy is simple: find the endpoint with most statements.
 	counts := make(map[string]int)
 	maxcount, max := 0, ""
 	for _, s := range it.statements {
@@ -77,10 +86,12 @@ func (it *IPTracker) PredictEndpoint() string {
 	return max
 }
 
+// AddStatement records that a certain host thinks our external endpoint is the one given.
 func (it *IPTracker) AddStatement(host, endpoint string) {
 	it.statements[host] = ipStatement{endpoint, it.clock.Now()}
 }
 
+// AddContact records that a packet containing endpoint information has been sent to a certain host.
 func (it *IPTracker) AddContact(host string) {
 	it.contact[host] = it.clock.Now()
 }
