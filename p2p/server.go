@@ -20,6 +20,7 @@ package p2p
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -37,6 +38,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/nat"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 const (
@@ -349,43 +351,13 @@ func (srv *Server) SubscribeEvents(ch chan *PeerEvent) event.Subscription {
 // Self returns the local node's endpoint information.
 func (srv *Server) Self() *enode.Node {
 	srv.lock.Lock()
-	running, listener, ntab := srv.running, srv.listener, srv.ntab
+	ln := srv.localnode
 	srv.lock.Unlock()
 
-	if !running {
+	if ln == nil {
 		return enode.NewV4(&srv.PrivateKey.PublicKey, net.ParseIP("0.0.0.0"), 0, 0)
 	}
-	return srv.makeSelf(listener, ntab)
-}
-
-func (srv *Server) makeSelf(listener net.Listener, ntab discoverTable) *enode.Node {
-	// If the node is running but discovery is off, manually assemble the node infos.
-	if ntab == nil {
-		addr := srv.tcpAddr(listener)
-		return enode.NewV4(&srv.PrivateKey.PublicKey, addr.IP, addr.Port, 0)
-	}
-	// Otherwise return the discovery node.
-	return srv.localnode.Node()
-}
-
-func (srv *Server) tcpAddr(listener net.Listener) net.TCPAddr {
-	addr := net.TCPAddr{IP: net.IP{0, 0, 0, 0}}
-	if listener == nil {
-		return addr // Inbound connections disabled, use zero address.
-	}
-	// Otherwise inject the listener address too.
-	if a, ok := listener.Addr().(*net.TCPAddr); ok {
-		addr = *a
-	}
-	if srv.NAT != nil {
-		if ip, err := srv.NAT.ExternalIP(); err == nil {
-			addr.IP = ip
-		}
-	}
-	if addr.IP.IsUnspecified() {
-		addr.IP = net.IP{127, 0, 0, 1}
-	}
-	return addr
+	return ln.Node()
 }
 
 // Stop terminates the server and all active peer connections.
@@ -468,13 +440,6 @@ func (srv *Server) Start() (err error) {
 	srv.peerOp = make(chan peerOpFunc)
 	srv.peerOpDone = make(chan struct{})
 
-	db, err := enode.OpenDB(srv.Config.NodeDatabase)
-	if err != nil {
-		return err
-	}
-	srv.nodedb = db
-	srv.localnode = enode.NewLocalNode(db, srv.PrivateKey)
-
 	var (
 		conn      *net.UDPConn
 		sconn     *sharedUDPConn
@@ -503,6 +468,12 @@ func (srv *Server) Start() (err error) {
 		}
 	}
 
+	db, localnode, err := srv.configureLocalNode(conn)
+	if err != nil {
+		return err
+	}
+	srv.nodedb, srv.localnode = db, localnode
+
 	if !srv.NoDiscovery && srv.DiscoveryV5 {
 		unhandled = make(chan discover.ReadPacket, 100)
 		sconn = &sharedUDPConn{conn, unhandled}
@@ -516,7 +487,7 @@ func (srv *Server) Start() (err error) {
 			Bootnodes:   srv.BootstrapNodes,
 			Unhandled:   unhandled,
 		}
-		ntab, err := discover.ListenUDP(conn, srv.localnode, cfg)
+		ntab, err := discover.ListenUDP(conn, localnode, cfg)
 		if err != nil {
 			return err
 		}
@@ -543,7 +514,7 @@ func (srv *Server) Start() (err error) {
 	}
 
 	dynPeers := srv.maxDialedConns()
-	dialer := newDialState(srv.localnode.ID(), srv.StaticNodes, srv.BootstrapNodes, srv.ntab, dynPeers, srv.NetRestrict)
+	dialer := newDialState(localnode.ID(), srv.StaticNodes, srv.BootstrapNodes, srv.ntab, dynPeers, srv.NetRestrict)
 
 	// handshake
 	pubkey := crypto.FromECDSAPub(&srv.PrivateKey.PublicKey)
@@ -586,6 +557,31 @@ func (srv *Server) startListening() error {
 		}()
 	}
 	return nil
+}
+
+func (srv *Server) configureLocalNode(udp *net.UDPConn) (*enode.DB, *enode.LocalNode, error) {
+	db, err := enode.OpenDB(srv.Config.NodeDatabase)
+	if err != nil {
+		return nil, nil, err
+	}
+	ln := enode.NewLocalNode(db, srv.PrivateKey)
+	if srv.NAT != nil {
+		addr := srv.udpAddr(udp)
+		if ip, err := srv.NAT.ExternalIP(); err == nil {
+			addr.IP = ip
+			ln.SetStaticEndpoint(addr)
+		}
+	}
+	return db, ln, nil
+
+}
+
+func (srv *Server) udpAddr(conn *net.UDPConn) *net.UDPAddr {
+	addr, _ := conn.LocalAddr().(*net.UDPAddr)
+	if addr.IP.IsUnspecified() {
+		addr.IP = net.IP{127, 0, 0, 1}
+	}
+	return addr
 }
 
 type dialer interface {
@@ -1010,6 +1006,7 @@ type NodeInfo struct {
 	ID    string `json:"id"`    // Unique node identifier (also the encryption key)
 	Name  string `json:"name"`  // Name of the node, including client type, version, OS, custom data
 	Enode string `json:"enode"` // Enode URL for adding this peer from remote peers
+	ENR   string `json:"enr"`   // Ethereum Node Record
 	IP    string `json:"ip"`    // IP address of the node
 	Ports struct {
 		Discovery int `json:"discovery"` // UDP listening port for discovery protocol
@@ -1021,9 +1018,8 @@ type NodeInfo struct {
 
 // NodeInfo gathers and returns a collection of metadata known about the host.
 func (srv *Server) NodeInfo() *NodeInfo {
-	node := srv.Self()
-
 	// Gather and assemble the generic node infos
+	node := srv.Self()
 	info := &NodeInfo{
 		Name:       srv.Name,
 		Enode:      node.String(),
@@ -1034,6 +1030,9 @@ func (srv *Server) NodeInfo() *NodeInfo {
 	}
 	info.Ports.Discovery = node.UDP()
 	info.Ports.Listener = node.TCP()
+	if enc, err := rlp.EncodeToBytes(node.Record()); err == nil {
+		info.ENR = "0x" + hex.EncodeToString(enc)
+	}
 
 	// Gather all the running protocol infos (only once per protocol type)
 	for _, proto := range srv.Protocols {
