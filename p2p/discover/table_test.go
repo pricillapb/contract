@@ -530,9 +530,14 @@ func (tn *preminedTestnet) findnode(toid enode.ID, toaddr *net.UDPAddr, target e
 	return result, nil
 }
 
-func (*preminedTestnet) close()                                        {}
-func (*preminedTestnet) waitping(from enode.ID) error                  { return nil }
-func (*preminedTestnet) ping(toid enode.ID, toaddr *net.UDPAddr) error { return nil }
+func (*preminedTestnet) close() {}
+
+func (*preminedTestnet) requestENR(enode.ID, *net.UDPAddr) (*enode.Node, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (*preminedTestnet) ping(toid enode.ID, toaddr *net.UDPAddr) error {
+	return nil
+}
 
 // mine generates a testnet struct literal with nodes at
 // various distances to the given target.

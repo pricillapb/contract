@@ -88,6 +88,7 @@ type transport interface {
 	self() *enode.Node
 	ping(enode.ID, *net.UDPAddr) error
 	findnode(toid enode.ID, addr *net.UDPAddr, target encPubkey) ([]*node, error)
+	requestENR(toid enode.ID, addr *net.UDPAddr) (*enode.Node, error)
 	close()
 }
 
@@ -223,7 +224,11 @@ func (tab *Table) Resolve(n *enode.Node) *enode.Node {
 	if len(cl.entries) > 0 && cl.entries[0].ID() == hash {
 		return unwrapNode(cl.entries[0])
 	}
-	// Otherwise, do a network lookup.
+	// Attempt to ask the node directly.
+	if r, err := tab.net.requestENR(n.ID(), &net.UDPAddr{IP: n.IP(), Port: n.UDP()}); err == nil {
+		return r
+	}
+	// Otherwise do a recursive lookup.
 	result := tab.lookup(encodePubkey(n.Pubkey()), true)
 	for _, n := range result {
 		if n.ID() == hash {

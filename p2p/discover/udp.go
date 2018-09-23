@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/nat"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -62,6 +63,8 @@ const (
 	pongPacket
 	findnodePacket
 	neighborsPacket
+	enrRequestPacket
+	enrResponsePacket
 )
 
 // RPC request structures
@@ -114,6 +117,19 @@ type (
 		IP  net.IP // len 4 for IPv4 or 16 for IPv6
 		UDP uint16 // for discovery protocol
 		TCP uint16 // for RLPx protocol
+	}
+
+	enrRequest struct {
+		Expiration uint64
+		// Ignore additional fields (for forward compatibility).
+		Rest []rlp.RawValue `rlp:"tail"`
+	}
+
+	enrResponse struct {
+		ReplyTok []byte // hash of the enrRequest packet
+		Record   *enr.Record
+		// Ignore additional fields (for forward compatibility).
+		Rest []rlp.RawValue `rlp:"tail"`
 	}
 )
 
@@ -322,12 +338,7 @@ func (t *udp) waitping(from enode.ID) error {
 // findnode sends a findnode request to the given node and waits until
 // the node has sent up to k neighbors.
 func (t *udp) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]*node, error) {
-	// If we haven't seen a ping from the destination node for a while, it won't remember
-	// our endpoint proof and reject findnode. Solicit a ping first.
-	if time.Since(t.db.LastPingReceived(toid)) > bondExpiration {
-		t.ping(toid, toaddr)
-		t.waitping(toid)
-	}
+	t.ensureBond(toid, toaddr)
 
 	nodes := make([]*node, 0, bucketSize)
 	nreceived := 0
@@ -349,6 +360,32 @@ func (t *udp) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPubkey) ([]
 		Expiration: uint64(time.Now().Add(expiration).Unix()),
 	})
 	return nodes, <-errc
+}
+
+// requestENR sends an enrRequest to the given node and waits for a reply.
+func (t *udp) requestENR(toid enode.ID, toaddr *net.UDPAddr) (*enode.Node, error) {
+	t.ensureBond(toid, toaddr)
+
+	req := &enrRequest{
+		Expiration: uint64(time.Now().Add(expiration).Unix()),
+	}
+	packet, hash, err := encodePacket(t.priv, enrRequestPacket, req)
+	if err != nil {
+		return nil, err
+	}
+	var resp *enr.Record
+	errc := t.pending(toid, pongPacket, func(p interface{}) bool {
+		ok := bytes.Equal(p.(*enrResponse).ReplyTok, hash)
+		if ok {
+			resp = p.(*enrResponse).Record
+		}
+		return ok
+	})
+	t.write(toaddr, req.name(), packet)
+	if err := <-errc; err != nil {
+		return nil, err
+	}
+	return enode.New(enode.ValidSchemes, resp)
 }
 
 // pending adds a reply callback to the pending reply queue.
@@ -603,6 +640,10 @@ func decodePacket(buf []byte) (packet, encPubkey, []byte, error) {
 		req = new(findnode)
 	case neighborsPacket:
 		req = new(neighbors)
+	case enrRequestPacket:
+		req = new(enrRequest)
+	case enrResponsePacket:
+		req = new(enrResponse)
 	default:
 		return nil, fromKey, hash, fmt.Errorf("unknown type: %d", ptype)
 	}
@@ -625,6 +666,7 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 		Expiration: uint64(time.Now().Add(expiration).Unix()),
 	})
 	n := wrapNode(enode.NewV4(key, from.IP, int(req.From.TCP), from.Port))
+	n.enrSeq = req.enrSeq()
 	t.handleReply(n.ID(), pingPacket, req)
 	if time.Since(t.db.LastPongReceived(n.ID())) > bondExpiration {
 		t.sendPing(n.ID(), from, func() { t.tab.addThroughPing(n) })
@@ -636,6 +678,17 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 }
 
 func (req *ping) name() string { return "PING/v4" }
+
+func (req *ping) enrSeq() uint64 {
+	if len(req.Rest) == 0 {
+		return 0
+	}
+	var seq uint64
+	if err := rlp.DecodeBytes(req.Rest[0], &seq); err != nil {
+		return 0
+	}
+	return seq
+}
 
 func (req *pong) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte) error {
 	if expired(req.Expiration) {
@@ -656,8 +709,7 @@ func (req *findnode) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []
 	if expired(req.Expiration) {
 		return errExpired
 	}
-	fromID := fromKey.id()
-	if time.Since(t.db.LastPongReceived(fromID)) > bondExpiration {
+	if !t.checkBond(&fromKey) {
 		// No endpoint proof pong exists, we don't process the packet. This prevents an
 		// attack vector where the discovery protocol could be used to amplify traffic in a
 		// DDOS attack. A malicious actor would send a findnode request with the IP address
@@ -704,6 +756,44 @@ func (req *neighbors) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac [
 }
 
 func (req *neighbors) name() string { return "NEIGHBORS/v4" }
+
+func (req *enrRequest) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte) error {
+	if expired(req.Expiration) {
+		return errExpired
+	}
+	if !t.checkBond(&fromKey) {
+		return errUnknownNode
+	}
+	t.send(from, enrResponsePacket, &enrResponse{
+		ReplyTok: mac,
+		Record:   t.localNode.Node().Record(),
+	})
+	return nil
+}
+
+func (req *enrRequest) name() string { return "enrREQUEST/v4" }
+
+func (req *enrResponse) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte) error {
+	if !t.handleReply(fromKey.id(), enrResponsePacket, req) {
+		return errUnsolicitedReply
+	}
+	return nil
+}
+
+func (req *enrResponse) name() string { return "enrRESPONSE/v4" }
+
+func (t *udp) checkBond(fromKey *encPubkey) bool {
+	return time.Since(t.db.LastPongReceived(fromKey.id())) < bondExpiration
+}
+
+func (t *udp) ensureBond(toid enode.ID, toaddr *net.UDPAddr) {
+	// If we haven't seen a ping from the destination node for a while, it won't remember
+	// our endpoint proof and reject findnode. Solicit a ping first.
+	if time.Since(t.db.LastPingReceived(toid)) > bondExpiration {
+		t.ping(toid, toaddr)
+		t.waitping(toid)
+	}
+}
 
 func expired(ts uint64) bool {
 	return time.Unix(int64(ts), 0).Before(time.Now())

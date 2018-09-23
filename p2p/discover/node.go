@@ -34,6 +34,7 @@ import (
 type node struct {
 	enode.Node
 	addedAt time.Time // time when the node was added to the table
+	enrSeq  uint64
 }
 
 type encPubkey [64]byte

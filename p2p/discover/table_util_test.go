@@ -109,8 +109,8 @@ func (t *pingRecorder) findnode(toid enode.ID, toaddr *net.UDPAddr, target encPu
 	return nil, nil
 }
 
-func (t *pingRecorder) waitping(from enode.ID) error {
-	return nil // remote always pings
+func (t *pingRecorder) requestENR(toid enode.ID, toaddr *net.UDPAddr) (*enode.Node, error) {
+	return nil, fmt.Errorf("not implemented")
 }
 
 func (t *pingRecorder) ping(toid enode.ID, toaddr *net.UDPAddr) error {
