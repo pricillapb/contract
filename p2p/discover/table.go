@@ -215,27 +215,26 @@ func (tab *Table) isInitDone() bool {
 // Resolve searches for a specific node with the given ID.
 // It returns nil if the node could not be found.
 func (tab *Table) Resolve(n *enode.Node) *enode.Node {
-	// If the node is present in the local table, no
-	// network interaction is required.
-	hash := n.ID()
+	// Check the local table first.
 	tab.mutex.Lock()
-	cl := tab.closest(hash, 1)
+	result := find(tab.bucket(n.ID()).entries, n.ID())
 	tab.mutex.Unlock()
-	if len(cl.entries) > 0 && cl.entries[0].ID() == hash {
-		return unwrapNode(cl.entries[0])
-	}
-	// Attempt to ask the node directly.
-	if r, err := tab.net.requestENR(n.ID(), &net.UDPAddr{IP: n.IP(), Port: n.UDP()}); err == nil {
-		return r
-	}
 	// Otherwise do a recursive lookup.
-	result := tab.lookup(encodePubkey(n.Pubkey()), true)
-	for _, n := range result {
-		if n.ID() == hash {
-			return unwrapNode(n)
-		}
+	if result == nil {
+		result = find(tab.lookup(encodePubkey(n.Pubkey()), true), n.ID())
 	}
-	return nil
+	if result != nil {
+		return tab.resolveDirect(newerNode(n, unwrapNode(result)))
+	}
+	return tab.resolveDirect(n)
+}
+
+func (tab *Table) resolveDirect(n *enode.Node) *enode.Node {
+	r, err := tab.net.requestENR(n.ID(), &net.UDPAddr{IP: n.IP(), Port: n.UDP()})
+	if err != nil {
+		return n
+	}
+	return newerNode(r, n)
 }
 
 // LookupRandom finds random nodes in the network.

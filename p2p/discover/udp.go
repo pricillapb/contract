@@ -374,7 +374,7 @@ func (t *udp) requestENR(toid enode.ID, toaddr *net.UDPAddr) (*enode.Node, error
 		return nil, err
 	}
 	var resp *enr.Record
-	errc := t.pending(toid, pongPacket, func(p interface{}) bool {
+	errc := t.pending(toid, enrResponsePacket, func(p interface{}) bool {
 		ok := bytes.Equal(p.(*enrResponse).ReplyTok, hash)
 		if ok {
 			resp = p.(*enrResponse).Record

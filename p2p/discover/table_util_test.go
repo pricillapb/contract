@@ -142,12 +142,7 @@ func hasDuplicates(slice []*node) bool {
 }
 
 func contains(ns []*node, id enode.ID) bool {
-	for _, n := range ns {
-		if n.ID() == id {
-			return true
-		}
-	}
-	return false
+	return find(ns, id) != nil
 }
 
 func sortedByDistanceTo(distbase enode.ID, slice []*node) bool {

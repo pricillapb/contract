@@ -29,6 +29,13 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
+func newerNode(n1, n2 *enode.Node) *enode.Node {
+	if n1.Seq() > n2.Seq() {
+		return n1
+	}
+	return n2
+}
+
 // node represents a host on the network.
 // The fields of Node may not be modified.
 type node struct {
@@ -70,6 +77,15 @@ func recoverNodeKey(hash, sig []byte) (key encPubkey, err error) {
 	}
 	copy(key[:], pubkey[1:])
 	return key, nil
+}
+
+func find(ns []*node, id enode.ID) *node {
+	for _, n := range ns {
+		if n.ID() == id {
+			return n
+		}
+	}
+	return nil
 }
 
 func wrapNode(n *enode.Node) *node {
