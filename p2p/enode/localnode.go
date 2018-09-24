@@ -66,7 +66,7 @@ func NewLocalNode(db *DB, key *ecdsa.PrivateKey) *LocalNode {
 		udpTrack: netutil.NewIPTracker(iptrackWindow, iptrackContactWindow, iptrackMinStatements),
 		entries:  make(map[string]enr.Entry),
 	}
-	ln.cur.Store((*Node)(nil))
+	ln.invalidate()
 	return ln
 }
 
@@ -106,7 +106,7 @@ func (ln *LocalNode) set(e enr.Entry) {
 	val, exists := ln.entries[e.ENRKey()]
 	if !exists || !reflect.DeepEqual(val, e) {
 		ln.entries[e.ENRKey()] = e
-		ln.cur.Store((*Node)(nil))
+		ln.invalidate()
 	}
 }
 
@@ -122,7 +122,7 @@ func (ln *LocalNode) delete(e enr.Entry) {
 	_, exists := ln.entries[e.ENRKey()]
 	if exists {
 		delete(ln.entries, e.ENRKey())
-		ln.cur.Store((*Node)(nil))
+		ln.invalidate()
 	}
 }
 
@@ -219,6 +219,10 @@ func predictAddr(t *netutil.IPTracker) (net.IP, int) {
 	ip := net.ParseIP(ipString)
 	port, _ := strconv.Atoi(portString)
 	return ip, port
+}
+
+func (ln *LocalNode) invalidate() {
+	ln.cur.Store((*Node)(nil))
 }
 
 func (ln *LocalNode) sign() {
