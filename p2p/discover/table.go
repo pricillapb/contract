@@ -504,15 +504,20 @@ func (tab *Table) nextRevalidateTime() time.Duration {
 // longer then minTableTime.
 func (tab *Table) copyLiveNodes() {
 	tab.mutex.Lock()
-	defer tab.mutex.Unlock()
-
 	now := time.Now()
+	var updates []*enode.Node
 	for _, b := range &tab.buckets {
 		for _, n := range b.entries {
-			if now.Sub(n.addedAt) >= seedMinTableTime {
-				tab.db.UpdateNode(unwrapNode(n))
+			if now.Sub(n.addedAt) >= seedMinTableTime || n.enrSeq > tab.db.NodeSeq(n.ID()) {
+				updates = append(updates, unwrapNode(n))
 			}
 		}
+	}
+	tab.mutex.Unlock()
+
+	for _, n := range updates {
+		n = tab.resolveDirect(n)
+		tab.db.UpdateNode(n)
 	}
 }
 
