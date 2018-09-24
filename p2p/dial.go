@@ -294,6 +294,9 @@ func (t *dialTask) Do(srv *Server) {
 			return
 		}
 	}
+	if !t.shouldConnect(srv) {
+		log.Debug("Skipping dial", "id", t.dest.ID, "err", "filtered based on node record")
+	}
 	err := t.dial(srv, t.dest)
 	if err != nil {
 		log.Trace("Dial error", "task", t, "err", err)
@@ -304,6 +307,31 @@ func (t *dialTask) Do(srv *Server) {
 			}
 		}
 	}
+}
+
+func (t *dialTask) shouldConnect(srv *Server) bool {
+	if t.dest.Seq() == 0 {
+		return true
+	}
+	// The node has a non-zero seq and supports ENR.
+	// Check for common protocols and abort if there are none.
+	var caps capsByNameAndVersion
+	if err := t.dest.Load(&caps); err == nil {
+		if countMatchingProtocols(srv.Protocols, []Cap(caps)) == 0 {
+			return false
+		}
+	}
+	// Check protocol dial filters. Check that any protocol wants the peer.
+	haveFilter, saidYes := 0, 0
+	for _, p := range srv.Protocols {
+		if p.DialFilter != nil {
+			haveFilter++
+			if p.DialFilter(t.dest) {
+				saidYes++
+			}
+		}
+	}
+	return haveFilter == 0 || saidYes > 0
 }
 
 // resolve attempts to find the current endpoint for the destination

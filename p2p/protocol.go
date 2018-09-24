@@ -36,10 +36,6 @@ type Protocol struct {
 	// by the protocol.
 	Length uint64
 
-	// Attributes contains protocol specific information for the node
-	// record.
-	Attributes []enr.Entry
-
 	// Run is called in a new goroutine when the protocol has been
 	// negotiated with a peer. It should read and write messages from
 	// rw. The Payload for each message must be fully consumed.
@@ -58,9 +54,14 @@ type Protocol struct {
 	// but returns nil, it is assumed that the protocol handshake is still running.
 	PeerInfo func(id enode.ID) interface{}
 
-	// Preflight checks whether the node should be connected to. This callback may run
-	// before a connection is established.
-	Preflight func(*enode.Node) bool
+	// Attributes contains protocol specific information for the node
+	// record.
+	Attributes []enr.Entry
+
+	// DialFilter checks whether the node should be connected to. This callback may run
+	// before a connection is established. Due to restrictions in the underlying network
+	// protocol the callback cannot see every dial.
+	DialFilter func(*enode.Node) bool
 }
 
 func (p Protocol) cap() Cap {
