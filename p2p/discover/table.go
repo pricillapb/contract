@@ -213,20 +213,28 @@ func (tab *Table) isInitDone() bool {
 }
 
 // Resolve searches for a specific node with the given ID.
-// It returns nil if the node could not be found.
+// It returns n if the node could not be found.
 func (tab *Table) Resolve(n *enode.Node) *enode.Node {
-	// Check the local table first.
+	// Try to contact the node directly.
+	if r := tab.resolveDirect(n); r != n {
+		return r
+	}
+	// If that fails, check the network
+	local := tab.findInBucket(n.ID())
+	if local != nil && local.Seq() > n.Seq() {
+		return tab.resolveDirect(unwrapNode(local))
+	}
+	remote := find(tab.lookup(encodePubkey(n.Pubkey()), true), n.ID())
+	if remote != nil && remote.Seq() > n.Seq() {
+		return tab.resolveDirect(unwrapNode(remote))
+	}
+	return n
+}
+
+func (tab *Table) findInBucket(id enode.ID) *node {
 	tab.mutex.Lock()
-	result := find(tab.bucket(n.ID()).entries, n.ID())
-	tab.mutex.Unlock()
-	// Otherwise do a recursive lookup.
-	if result == nil {
-		result = find(tab.lookup(encodePubkey(n.Pubkey()), true), n.ID())
-	}
-	if result != nil {
-		return tab.resolveDirect(newerNode(n, unwrapNode(result)))
-	}
-	return tab.resolveDirect(n)
+	defer tab.mutex.Unlock()
+	return find(tab.bucket(id).entries, id)
 }
 
 func (tab *Table) resolveDirect(n *enode.Node) *enode.Node {
