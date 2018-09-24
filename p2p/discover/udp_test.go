@@ -140,7 +140,7 @@ func TestUDP_pingTimeout(t *testing.T) {
 
 	toaddr := &net.UDPAddr{IP: net.ParseIP("1.2.3.4"), Port: 2222}
 	toid := enode.ID{1, 2, 3, 4}
-	if err := test.udp.ping(toid, toaddr); err != errTimeout {
+	if _, err := test.udp.ping(toid, toaddr); err != errTimeout {
 		t.Error("expected timeout error, got", err)
 	}
 }

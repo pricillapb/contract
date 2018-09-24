@@ -299,19 +299,41 @@ func (t *udp) ourEndpoint() rpcEndpoint {
 	return makeEndpoint(a, uint16(n.TCP()))
 }
 
+func (t *udp) enrSeqTail() []rlp.RawValue {
+	seq, _ := rlp.EncodeToBytes(t.localNode.Node().Seq())
+	return []rlp.RawValue{seq}
+}
+
+// decodeENRSeq reads the sequence number from the tail of a ping or pong packet.
+func decodeENRSeq(tail []rlp.RawValue) uint64 {
+	if len(tail) == 0 {
+		return 0
+	}
+	var seq uint64
+	if err := rlp.DecodeBytes(tail[0], &seq); err != nil {
+		return 0
+	}
+	return seq
+}
+
 // ping sends a ping message to the given node and waits for a reply.
-func (t *udp) ping(toid enode.ID, toaddr *net.UDPAddr) error {
-	return <-t.sendPing(toid, toaddr, nil)
+func (t *udp) ping(toid enode.ID, toaddr *net.UDPAddr) (uint64, error) {
+	var seq uint64
+	err := <-t.sendPing(toid, toaddr, func(reply *pong) {
+		seq = decodeENRSeq(reply.Rest)
+	})
+	return seq, err
 }
 
 // sendPing sends a ping message to the given node and invokes the callback
 // when the reply arrives.
-func (t *udp) sendPing(toid enode.ID, toaddr *net.UDPAddr, callback func()) <-chan error {
+func (t *udp) sendPing(toid enode.ID, toaddr *net.UDPAddr, callback func(*pong)) <-chan error {
 	req := &ping{
 		Version:    4,
 		From:       t.ourEndpoint(),
 		To:         makeEndpoint(toaddr, 0), // TODO: maybe use known TCP port from DB
 		Expiration: uint64(time.Now().Add(expiration).Unix()),
+		Rest:       t.enrSeqTail(),
 	}
 	packet, hash, err := encodePacket(t.priv, pingPacket, req)
 	if err != nil {
@@ -319,14 +341,10 @@ func (t *udp) sendPing(toid enode.ID, toaddr *net.UDPAddr, callback func()) <-ch
 		errc <- err
 		return errc
 	}
-	var reply *pong
 	errc := t.pending(toid, pongPacket, func(p interface{}) bool {
 		ok := bytes.Equal(p.(*pong).ReplyTok, hash)
-		if ok {
-			reply = p.(*pong)
-			if callback != nil {
-				callback()
-			}
+		if ok && callback != nil {
+			callback(p.(*pong))
 		}
 		return ok
 	})
@@ -668,12 +686,15 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 		To:         makeEndpoint(from, req.From.TCP),
 		ReplyTok:   mac,
 		Expiration: uint64(time.Now().Add(expiration).Unix()),
+		Rest:       t.enrSeqTail(),
 	})
 	n := wrapNode(enode.NewV4(key, from.IP, int(req.From.TCP), from.Port))
 	n.enrSeq = decodeENRSeq(req.Rest)
 	t.handleReply(n.ID(), pingPacket, req)
 	if time.Since(t.db.LastPongReceived(n.ID())) > bondExpiration {
-		t.sendPing(n.ID(), from, func() { t.tab.addThroughPing(n) })
+		t.sendPing(n.ID(), from, func(*pong) {
+			t.tab.addThroughPing(n)
+		})
 	} else {
 		t.tab.addThroughPing(n)
 	}
@@ -682,17 +703,6 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 }
 
 func (req *ping) name() string { return "PING/v4" }
-
-func decodeENRSeq(tail []rlp.RawValue) uint64 {
-	if len(tail) == 0 {
-		return 0
-	}
-	var seq uint64
-	if err := rlp.DecodeBytes(tail[0], &seq); err != nil {
-		return 0
-	}
-	return seq
-}
 
 func (req *pong) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte) error {
 	if expired(req.Expiration) {

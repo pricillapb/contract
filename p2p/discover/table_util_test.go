@@ -113,15 +113,15 @@ func (t *pingRecorder) requestENR(toid enode.ID, toaddr *net.UDPAddr) (*enode.No
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (t *pingRecorder) ping(toid enode.ID, toaddr *net.UDPAddr) error {
+func (t *pingRecorder) ping(toid enode.ID, toaddr *net.UDPAddr) (uint64, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	t.pinged[toid] = true
 	if t.dead[toid] {
-		return errTimeout
+		return 0, errTimeout
 	} else {
-		return nil
+		return 0, nil
 	}
 }
 

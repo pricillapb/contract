@@ -86,7 +86,7 @@ type Table struct {
 // sockets and without generating a private key.
 type transport interface {
 	self() *enode.Node
-	ping(enode.ID, *net.UDPAddr) error
+	ping(enode.ID, *net.UDPAddr) (enrSeq uint64, err error)
 	findnode(toid enode.ID, addr *net.UDPAddr, target encPubkey) ([]*node, error)
 	requestENR(toid enode.ID, addr *net.UDPAddr) (*enode.Node, error)
 	close()
@@ -458,7 +458,12 @@ func (tab *Table) doRevalidate(done chan<- struct{}) {
 	}
 
 	// Ping the selected node and wait for a pong.
-	err := tab.net.ping(last.ID(), last.addr())
+	seq, err := tab.net.ping(last.ID(), last.addr())
+	if err == nil && seq > last.Seq() {
+		resolved := wrapNode(tab.resolveDirect(unwrapNode(last)))
+		resolved.addedAt = last.addedAt
+		last = resolved
+	}
 
 	tab.mutex.Lock()
 	defer tab.mutex.Unlock()

@@ -535,8 +535,8 @@ func (*preminedTestnet) close() {}
 func (*preminedTestnet) requestENR(enode.ID, *net.UDPAddr) (*enode.Node, error) {
 	return nil, fmt.Errorf("not implemented")
 }
-func (*preminedTestnet) ping(toid enode.ID, toaddr *net.UDPAddr) error {
-	return nil
+func (*preminedTestnet) ping(toid enode.ID, toaddr *net.UDPAddr) (uint64, error) {
+	return 0, nil
 }
 
 // mine generates a testnet struct literal with nodes at

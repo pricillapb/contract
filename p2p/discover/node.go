@@ -89,7 +89,7 @@ func find(ns []*node, id enode.ID) *node {
 }
 
 func wrapNode(n *enode.Node) *node {
-	return &node{Node: *n}
+	return &node{Node: *n, enrSeq: n.Seq()}
 }
 
 func wrapNodes(ns []*enode.Node) []*node {
