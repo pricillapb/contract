@@ -20,6 +20,7 @@ import (
 	"net"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -27,7 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
-func TestResolveV4(t *testing.T) {
+func TestResolveENRv4(t *testing.T) {
 	var (
 		tab0, ln0 = startTestNode(t, nil)
 		tab1, _   = startTestNode(t, ln0.Node())
@@ -45,6 +46,34 @@ func TestResolveV4(t *testing.T) {
 	ln2.Set(enr.WithEntry("x", uint(3)))
 	if n2 := tab1.Resolve(ln2.Node()); !reflect.DeepEqual(n2.Record(), ln2.Node().Record()) {
 		t.Errorf("wrong resolve result for node 2: %s", spew.Sdump(n2.Record()))
+	}
+}
+
+func TestLookupENRv4(t *testing.T) {
+	var (
+		tab0, ln0 = startTestNode(t, nil)
+		tab1, _   = startTestNode(t, ln0.Node())
+		tab2, ln2 = startTestNode(t, ln0.Node())
+	)
+	defer tab0.Close()
+	defer tab1.Close()
+	defer tab2.Close()
+
+	// Wait for node 2 to appear in the bootnode table, otherwise we won't find it.
+	for i := 0; i < 30; i++ {
+		if tab0.findInBucket(ln2.ID()) != nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Lookup node 2. It should return the up-to-date node record among the results.
+	found := find(tab1.lookup(encodePubkey(ln2.Node().Pubkey()), true), ln2.ID())
+	if found == nil {
+		t.Fatalf("node 2 not found during lookup")
+	}
+	if !reflect.DeepEqual(found.Record(), ln2.Node().Record()) {
+		t.Errorf("wrong lookup result for node 2: %s", spew.Sdump(found.Record()))
 	}
 }
 
