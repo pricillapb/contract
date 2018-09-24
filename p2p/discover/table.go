@@ -516,7 +516,6 @@ func (tab *Table) copyLiveNodes() {
 	tab.mutex.Unlock()
 
 	for _, n := range updates {
-		n = tab.resolveDirect(n)
 		tab.db.UpdateNode(n)
 	}
 }
