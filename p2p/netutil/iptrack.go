@@ -31,6 +31,7 @@ type IPTracker struct {
 	clock         mclock.Clock
 	statements    map[string]ipStatement
 	contact       map[string]mclock.AbsTime
+	// TODO add DistinctNetSet for additional protection
 }
 
 type ipStatement struct {
@@ -79,7 +80,7 @@ func (it *IPTracker) PredictEndpoint() string {
 	for _, s := range it.statements {
 		c := counts[s.endpoint] + 1
 		counts[s.endpoint] = c
-		if c > maxcount && c > it.minStatements {
+		if c > maxcount && c >= it.minStatements {
 			maxcount, max = c, s.endpoint
 		}
 	}
