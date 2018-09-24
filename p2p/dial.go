@@ -321,7 +321,7 @@ func (t *dialTask) shouldConnect(srv *Server) bool {
 			return false
 		}
 	}
-	// Check protocol dial filters. Check that any protocol wants the peer.
+	// Check whether any protocol wants the peer.
 	haveFilter, saidYes := 0, 0
 	for _, p := range srv.Protocols {
 		if p.DialFilter != nil {
