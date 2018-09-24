@@ -22,8 +22,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/mclock"
 )
 
-// IPTracker predicts the external endpoint (IP address and port) of the local host based
-// on statements made by other nodes.
+// IPTracker predicts the external endpoint, i.e. IP address and port, of the local host
+// based on statements made by other hosts.
 type IPTracker struct {
 	window        time.Duration
 	contactWindow time.Duration
@@ -56,7 +56,7 @@ func NewIPTracker(window, contactWindow time.Duration, minStatements int) *IPTra
 	}
 }
 
-// PredictFullConeNAT checks whether the local node is behind full cone NAT.
+// PredictFullConeNAT checks whether the local host is behind full cone NAT.
 func (it *IPTracker) PredictFullConeNAT() bool {
 	now := it.clock.Now()
 	it.gcContact(now)
