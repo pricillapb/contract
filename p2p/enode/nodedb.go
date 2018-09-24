@@ -41,6 +41,7 @@ const (
 	dbItemPrefix = "n:"      // Identifier to prefix node entries with
 
 	dbDiscoverRoot      = ":discover"
+	dbDiscoverSeq       = dbDiscoverRoot + ":seq"
 	dbDiscoverPing      = dbDiscoverRoot + ":lastping"
 	dbDiscoverPong      = dbDiscoverRoot + ":lastpong"
 	dbDiscoverFindFails = dbDiscoverRoot + ":findfail"
@@ -52,7 +53,7 @@ var (
 	dbNilID          = ID{}           // Special node ID to use as a nil element.
 	dbNodeExpiration = 24 * time.Hour // Time after which an unseen node should be dropped.
 	dbCleanupCycle   = time.Hour      // Time period for running the expiration task.
-	dbVersion        = 6
+	dbVersion        = 7
 )
 
 // DB is the node database, storing previously seen nodes and any collected metadata about
@@ -200,11 +201,31 @@ func mustDecodeNode(id, data []byte) *Node {
 
 // UpdateNode inserts - potentially overwriting - a node into the peer database.
 func (db *DB) UpdateNode(node *Node) error {
+	if node.Seq() < db.NodeSeq(node.ID()) {
+		return nil
+	}
 	blob, err := rlp.EncodeToBytes(&node.r)
 	if err != nil {
 		return err
 	}
-	return db.lvl.Put(makeKey(node.ID(), dbDiscoverRoot), blob, nil)
+	if err := db.lvl.Put(makeKey(node.ID(), dbDiscoverRoot), blob, nil); err != nil {
+		return err
+	}
+	return db.storeUint64(makeKey(node.ID(), dbDiscoverSeq), node.Seq())
+}
+
+// NodeSeq returns the stored record sequence number of the given node.
+func (db *DB) NodeSeq(id ID) uint64 {
+	return db.fetchUint64(makeKey(id, dbDiscoverSeq))
+}
+
+// Resolve returns the stored record of the node if it has a larger sequence
+// number than n.
+func (db *DB) Resolve(n *Node) *Node {
+	if n.Seq() > db.NodeSeq(n.ID()) {
+		return n
+	}
+	return db.Node(n.ID())
 }
 
 // DeleteNode deletes all information/keys associated with a node.
