@@ -675,6 +675,7 @@ func decodePacket(buf []byte) (packet, encPubkey, []byte, error) {
 }
 
 func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte) error {
+	// Check packet validity.
 	if expired(req.Expiration) {
 		return errExpired
 	}
@@ -682,15 +683,23 @@ func (req *ping) handle(t *udp, from *net.UDPAddr, fromKey encPubkey, mac []byte
 	if err != nil {
 		return fmt.Errorf("invalid public key: %v", err)
 	}
+
+	// Send the reply.
 	t.send(from, pongPacket, &pong{
 		To:         makeEndpoint(from, req.From.TCP),
 		ReplyTok:   mac,
 		Expiration: uint64(time.Now().Add(expiration).Unix()),
 		Rest:       t.enrSeqTail(),
 	})
+
 	n := wrapNode(enode.NewV4(key, from.IP, int(req.From.TCP), from.Port))
 	n.enrSeq = decodeENRSeq(req.Rest)
+
+	// Unblock waitping.
 	t.handleReply(n.ID(), pingPacket, req)
+
+	// Check whether endpoint proof is recent enough before adding to table.
+	// Ping back if it was too long ago to check whether the node really exists.
 	if time.Since(t.db.LastPongReceived(n.ID())) > bondExpiration {
 		t.sendPing(n.ID(), from, func(*pong) {
 			t.tab.addThroughPing(n)
