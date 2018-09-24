@@ -212,8 +212,9 @@ func (tab *Table) isInitDone() bool {
 	}
 }
 
-// Resolve searches for a specific node with the given ID.
-// It returns n if the node could not be found.
+// Resolve searches for a specific node with the given ID and queries for the most
+// up-to-date version of its node record, if possible. It returns n if the node could not
+// be found.
 func (tab *Table) Resolve(n *enode.Node) *enode.Node {
 	// Try to contact the node directly.
 	if r := tab.resolveDirect(n); r != n {
