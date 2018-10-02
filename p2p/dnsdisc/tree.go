@@ -1,0 +1,208 @@
+// Copyright 2018 The go-ethereum Authors
+// This file is part of the go-ethereum library.
+//
+// The go-ethereum library is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// The go-ethereum library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
+
+package dnsdisc
+
+import (
+	"crypto/ecdsa"
+	"encoding/base32"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ethereum/go-ethereum/crypto"
+)
+
+// Tree is a merkle tree of node records.
+type Tree struct {
+	location   linkEntry
+	lastUpdate time.Time
+	root       *rootEntry
+	entries    map[string]entry
+	missing    map[string]struct{}
+}
+
+func newTreeAt(loc linkEntry) *Tree {
+	return &Tree{
+		location: loc,
+		entries:  make(map[string]entry),
+		missing:  make(map[string]struct{}),
+	}
+}
+
+// Entry Types
+
+type entry interface {
+	fmt.Stringer
+}
+
+type (
+	rootEntry struct {
+		hash string
+		seq  uint
+		sig  []byte
+	}
+	subtreeEntry struct {
+		children []string
+	}
+	enrEntry struct {
+		record []byte
+	}
+	linkEntry struct {
+		domain string
+		pubkey *ecdsa.PublicKey
+	}
+)
+
+// Entry Encoding
+
+var (
+	b32format = base32.StdEncoding.WithPadding(base32.NoPadding)
+	b64format = base64.URLEncoding
+)
+
+func (e rootEntry) String() string {
+	return fmt.Sprintf("enrtree-root=v1 hash=%s seq=%d sig=%s", e.hash, e.seq, b64format.EncodeToString(e.sig))
+}
+
+func (e subtreeEntry) String() string {
+	return "enrtree=" + strings.Join(e.children, ",")
+}
+
+func (e enrEntry) String() string {
+	return "enr=" + b64format.EncodeToString(e.record)
+}
+
+func (e linkEntry) String() string {
+	return fmt.Sprintf("enrtree-link=%s@%s", b32format.EncodeToString(crypto.CompressPubkey(e.pubkey)), e.domain)
+}
+
+// Entry Parsing
+
+var (
+	errUnknownEntry = errors.New("unknown entry type")
+	errEmptySubtree = errors.New("empty subtree")
+	errNoPubkey     = errors.New("missing public key")
+	errBadPubkey    = errors.New("invalid public key")
+	errInvalidENR   = errors.New("invalid node record")
+	errInvalidChild = errors.New("invalid child hash")
+	errInvalidSig   = errors.New("invalid signature")
+)
+
+type entryError struct {
+	typ string
+	err error
+}
+
+func (err entryError) Error() string {
+	return fmt.Sprintf("invalid %s entry: %v", err.typ, err.err)
+}
+
+const minHashLength = 10
+
+func parseEntry(e string) (entry, error) {
+	switch {
+	case strings.HasPrefix(e, "enrtree-root="):
+		return parseRoot(e[13:])
+	case strings.HasPrefix(e, "enrtree-link="):
+		return parseLink(e[13:])
+	case strings.HasPrefix(e, "enrtree="):
+		return parseSubtree(e[8:])
+	case strings.HasPrefix(e, "enr="):
+		return parseENR(e[4:])
+	default:
+		return nil, errUnknownEntry
+	}
+}
+
+func parseRoot(e string) (entry, error) {
+	var hash, sig string
+	var seq uint
+	if _, err := fmt.Sscanf(e, "v1 hash=%s seq=%d sig=%s", &hash, &seq, &sig); err != nil {
+		fmt.Println(err)
+		return nil, entryError{"root", err}
+	}
+	if !isValidHash(hash) {
+		return nil, entryError{"root", errInvalidChild}
+	}
+	sigb, err := b64format.DecodeString(sig)
+	if err != nil || len(sigb) != 65 {
+		return nil, entryError{"root", errInvalidSig}
+	}
+	return rootEntry{hash, seq, sigb}, nil
+}
+
+func parseLink(e string) (entry, error) {
+	pos := strings.IndexByte(e, '@')
+	if pos == -1 {
+		return nil, entryError{"link", errNoPubkey}
+	}
+	keystring, domain := e[:pos], e[pos+1:]
+	keybytes, err := b32format.DecodeString(keystring)
+	if err != nil {
+		return nil, entryError{"link", errBadPubkey}
+	}
+	key, err := crypto.DecompressPubkey(keybytes)
+	if err != nil {
+		return nil, entryError{"link", errBadPubkey}
+	}
+	return linkEntry{domain, key}, nil
+}
+
+func parseSubtree(e string) (entry, error) {
+	hashes := make([]string, 0, strings.Count(e, ","))
+	for _, c := range strings.Split(e, ",") {
+		if !isValidHash(c) {
+			return nil, entryError{"subtree", errInvalidChild}
+		}
+		hashes = append(hashes, c)
+	}
+	return subtreeEntry{hashes}, nil
+}
+
+func parseENR(e string) (entry, error) {
+	r, err := b64format.DecodeString(e)
+	if err != nil {
+		return nil, entryError{"enr", errInvalidENR}
+	}
+	return enrEntry{r}, nil
+}
+
+func isValidHash(s string) bool {
+	dlen := b32format.DecodedLen(len(s))
+	if dlen < minHashLength || dlen > 32 || strings.ContainsAny(s, "\n\r") {
+		return false
+	}
+	buf := make([]byte, 32)
+	_, err := b32format.Decode(buf, []byte(s))
+	return err == nil
+}
+
+// URL encoding
+
+func parseURL(url string) (linkEntry, error) {
+	const scheme = "enrtree://"
+	if !strings.HasPrefix(url, scheme) {
+		return linkEntry{}, fmt.Errorf("wrong/missing scheme 'enrtree'")
+	}
+	le, err := parseLink(url[len(scheme):])
+	if err != nil {
+		return linkEntry{}, err.(entryError).err
+	}
+	return le.(linkEntry), nil
+}
