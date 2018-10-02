@@ -17,6 +17,7 @@
 package dnsdisc
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"encoding/base32"
 	"encoding/base64"
@@ -26,23 +27,76 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // Tree is a merkle tree of node records.
 type Tree struct {
-	location   linkEntry
+	location linkEntry
+	resolver Resolver
+
 	lastUpdate time.Time
 	root       *rootEntry
 	entries    map[string]entry
-	missing    map[string]struct{}
+	missing    []string
 }
 
-func newTreeAt(loc linkEntry) *Tree {
+func newTreeAt(r Resolver, loc linkEntry) *Tree {
 	return &Tree{
 		location: loc,
+		resolver: r,
 		entries:  make(map[string]entry),
-		missing:  make(map[string]struct{}),
 	}
+}
+
+func (t *Tree) nextNode(ctx context.Context) (*enode.Node, error) {
+	if t.root == nil || len(t.missing) == 0 { // TODO: refresh if too old
+		if err := t.resolveRoot(ctx); err != nil {
+			return nil, err
+		}
+		t.missing = []string{t.root.hash}
+	}
+	for len(t.missing) > 0 {
+		e, _ := t.resolveEntry(ctx, t.missing[0])
+		switch e := e.(type) {
+		case enrEntry:
+			return enode.New(enode.ValidSchemes, e.record)
+		case subtreeEntry:
+			t.missing = append(t.missing, e.children...)
+		}
+	}
+	panic("out of work")
+}
+
+func (t *Tree) resolveRoot(ctx context.Context) error {
+	e, err := t.resolveEntry(ctx, t.location.domain)
+	if err != nil {
+		return err
+	}
+	re, ok := e.(rootEntry)
+	if !ok {
+		return fmt.Errorf("expected root entry, found %T", e)
+	}
+	if !crypto.VerifySignature(crypto.FromECDSAPub(t.location.pubkey), entryHash(re), re.sig) {
+		return fmt.Errorf("invalid signature")
+	}
+	t.root = &re
+	return nil
+}
+
+func (t *Tree) resolveEntry(ctx context.Context, domain string) (e entry, err error) {
+	txts, err := t.resolver.LookupTXT(ctx, domain)
+	if err != nil {
+		return nil, err
+	}
+	for _, txt := range txts {
+		if e, err = parseEntry(txt); err == nil {
+			break
+		}
+	}
+	return e, err
 }
 
 // Entry Types
@@ -61,7 +115,7 @@ type (
 		children []string
 	}
 	enrEntry struct {
-		record []byte
+		record *enr.Record
 	}
 	linkEntry struct {
 		domain string
@@ -85,11 +139,16 @@ func (e subtreeEntry) String() string {
 }
 
 func (e enrEntry) String() string {
-	return "enr=" + b64format.EncodeToString(e.record)
+	enc, _ := rlp.EncodeToBytes(e.record)
+	return "enr=" + b64format.EncodeToString(enc)
 }
 
 func (e linkEntry) String() string {
 	return fmt.Sprintf("enrtree-link=%s@%s", b32format.EncodeToString(crypto.CompressPubkey(e.pubkey)), e.domain)
+}
+
+func entryHash(e entry) []byte {
+	return crypto.Keccak256([]byte(e.String()))
 }
 
 // Entry Parsing
@@ -101,7 +160,7 @@ var (
 	errBadPubkey    = errors.New("invalid public key")
 	errInvalidENR   = errors.New("invalid node record")
 	errInvalidChild = errors.New("invalid child hash")
-	errInvalidSig   = errors.New("invalid signature")
+	errInvalidSig   = errors.New("invalid base64 signature")
 )
 
 type entryError struct {
@@ -176,11 +235,15 @@ func parseSubtree(e string) (entry, error) {
 }
 
 func parseENR(e string) (entry, error) {
-	r, err := b64format.DecodeString(e)
+	enc, err := b64format.DecodeString(e)
 	if err != nil {
 		return nil, entryError{"enr", errInvalidENR}
 	}
-	return enrEntry{r}, nil
+	var rec enr.Record
+	if err := rlp.DecodeBytes(enc, &rec); err != nil {
+		return nil, entryError{"enr", err}
+	}
+	return enrEntry{&rec}, nil
 }
 
 func isValidHash(s string) bool {

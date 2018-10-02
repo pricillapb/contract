@@ -22,6 +22,8 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"net"
+
+	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
 // Resolver is a DNS resolver that can query TXT records.
@@ -29,18 +31,21 @@ type Resolver interface {
 	LookupTXT(ctx context.Context, domain string) ([]string, error)
 }
 
-// Crawler discovers nodes by querying DNS domains.
-type Crawler struct {
+// Client discovers nodes by querying DNS servers.
+type Client struct {
 	trees    map[string]*Tree
 	resolver Resolver
 }
 
-// NewCrawler creates a new crawler. If resolver is nil, the default DNS resolver is used.
-func NewCrawler(resolver Resolver, urls ...string) (*Crawler, error) {
+// NewClient creates a client. If resolver is nil, the default DNS resolver is used.
+func NewClient(resolver Resolver, urls ...string) (*Client, error) {
 	if resolver == nil {
 		resolver = new(net.Resolver)
 	}
-	c := &Crawler{resolver: resolver}
+	c := &Client{
+		resolver: resolver,
+		trees:    make(map[string]*Tree),
+	}
 	for _, url := range urls {
 		if err := c.AddTree(url); err != nil {
 			return nil, err
@@ -50,7 +55,7 @@ func NewCrawler(resolver Resolver, urls ...string) (*Crawler, error) {
 }
 
 // AddTree adds a enrtree:// URL to crawl.
-func (c *Crawler) AddTree(url string) error {
+func (c *Client) AddTree(url string) error {
 	le, err := parseURL(url)
 	if err != nil {
 		return fmt.Errorf("invalid enrtree URL: %v", err)
@@ -58,7 +63,20 @@ func (c *Crawler) AddTree(url string) error {
 	if existing, ok := c.trees[le.domain]; ok && !keysEqual(existing.location.pubkey, le.pubkey) {
 		return fmt.Errorf("conflicting public keys for domain %q", le.domain)
 	}
-	c.trees[le.domain] = newTreeAt(le)
+	c.trees[le.domain] = newTreeAt(c.resolver, le)
+	return nil
+}
+
+// ReadRandomNodes fills the given slice with random nodes from the table. The results
+// are guaranteed to be unique for a single invocation, no node will appear twice.
+func (c *Client) ReadNodes(ctx context.Context) []*enode.Node {
+	for _, t := range c.trees {
+		n, err := t.nextNode(ctx)
+		fmt.Println(err)
+		if err == nil {
+			return []*enode.Node{n}
+		}
+	}
 	return nil
 }
 
