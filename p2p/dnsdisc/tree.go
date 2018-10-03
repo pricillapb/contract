@@ -49,6 +49,25 @@ func newTreeAt(loc linkEntry) *Tree {
 	return &Tree{location: loc, entries: make(map[string]entry)}
 }
 
+// Sign signs the tree with the given private key and sets the update sequence number.
+func (t *Tree) Sign(key *ecdsa.PrivateKey, seq uint) error {
+	root := *t.root
+	root.seq = seq
+	sig, err := crypto.Sign(root.sigHash(), key)
+	if err != nil {
+		return err
+	}
+	root.sig = sig
+	t.root = &root
+	return nil
+}
+
+// Seq returns the update sequence number of the tree.
+func (t *Tree) Seq() uint {
+	return t.root.seq
+}
+
+// ToTXT returns all DNS TXT records required for the tree.
 func (t *Tree) ToTXT(domain string) []TXT {
 	records := []TXT{
 		{domain, t.root.String()},
@@ -100,11 +119,15 @@ func (e rootEntry) String() string {
 	return fmt.Sprintf("enrtree-root=v1 hash=%s seq=%d sig=%s", e.hash, e.seq, b64format.EncodeToString(e.sig))
 }
 
-func (e rootEntry) verifySignature(pubkey *ecdsa.PublicKey) bool {
+func (e rootEntry) sigHash() []byte {
 	h := sha3.NewKeccak256()
 	fmt.Fprintf(h, "enrtree-root=v1 hash=%s seq=%d", e.hash, e.seq)
+	return h.Sum(nil)
+}
+
+func (e rootEntry) verifySignature(pubkey *ecdsa.PublicKey) bool {
 	sig := e.sig[:len(e.sig)-1] // remove recovery id
-	return crypto.VerifySignature(crypto.FromECDSAPub(pubkey), h.Sum(nil), sig)
+	return crypto.VerifySignature(crypto.FromECDSAPub(pubkey), r.sigHash(), sig)
 }
 
 func (e subtreeEntry) String() string {
