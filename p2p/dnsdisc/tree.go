@@ -31,17 +31,38 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
+type TXT struct {
+	Name, Content string
+}
+
 // Tree is a merkle tree of node records.
 type Tree struct {
-	location   linkEntry
+	location linkEntry
+	root     *rootEntry
+	entries  map[string]entry
+	// sync-related fields (for Client)
 	lastUpdate time.Time
-	root       *rootEntry
-	entries    map[string]entry
 	missing    []string
 }
 
 func newTreeAt(loc linkEntry) *Tree {
 	return &Tree{location: loc, entries: make(map[string]entry)}
+}
+
+func (t *Tree) ToTXT(domain string) []TXT {
+	records := []TXT{
+		{domain, t.root.String()},
+	}
+	for _, e := range t.entries {
+		content := e.String()
+		hash := crypto.Keccak256([]byte(content))
+		subdomain := b32format.EncodeToString(hash[:16])
+		if domain != "" {
+			subdomain = domain + "." + subdomain
+		}
+		records = append(records, TXT{subdomain, content})
+	}
+	return records
 }
 
 // Entry Types

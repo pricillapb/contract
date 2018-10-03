@@ -103,7 +103,7 @@ func (c *Client) syncTree(t *Tree) error {
 		t.missing = t.missing[1:]
 
 		if _, ok := t.entries[hash]; ok {
-			continue
+			continue // branch available locally, skip sync
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
 		e, err := c.resolveEntry(ctx, t.location.domain, hash)
