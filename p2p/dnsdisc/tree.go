@@ -17,7 +17,6 @@
 package dnsdisc
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"encoding/base32"
 	"encoding/base64"
@@ -27,76 +26,22 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/crypto/sha3"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
 // Tree is a merkle tree of node records.
 type Tree struct {
-	location linkEntry
-	resolver Resolver
-
+	location   linkEntry
 	lastUpdate time.Time
 	root       *rootEntry
 	entries    map[string]entry
 	missing    []string
 }
 
-func newTreeAt(r Resolver, loc linkEntry) *Tree {
-	return &Tree{
-		location: loc,
-		resolver: r,
-		entries:  make(map[string]entry),
-	}
-}
-
-func (t *Tree) nextNode(ctx context.Context) (*enode.Node, error) {
-	if t.root == nil || len(t.missing) == 0 { // TODO: refresh if too old
-		if err := t.resolveRoot(ctx); err != nil {
-			return nil, err
-		}
-		t.missing = []string{t.root.hash}
-	}
-	for len(t.missing) > 0 {
-		e, _ := t.resolveEntry(ctx, t.missing[0])
-		switch e := e.(type) {
-		case enrEntry:
-			return enode.New(enode.ValidSchemes, e.record)
-		case subtreeEntry:
-			t.missing = append(t.missing, e.children...)
-		}
-	}
-	panic("out of work")
-}
-
-func (t *Tree) resolveRoot(ctx context.Context) error {
-	e, err := t.resolveEntry(ctx, t.location.domain)
-	if err != nil {
-		return err
-	}
-	re, ok := e.(rootEntry)
-	if !ok {
-		return fmt.Errorf("expected root entry, found %T", e)
-	}
-	if !crypto.VerifySignature(crypto.FromECDSAPub(t.location.pubkey), entryHash(re), re.sig) {
-		return fmt.Errorf("invalid signature")
-	}
-	t.root = &re
-	return nil
-}
-
-func (t *Tree) resolveEntry(ctx context.Context, domain string) (e entry, err error) {
-	txts, err := t.resolver.LookupTXT(ctx, domain)
-	if err != nil {
-		return nil, err
-	}
-	for _, txt := range txts {
-		if e, err = parseEntry(txt); err == nil {
-			break
-		}
-	}
-	return e, err
+func newTreeAt(loc linkEntry) *Tree {
+	return &Tree{location: loc, entries: make(map[string]entry)}
 }
 
 // Entry Types
@@ -134,6 +79,13 @@ func (e rootEntry) String() string {
 	return fmt.Sprintf("enrtree-root=v1 hash=%s seq=%d sig=%s", e.hash, e.seq, b64format.EncodeToString(e.sig))
 }
 
+func (e rootEntry) verifySignature(pubkey *ecdsa.PublicKey) bool {
+	h := sha3.NewKeccak256()
+	fmt.Fprintf(h, "enrtree-root=v1 hash=%s seq=%d", e.hash, e.seq)
+	sig := e.sig[:len(e.sig)-1] // remove recovery id
+	return crypto.VerifySignature(crypto.FromECDSAPub(pubkey), h.Sum(nil), sig)
+}
+
 func (e subtreeEntry) String() string {
 	return "enrtree=" + strings.Join(e.children, ",")
 }
@@ -145,10 +97,6 @@ func (e enrEntry) String() string {
 
 func (e linkEntry) String() string {
 	return fmt.Sprintf("enrtree-link=%s@%s", b32format.EncodeToString(crypto.CompressPubkey(e.pubkey)), e.domain)
-}
-
-func entryHash(e entry) []byte {
-	return crypto.Keccak256([]byte(e.String()))
 }
 
 // Entry Parsing
@@ -176,8 +124,6 @@ const minHashLength = 10
 
 func parseEntry(e string) (entry, error) {
 	switch {
-	case strings.HasPrefix(e, "enrtree-root="):
-		return parseRoot(e[13:])
 	case strings.HasPrefix(e, "enrtree-link="):
 		return parseLink(e[13:])
 	case strings.HasPrefix(e, "enrtree="):
@@ -189,19 +135,19 @@ func parseEntry(e string) (entry, error) {
 	}
 }
 
-func parseRoot(e string) (entry, error) {
+func parseRoot(e string) (rootEntry, error) {
 	var hash, sig string
 	var seq uint
-	if _, err := fmt.Sscanf(e, "v1 hash=%s seq=%d sig=%s", &hash, &seq, &sig); err != nil {
+	if _, err := fmt.Sscanf(e, "enrtree-root=v1 hash=%s seq=%d sig=%s", &hash, &seq, &sig); err != nil {
 		fmt.Println(err)
-		return nil, entryError{"root", err}
+		return rootEntry{}, entryError{"root", err}
 	}
 	if !isValidHash(hash) {
-		return nil, entryError{"root", errInvalidChild}
+		return rootEntry{}, entryError{"root", errInvalidChild}
 	}
 	sigb, err := b64format.DecodeString(sig)
 	if err != nil || len(sigb) != 65 {
-		return nil, entryError{"root", errInvalidSig}
+		return rootEntry{}, entryError{"root", errInvalidSig}
 	}
 	return rootEntry{hash, seq, sigb}, nil
 }
