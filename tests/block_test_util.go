@@ -37,6 +37,8 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 )
 
+var pow = ethash.New(ethash.Config{CachesInMem: 20}, nil, false)
+
 // A BlockTest checks handling of entire blocks.
 type BlockTest struct {
 	json btJSON
@@ -111,7 +113,7 @@ func (t *BlockTest) Run() error {
 		return fmt.Errorf("genesis block state root does not match test: computed=%x, test=%x", gblock.Root().Bytes()[:6], t.json.Genesis.StateRoot[:6])
 	}
 
-	chain, err := core.NewBlockChain(db, nil, config, ethash.NewShared(), vm.Config{}, nil)
+	chain, err := core.NewBlockChain(db, nil, config, pow, vm.Config{}, nil)
 	if err != nil {
 		return err
 	}

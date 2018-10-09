@@ -59,10 +59,6 @@ func (ethash *Ethash) Seal(chain consensus.ChainReader, block *types.Block, resu
 		}
 		return nil
 	}
-	// If we're running a shared PoW, delegate sealing to it
-	if ethash.shared != nil {
-		return ethash.shared.Seal(chain, block, results, stop)
-	}
 	// Create a runner and the multiple search threads it directs
 	abort := make(chan struct{})
 

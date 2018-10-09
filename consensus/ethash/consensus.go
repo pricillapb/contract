@@ -497,10 +497,6 @@ func (ethash *Ethash) verifySeal(chain consensus.ChainReader, header *types.Head
 		}
 		return nil
 	}
-	// If we're running a shared PoW, delegate verification to it
-	if ethash.shared != nil {
-		return ethash.shared.verifySeal(chain, header, fulldag)
-	}
 	// Ensure that we have a valid difficulty for the block
 	if header.Difficulty.Sign() <= 0 {
 		return errInvalidDifficulty

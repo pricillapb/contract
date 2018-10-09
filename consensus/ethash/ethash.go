@@ -49,9 +49,6 @@ var (
 	// two256 is a big integer representing 2^256
 	two256 = new(big.Int).Exp(big.NewInt(2), big.NewInt(256), big.NewInt(0))
 
-	// sharedEthash is a full instance that can be shared between multiple users.
-	sharedEthash = New(Config{"", 3, 0, "", 1, 0, ModeNormal}, nil, false)
-
 	// algorithmRevision is the data structure version used for file naming.
 	algorithmRevision = 23
 
@@ -388,7 +385,6 @@ type Mode uint
 
 const (
 	ModeNormal Mode = iota
-	ModeShared
 	ModeTest
 	ModeFake
 	ModeFullFake
@@ -457,7 +453,6 @@ type Ethash struct {
 	submitRateCh chan *hashrate   // Channel used for remote sealer to submit their mining hashrate
 
 	// The fields below are hooks for testing
-	shared    *Ethash       // Shared PoW verifier to avoid cache regeneration
 	fakeFail  uint64        // Block number which fails PoW check even in fake mode
 	fakeDelay time.Duration // Time delay to sleep for before returning from verify
 
@@ -562,12 +557,6 @@ func NewFullFaker() *Ethash {
 	}
 }
 
-// NewShared creates a full sized ethash PoW shared between all requesters running
-// in the same process.
-func NewShared() *Ethash {
-	return &Ethash{shared: sharedEthash}
-}
-
 // Close closes the exit channel to notify all backend threads exiting.
 func (ethash *Ethash) Close() error {
 	var err error
@@ -655,11 +644,6 @@ func (ethash *Ethash) SetThreads(threads int) {
 	ethash.lock.Lock()
 	defer ethash.lock.Unlock()
 
-	// If we're running a shared PoW, set the thread count on that instead
-	if ethash.shared != nil {
-		ethash.shared.SetThreads(threads)
-		return
-	}
 	// Update the threads and ping any running seal to pull in any changes
 	ethash.threads = threads
 	select {
