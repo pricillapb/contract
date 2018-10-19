@@ -86,8 +86,8 @@ func (t *Tree) ToTXT(domain string) []TXT {
 }
 
 var (
-	hashAbbrev            = 16
-	maxIntermediateHashes = 300 / (hashAbbrev * (13 / 8))
+	hashAbbrev  = 16
+	maxChildren = 300 / (hashAbbrev * (13 / 8))
 )
 
 // MakeTree creates a tree containing the given nodes and links.
@@ -98,10 +98,11 @@ func MakeTree(nodes []*enode.Node, links []string) (*Tree, error) {
 		records[i] = nodes[i].Record()
 	}
 	sort.Slice(records, func(i, j int) bool {
-		return bytes.Compare(nodes[i].ID[:], nodes[j].ID[:]) < 0
+		id1, id2 := nodes[i].ID(), nodes[j].ID()
+		return bytes.Compare(id1[:], id2[:]) < 0
 	})
 
-	// Create the leave list.
+	// Create the leaf list.
 	leaves := make([]entry, len(records)+len(links))
 	for i, r := range records {
 		leaves[i] = enrEntry{r}
@@ -118,7 +119,7 @@ func MakeTree(nodes []*enode.Node, links []string) (*Tree, error) {
 	t := &Tree{entries: make(map[string]entry)}
 	top := t.build(leaves)
 	t.entries[subdomain(top)] = top
-	t.root = rootEntry{hash: subdomain(top)}
+	t.root = &rootEntry{hash: subdomain(top)}
 	return t, nil
 }
 
@@ -126,23 +127,23 @@ func (t *Tree) build(entries []entry) entry {
 	if len(entries) == 1 {
 		return entries[0]
 	}
-	if len(entries) < maxIntermediateHashes {
+	if len(entries) < maxChildren {
 		hashes := make([]string, len(entries))
 		for i, e := range entries {
-			e := t.build(entries[:n])
 			hashes[i] = subdomain(e)
+			t.entries[hashes[i]] = e
 		}
 		return subtreeEntry{hashes}
 	}
 	var roots []entry
 	for len(entries) > 0 {
-		n := maxIntermediateHashes
+		n := maxChildren
 		if len(entries) < n {
 			n = len(entries)
 		}
 		e := t.build(entries[:n])
-		roots = append(roots, sub)
-		t.entries[subdomain(sub)] = sub
+		roots = append(roots, e)
+		t.entries[subdomain(e)] = e
 	}
 	return t.build(roots)
 }
@@ -195,7 +196,7 @@ func (e rootEntry) sigHash() []byte {
 
 func (e rootEntry) verifySignature(pubkey *ecdsa.PublicKey) bool {
 	sig := e.sig[:len(e.sig)-1] // remove recovery id
-	return crypto.VerifySignature(crypto.FromECDSAPub(pubkey), r.sigHash(), sig)
+	return crypto.VerifySignature(crypto.FromECDSAPub(pubkey), e.sigHash(), sig)
 }
 
 func (e subtreeEntry) String() string {

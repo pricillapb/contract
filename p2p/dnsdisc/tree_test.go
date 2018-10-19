@@ -101,5 +101,5 @@ func TestMakeTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spew.Dump(tree.ToTXT())
+	spew.Dump(tree.ToTXT(""))
 }
