@@ -17,16 +17,19 @@
 package dnsdisc
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"encoding/base32"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/sha3"
+	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -73,15 +76,75 @@ func (t *Tree) ToTXT(domain string) []TXT {
 		{domain, t.root.String()},
 	}
 	for _, e := range t.entries {
-		content := e.String()
-		hash := crypto.Keccak256([]byte(content))
-		subdomain := b32format.EncodeToString(hash[:16])
+		sd := subdomain(e)
 		if domain != "" {
-			subdomain = domain + "." + subdomain
+			sd = domain + "." + sd
 		}
-		records = append(records, TXT{subdomain, content})
+		records = append(records, TXT{sd, e.String()})
 	}
 	return records
+}
+
+var (
+	hashAbbrev            = 16
+	maxIntermediateHashes = 300 / (hashAbbrev * (13 / 8))
+)
+
+// MakeTree creates a tree containing the given nodes and links.
+func MakeTree(nodes []*enode.Node, links []string) (*Tree, error) {
+	// Sort records by ID.
+	records := make([]*enr.Record, len(nodes))
+	for i := range nodes {
+		records[i] = nodes[i].Record()
+	}
+	sort.Slice(records, func(i, j int) bool {
+		return bytes.Compare(nodes[i].ID[:], nodes[j].ID[:]) < 0
+	})
+
+	// Create the leave list.
+	leaves := make([]entry, len(records)+len(links))
+	for i, r := range records {
+		leaves[i] = enrEntry{r}
+	}
+	for i, l := range links {
+		le, err := parseURL(l)
+		if err != nil {
+			return nil, err
+		}
+		leaves[len(records)+i] = le
+	}
+
+	// Create intermediate nodes.
+	t := &Tree{entries: make(map[string]entry)}
+	top := t.build(leaves)
+	t.entries[subdomain(top)] = top
+	t.root = rootEntry{hash: subdomain(top)}
+	return t, nil
+}
+
+func (t *Tree) build(entries []entry) entry {
+	if len(entries) == 1 {
+		return entries[0]
+	}
+	if len(entries) < maxIntermediateHashes {
+		hashes := make([]string, len(entries))
+		for i, e := range entries {
+			e := t.build(entries[:n])
+			hashes[i] = subdomain(e)
+		}
+		return subtreeEntry{hashes}
+	}
+	var roots []entry
+	for len(entries) > 0 {
+		n := maxIntermediateHashes
+		if len(entries) < n {
+			n = len(entries)
+		}
+		e := t.build(entries[:n])
+		roots = append(roots, sub)
+		t.entries[subdomain(sub)] = sub
+	}
+	return t.build(roots)
 }
 
 // Entry Types
@@ -114,6 +177,11 @@ var (
 	b32format = base32.StdEncoding.WithPadding(base32.NoPadding)
 	b64format = base64.URLEncoding
 )
+
+func subdomain(e entry) string {
+	hash := crypto.Keccak256([]byte(e.String()))
+	return b32format.EncodeToString(hash[:16])
+}
 
 func (e rootEntry) String() string {
 	return fmt.Sprintf("enrtree-root=v1 hash=%s seq=%d sig=%s", e.hash, e.seq, b64format.EncodeToString(e.sig))

@@ -23,6 +23,8 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
 var testkeys = []*ecdsa.PrivateKey{
@@ -30,6 +32,12 @@ var testkeys = []*ecdsa.PrivateKey{
 	hexkey("8a1f9a8f95be41cd7ccb6168179afb4504aefe388d1e14474d32c45c72ce7b7a"),
 	hexkey("49a7b37aa6f6645917e7b807e9d1c00d4fa71f18343b0d4122a4d2df64dd6fee"),
 	hexkey("45a915e4d060149eb4365960e6a7a45f334393093061116b197e3240065ff2d8"),
+	hexkey("7018732ded552337dfbe3d6f7393b5fc2c4dff57d3420d16c91309a8bb47b51d"),
+	hexkey("90725056af7cdbe7ba4ea470a5542c9b1e615b175ac18294e20bfad060f8cf5e"),
+	hexkey("09ffd992a55877c2260e80eff793f229ed55983420532ea64d8473f87f1a981a"),
+	hexkey("f51f6be7a7367376f5200ddc525ffb5835068b92c863ab92460cb31d107724a6"),
+	hexkey("b300e6a49e8425bb3eda749ace0db408d43adcda3c5a808bf3abe86e059dee28"),
+	hexkey("78e766d81cfa4e5f5d77b9804b6389b219b09967c392bbdf7f11c7df2931d313"),
 }
 
 func hexkey(s string) *ecdsa.PrivateKey {
@@ -78,4 +86,20 @@ func TestParseEntry(t *testing.T) {
 			t.Errorf("test %d: wrong error %q, want %q", i, err, test.err)
 		}
 	}
+}
+
+func TestMakeTree(t *testing.T) {
+	nodes := make([]*enode.Node, len(testkeys))
+	for i := range nodes {
+		var r enr.Record
+		enode.SignV4(&r, testkeys[i])
+		n, _ := enode.New(enode.ValidSchemes, &r)
+		nodes[i] = n
+	}
+
+	tree, err := MakeTree(nodes, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spew.Dump(tree.ToTXT())
 }
