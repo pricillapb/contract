@@ -48,11 +48,12 @@ func (s *Subscription) Err() <-chan error {
 // notifierKey is used to store a notifier within the connection context.
 type notifierKey struct{}
 
-// Notifier is tight to a RPC connection that supports subscriptions.
+// Notifier is tied to a RPC connection that supports subscriptions.
 // Server callbacks use the notifier to send notifications.
 type Notifier struct {
-	codec    ServerCodec
-	subMu    sync.Mutex
+	codec ServerCodec
+	subMu sync.Mutex
+
 	active   map[ID]*Subscription
 	inactive map[ID]*Subscription
 	buffer   map[ID][]interface{} // unsent notifications of inactive subscriptions

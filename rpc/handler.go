@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/log"
 )
@@ -41,7 +42,13 @@ func (msg *jsonrpcMessage) String() string {
 	return string(b)
 }
 
-func (h *handler) handleBatch(ctx context.Context, msgs []*jsonrpcMessage) {
+// handler handles JSON-RPC messages. There is a handler for each connection.
+type handler struct {
+	respWait map[string]*requestOp          // active client requests
+	subs     map[string]*ClientSubscription // active client subscriptions
+}
+
+func (h *handler) handleBatch(ctx context.Context, msgs []*jsonrpcMessage) []*jsonrpcMessage {
 	answers := make([]*jsonrpcMessage, 0, len(msgs))
 	for _, msg := range msgs {
 		answer := h.execMsg(ctx, msg)
@@ -49,7 +56,7 @@ func (h *handler) handleBatch(ctx context.Context, msgs []*jsonrpcMessage) {
 			answers = append(answers, answer)
 		}
 	}
-	h.send(answers)
+	return answers
 }
 
 // execMsg executes a single message.
@@ -67,6 +74,51 @@ func (h *handler) execMsg(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMess
 	default:
 		log.Debug("Dropping weird RPC message", "msg", msg)
 		return nil
+	}
+}
+
+func (h *handler) handleNotification(msg *jsonrpcMessage) {
+	if !strings.HasSuffix(msg.Method, notificationMethodSuffix) {
+		h.handleCall(msg)
+		return
+	}
+
+	var subResult struct {
+		ID     string          `json:"subscription"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(msg.Params, &subResult); err != nil {
+		log.Debug("dropping invalid subscription message", "msg", msg)
+		return
+	}
+	if h.subs[subResult.ID] != nil {
+		h.subs[subResult.ID].deliver(subResult.Result)
+	}
+}
+
+func (h *handler) handleResponse(msg *jsonrpcMessage) {
+	op := h.respWait[string(msg.ID)]
+	if op == nil {
+		log.Debug("unsolicited response", "msg", msg)
+		return
+	}
+	delete(h.respWait, string(msg.ID))
+	// For normal responses, just forward the reply to Call/BatchCall.
+	if op.sub == nil {
+		op.resp <- msg
+		return
+	}
+	// For subscription responses, start the subscription if the server
+	// indicates success. EthSubscribe gets unblocked in either case through
+	// the op.resp channel.
+	defer close(op.resp)
+	if msg.Error != nil {
+		op.err = msg.Error
+		return
+	}
+	if op.err = json.Unmarshal(msg.Result, &op.sub.subid); op.err == nil {
+		go op.sub.start()
+		h.subs[op.sub.subid] = op.sub
 	}
 }
 
