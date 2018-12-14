@@ -35,24 +35,6 @@ type API struct {
 	Public    bool        // indication if the methods must be considered safe for public use
 }
 
-// callback is a method callback which was registered in the server
-type callback struct {
-	rcvr        reflect.Value  // receiver of method
-	method      reflect.Method // callback
-	argTypes    []reflect.Type // input argument types
-	hasCtx      bool           // method's first argument is a context (not included in argTypes)
-	errPos      int            // err return idx, of -1 when method cannot return error
-	isSubscribe bool           // indication if the callback is a subscription
-}
-
-// service represents a registered object
-type service struct {
-	name          string        // name for service
-	typ           reflect.Type  // receiver type
-	callbacks     callbacks     // registered handlers
-	subscriptions subscriptions // available subscriptions/notifications
-}
-
 // serverRequest is an incoming request
 type serverRequest struct {
 	id            interface{}
@@ -62,10 +44,6 @@ type serverRequest struct {
 	isUnsubscribe bool
 	err           Error
 }
-
-type serviceRegistry map[string]*service // collection of services
-type callbacks map[string]*callback      // collection of RPC callbacks
-type subscriptions map[string]*callback  // collection of subscription callbacks
 
 // Server represents a RPC server
 type Server struct {
@@ -97,19 +75,9 @@ type Error interface {
 // multiple go-routines concurrently.
 type ServerCodec interface {
 	// Read next request
-	ReadRequestHeaders() ([]rpcRequest, bool, Error)
-	// Parse request argument to the given types
-	ParseRequestArguments(argTypes []reflect.Type, params interface{}) ([]reflect.Value, Error)
-	// Assemble success response, expects response id and payload
-	CreateResponse(id interface{}, reply interface{}) interface{}
-	// Assemble error response, expects response id and error
-	CreateErrorResponse(id interface{}, err Error) interface{}
-	// Assemble error response with extra information about the error through info
-	CreateErrorResponseWithInfo(id interface{}, err Error, info interface{}) interface{}
-	// Create notification response
-	CreateNotification(id, namespace string, event interface{}) interface{}
+	Read() (msgs []*jsonrpcMessage, isBatch bool, err error)
 	// Write msg to client.
-	Write(msg interface{}) error
+	Write(interface{}) error
 	// Close underlying data stream
 	Close()
 	// Closed when underlying connection is closed

@@ -393,9 +393,6 @@ func (c *Client) newMessage(method string, paramsIn ...interface{}) (*jsonrpcMes
 func (c *Client) send(ctx context.Context, op *requestOp, msg interface{}) error {
 	select {
 	case c.requestOp <- op:
-		log.Trace("", "msg", log.Lazy{Fn: func() string {
-			return fmt.Sprint("sending ", msg)
-		}})
 		err := c.write(ctx, msg)
 		c.sendDone <- err
 		return err
@@ -485,19 +482,19 @@ func (c *Client) dispatch(conn net.Conn) {
 			for _, msg := range batch {
 				switch {
 				case msg.isNotification():
-					log.Trace("", "msg", log.Lazy{Fn: func() string {
-						return fmt.Sprint("<-readResp: notification ", msg)
-					}})
+					// log.Trace("", "msg", log.Lazy{Fn: func() string {
+					// 	// return fmt.Sprint("<-readResp: notification ", msg)
+					// }})
 					c.handleNotification(msg)
 				case msg.isResponse():
-					log.Trace("", "msg", log.Lazy{Fn: func() string {
-						return fmt.Sprint("<-readResp: response ", msg)
-					}})
+					// log.Trace("", "msg", log.Lazy{Fn: func() string {
+					// 	return fmt.Sprint("<-readResp: response ", msg)
+					// }})
 					c.handleResponse(msg)
 				default:
-					log.Debug("", "msg", log.Lazy{Fn: func() string {
-						return fmt.Sprint("<-readResp: dropping weird message", msg)
-					}})
+					// log.Debug("", "msg", log.Lazy{Fn: func() string {
+					// 	return fmt.Sprint("<-readResp: dropping weird message", msg)
+					// }})
 					// TODO: maybe close
 				}
 			}
@@ -569,16 +566,13 @@ func (c *Client) handleNotification(msg *jsonrpcMessage) {
 		log.Debug("dropping non-subscription message", "msg", msg)
 		return
 	}
-	var subResult struct {
-		ID     string          `json:"subscription"`
-		Result json.RawMessage `json:"result"`
-	}
-	if err := json.Unmarshal(msg.Params, &subResult); err != nil {
+	var result subscriptionResult
+	if err := json.Unmarshal(msg.Params, &result); err != nil {
 		log.Debug("dropping invalid subscription message", "msg", msg)
 		return
 	}
-	if c.subs[subResult.ID] != nil {
-		c.subs[subResult.ID].deliver(subResult.Result)
+	if c.subs[result.ID] != nil {
+		c.subs[result.ID].deliver(result.Result)
 	}
 }
 

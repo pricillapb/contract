@@ -23,6 +23,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/davecgh/go-spew/spew"
 )
 
 type Service struct{}
@@ -83,21 +85,17 @@ func TestServerRegisterName(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 
-	if len(server.services) != 2 {
-		t.Fatalf("Expected 2 service entries, got %d", len(server.services))
+	if len(server.services.services) != 2 {
+		t.Fatalf("Expected 2 service entries, got %d", len(server.services.services))
 	}
 
-	svc, ok := server.services["calc"]
+	svc, ok := server.services.services["calc"]
 	if !ok {
 		t.Fatalf("Expected service calc to be registered")
 	}
 
 	if len(svc.callbacks) != 5 {
 		t.Errorf("Expected 5 callbacks for service 'calc', got %d", len(svc.callbacks))
-	}
-
-	if len(svc.subscriptions) != 1 {
-		t.Errorf("Expected 1 subscription for service 'calc', got %d", len(svc.subscriptions))
 	}
 }
 
@@ -115,10 +113,7 @@ func testServerMethodExecution(t *testing.T, method string) {
 	params := []interface{}{stringArg, intArg, argsArg}
 
 	request := map[string]interface{}{
-		"id":      12345,
-		"method":  "test_" + method,
-		"version": "2.0",
-		"params":  params,
+		"jsonrpc": "2.0", "id": 12345, "method": "test_" + method, "params": params,
 	}
 
 	clientConn, serverConn := net.Pipe()
@@ -133,23 +128,24 @@ func testServerMethodExecution(t *testing.T, method string) {
 		t.Fatal(err)
 	}
 
-	response := jsonSuccessResponse{Result: &Result{}}
+	var response map[string]interface{}
 	if err := in.Decode(&response); err != nil {
 		t.Fatal(err)
 	}
+	wantResponse := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      float64(12345),
+		"result": map[string]interface{}{
+			"String": stringArg,
+			"Int":    float64(intArg),
+			"Args": map[string]interface{}{
+				"S": argsArg.S,
+			},
+		},
+	}
 
-	if result, ok := response.Result.(*Result); ok {
-		if result.String != stringArg {
-			t.Errorf("expected %s, got : %s\n", stringArg, result.String)
-		}
-		if result.Int != intArg {
-			t.Errorf("expected %d, got %d\n", intArg, result.Int)
-		}
-		if !reflect.DeepEqual(result.Args, argsArg) {
-			t.Errorf("expected %v, got %v\n", argsArg, result)
-		}
-	} else {
-		t.Fatalf("invalid response: expected *Result - got: %T", response.Result)
+	if !reflect.DeepEqual(response, wantResponse) {
+		t.Errorf("wrong response:\ngot:  %swant: %s", spew.Sdump(response), spew.Sdump(wantResponse))
 	}
 }
 

@@ -1,57 +1,55 @@
+// Copyright 2018 The go-ethereum Authors
+// This file is part of the go-ethereum library.
+//
+// The go-ethereum library is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// The go-ethereum library is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
+
 package rpc
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/log"
 )
 
-// A value of this type can a JSON-RPC request, notification, successful response or
-// error response. Which one it is depends on the fields.
-type jsonrpcMessage struct {
-	Version string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
-	Error   *jsonError      `json:"error,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-}
-
-func (msg *jsonrpcMessage) isNotification() bool {
-	return msg.ID == nil && msg.Method != ""
-}
-
-func (msg *jsonrpcMessage) isCall() bool {
-	return msg.hasValidID() && msg.Method != ""
-}
-
-func (msg *jsonrpcMessage) isResponse() bool {
-	return msg.hasValidID() && msg.Method == "" && len(msg.Params) == 0
-}
-
-func (msg *jsonrpcMessage) hasValidID() bool {
-	return len(msg.ID) > 0 && msg.ID[0] != '{' && msg.ID[0] != '['
-}
-
-func (msg *jsonrpcMessage) String() string {
-	b, _ := json.Marshal(msg)
-	return string(b)
-}
-
 // handler handles JSON-RPC messages. There is a handler for each connection.
 type handler struct {
+	reg           *serviceRegistry
+	unsubscribeCb *callback
+
 	respWait map[string]*requestOp          // active client requests
 	subs     map[string]*ClientSubscription // active client subscriptions
 }
 
+func newHandler(reg *serviceRegistry) *handler {
+	h := &handler{
+		reg:      reg,
+		respWait: make(map[string]*requestOp),
+		subs:     make(map[string]*ClientSubscription),
+	}
+	h.unsubscribeCb = newCallback(reflect.Value{}, reflect.ValueOf(h.unsubscribe))
+	return h
+}
+
+// handleBatch executes all messages in a batch and returns the responses.
 func (h *handler) handleBatch(ctx context.Context, msgs []*jsonrpcMessage) []*jsonrpcMessage {
 	answers := make([]*jsonrpcMessage, 0, len(msgs))
 	for _, msg := range msgs {
-		answer := h.execMsg(ctx, msg)
+		answer := h.handleMsg(ctx, msg)
 		if answer != nil {
 			answers = append(answers, answer)
 		}
@@ -59,43 +57,46 @@ func (h *handler) handleBatch(ctx context.Context, msgs []*jsonrpcMessage) []*js
 	return answers
 }
 
-// execMsg executes a single message.
-func (h *handler) execMsg(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMessage {
+// handleMsg executes a single message and the returns the response.
+func (h *handler) handleMsg(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMessage {
+	start := time.Now()
 	switch {
 	case msg.isNotification():
-		log.Trace("Received notification", "msg", msg)
-		return c.handleNotification(ctx, msg)
+		h.handleNotification(ctx, msg)
+		log.Trace("Handled notification", "method", msg.Method, "t", time.Since(start))
+		return nil
 	case msg.isResponse():
-		log.Trace("Received response", "msg", msg)
-		return c.handleResponse(ctx, msg)
+		h.handleResponse(msg)
+		log.Trace("Handled RPC response", "id", string(msg.ID), "t", time.Since(start))
+		return nil
 	case msg.isCall():
-		log.Trace("Received call", "msg", msg)
-		return c.handleCall(ctx, msg)
+		resp := h.handleCall(ctx, msg)
+		log.Debug("Served "+msg.Method, "id", string(msg.ID), "t", time.Since(start))
+		return resp
 	default:
-		log.Debug("Dropping weird RPC message", "msg", msg)
+		// log.Debug("Dropping weird RPC message", "msg", msg)
 		return nil
 	}
 }
 
-func (h *handler) handleNotification(msg *jsonrpcMessage) {
+// handleNotification processes method calls that don't need a response.
+func (h *handler) handleNotification(ctx context.Context, msg *jsonrpcMessage) {
 	if !strings.HasSuffix(msg.Method, notificationMethodSuffix) {
-		h.handleCall(msg)
+		h.handleCall(ctx, msg)
 		return
 	}
 
-	var subResult struct {
-		ID     string          `json:"subscription"`
-		Result json.RawMessage `json:"result"`
-	}
-	if err := json.Unmarshal(msg.Params, &subResult); err != nil {
+	var result subscriptionResult
+	if err := json.Unmarshal(msg.Params, &result); err != nil {
 		log.Debug("dropping invalid subscription message", "msg", msg)
 		return
 	}
-	if h.subs[subResult.ID] != nil {
-		h.subs[subResult.ID].deliver(subResult.Result)
+	if h.subs[result.ID] != nil {
+		h.subs[result.ID].deliver(result.Result)
 	}
 }
 
+// handleResponse processes method call responses.
 func (h *handler) handleResponse(msg *jsonrpcMessage) {
 	op := h.respWait[string(msg.ID)]
 	if op == nil {
@@ -122,65 +123,78 @@ func (h *handler) handleResponse(msg *jsonrpcMessage) {
 	}
 }
 
+// handleCall processes method calls.
 func (h *handler) handleCall(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMessage {
-	if isUnsubscribe(msg) { // cancel subscription, first param must be the subscription id
-		if len(req.args) >= 1 && req.args[0].Kind() == reflect.String {
-			notifier, supported := NotifierFromContext(ctx)
-			if !supported { // interface doesn't support subscriptions (e.g. http)
-				return codec.CreateErrorResponse(&req.id, &callbackError{ErrNotificationsUnsupported.Error()}), nil
-			}
-
-			subid := ID(req.args[0].String())
-			if err := notifier.unsubscribe(subid); err != nil {
-				return codec.CreateErrorResponse(&req.id, &callbackError{err.Error()}), nil
-			}
-
-			return codec.CreateResponse(req.id, true), nil
-		}
-		return codec.CreateErrorResponse(&req.id, &invalidParamsError{"Expected subscription id as first argument"}), nil
+	if msg.isSubscribe() {
+		return h.handleSubscribe(ctx, msg)
 	}
-	if req.callb.isSubscribe {
-		subid, err := s.createSubscription(ctx, codec, req)
-		if err != nil {
-			return codec.CreateErrorResponse(&req.id, &callbackError{err.Error()}), nil
-		}
-
-		// active the subscription after the sub id was successfully sent to the client
-		activateSub := func() {
-			notifier, _ := NotifierFromContext(ctx)
-			notifier.activate(subid, req.svcname)
-		}
-
-		return codec.CreateResponse(req.id, subid), activateSub
+	var callb *callback
+	if msg.isUnsubscribe() {
+		callb = h.unsubscribeCb
+	} else {
+		callb = h.reg.callback(msg.Method)
+	}
+	if callb == nil {
+		return msg.errorResponse(&methodNotFoundError{method: msg.Method})
+	}
+	args, err := parsePositionalArguments(msg.Params, callb.argTypes)
+	if err != nil {
+		return msg.errorResponse(&invalidParamsError{err.Error()})
 	}
 
-	// regular RPC call, prepare arguments
-	if len(req.args) != len(req.callb.argTypes) {
-		rpcErr := &invalidParamsError{fmt.Sprintf("%s%s%s expects %d parameters, got %d",
-			req.svcname, serviceMethodSeparator, req.callb.method.Name,
-			len(req.callb.argTypes), len(req.args))}
-		return codec.CreateErrorResponse(&req.id, rpcErr), nil
+	return h.runMethod(ctx, msg, callb, args)
+}
+
+// handleSubscribe processes *_subscribe method calls.
+func (h *handler) handleSubscribe(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMessage {
+	sn, ok := ctx.Value(serverNotifierKey{}).(*serverNotifier)
+	if !ok {
+		return msg.errorResponse(ErrNotificationsUnsupported)
 	}
 
-	arguments := []reflect.Value{req.callb.rcvr}
-	if req.callb.hasCtx {
-		arguments = append(arguments, reflect.ValueOf(ctx))
+	// Subscription method name is first argument.
+	name, err := parseSubscriptionName(msg.Params)
+	if err != nil {
+		return msg.errorResponse(&invalidParamsError{err.Error()})
 	}
-	if len(req.args) > 0 {
-		arguments = append(arguments, req.args...)
+	namespace := msg.namespace()
+	callb := h.reg.subscription(namespace, name)
+	if callb == nil {
+		return msg.errorResponse(&subscriptionNotFoundError{namespace, name})
 	}
 
-	// execute RPC method and return result
-	reply := req.callb.method.Func.Call(arguments)
-	if len(reply) == 0 {
-		return codec.CreateResponse(req.id, nil), nil
+	// Parse subscription name arg too, but remove it before calling the callback.
+	argTypes := append([]reflect.Type{stringType}, callb.argTypes...)
+	args, err := parsePositionalArguments(msg.Params, argTypes)
+	if err != nil {
+		return msg.errorResponse(&invalidParamsError{err.Error()})
 	}
-	if req.callb.errPos >= 0 { // test if method returned an error
-		if !reply[req.callb.errPos].IsNil() {
-			e := reply[req.callb.errPos].Interface().(error)
-			res := codec.CreateErrorResponse(&req.id, &callbackError{e.Error()})
-			return res, nil
-		}
+	args = args[1:]
+
+	// Install notifier in context so the subscription handler can find it.
+	n := &Notifier{namespace, sn}
+	ctx = context.WithValue(ctx, notifierKey{}, n)
+
+	return h.runMethod(ctx, msg, callb, args)
+}
+
+// runMethod runs the Go callback for an RPC method.
+func (h *handler) runMethod(ctx context.Context, msg *jsonrpcMessage, callb *callback, args []reflect.Value) *jsonrpcMessage {
+	result, err := callb.call(ctx, msg.Method, args)
+	if err != nil {
+		return msg.errorResponse(err)
 	}
-	return codec.CreateResponse(req.id, reply[0].Interface()), nil
+	return msg.response(result)
+}
+
+// unsubscribe is the callback function for all *_unsubscribe calls.
+func (h *handler) unsubscribe(ctx context.Context, subid ID) (bool, error) {
+	sn, ok := ctx.Value(serverNotifierKey{}).(*serverNotifier)
+	if !ok {
+		return false, ErrNotificationsUnsupported
+	}
+	if err := sn.unsubscribe(subid); err != nil {
+		return false, err
+	}
+	return true, nil
 }

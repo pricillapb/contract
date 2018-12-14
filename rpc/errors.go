@@ -18,16 +18,22 @@ package rpc
 
 import "fmt"
 
-// request is for an unknown service
-type methodNotFoundError struct {
-	service string
-	method  string
-}
+const defaultErrorCode = -32000
+
+type methodNotFoundError struct{ method string }
 
 func (e *methodNotFoundError) ErrorCode() int { return -32601 }
 
 func (e *methodNotFoundError) Error() string {
-	return fmt.Sprintf("The method %s%s%s does not exist/is not available", e.service, serviceMethodSeparator, e.method)
+	return fmt.Sprintf("the method %s does not exist/is not available", e.method)
+}
+
+type subscriptionNotFoundError struct{ namespace, subscription string }
+
+func (e *subscriptionNotFoundError) ErrorCode() int { return -32601 }
+
+func (e *subscriptionNotFoundError) Error() string {
+	return fmt.Sprintf("no %q subscription in %s namespace", e.subscription, e.namespace)
 }
 
 // received message isn't a valid request

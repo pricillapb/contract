@@ -18,12 +18,7 @@ package rpc
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net"
 	"sync"
-	"testing"
-	"time"
 )
 
 type NotificationTestService struct {
@@ -93,6 +88,8 @@ func (s *NotificationTestService) HangSubscription(ctx context.Context, val int)
 	}()
 	return subscription, nil
 }
+
+/*
 
 func TestNotifications(t *testing.T) {
 	server := NewServer()
@@ -311,3 +308,5 @@ func TestSubscriptionMultipleNamespaces(t *testing.T) {
 		}
 	}
 }
+
+*/
