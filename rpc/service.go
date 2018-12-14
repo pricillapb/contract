@@ -64,9 +64,6 @@ func (r *serviceRegistry) registerName(name string, rcvr interface{}) error {
 	if name == "" {
 		return fmt.Errorf("no service name for type %s", rcvrVal.Type().String())
 	}
-	if !isExported(reflect.Indirect(rcvrVal).Type().Name()) {
-		return fmt.Errorf("%s is not exported", reflect.Indirect(rcvrVal).Type().Name())
-	}
 	callbacks := suitableCallbacks(rcvrVal)
 	if len(callbacks) == 0 {
 		return fmt.Errorf("Service %T doesn't have any suitable methods/subscriptions to expose", rcvr)

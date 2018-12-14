@@ -18,7 +18,6 @@ package rpc
 
 import (
 	"bufio"
-	"context"
 	"io"
 	"io/ioutil"
 	"net"
@@ -28,61 +27,11 @@ import (
 	"time"
 )
 
-type Service struct{}
-
-type Args struct {
-	S string
-}
-
-func (s *Service) NoArgsRets() {
-}
-
-type Result struct {
-	String string
-	Int    int
-	Args   *Args
-}
-
-func (s *Service) Echo(str string, i int, args *Args) Result {
-	return Result{str, i, args}
-}
-
-func (s *Service) EchoWithCtx(ctx context.Context, str string, i int, args *Args) Result {
-	return Result{str, i, args}
-}
-
-func (s *Service) Sleep(ctx context.Context, duration time.Duration) {
-	select {
-	case <-time.After(duration):
-	case <-ctx.Done():
-	}
-}
-
-func (s *Service) Rets() (string, error) {
-	return "", nil
-}
-
-func (s *Service) InvalidRets1() (error, string) {
-	return nil, ""
-}
-
-func (s *Service) InvalidRets2() (string, string) {
-	return "", ""
-}
-
-func (s *Service) InvalidRets3() (string, string, error) {
-	return "", "", nil
-}
-
-func (s *Service) Subscription(ctx context.Context) (*Subscription, error) {
-	return nil, nil
-}
-
 func TestServerRegisterName(t *testing.T) {
 	server := NewServer()
-	service := new(Service)
+	service := new(testService)
 
-	if err := server.RegisterName("calc", service); err != nil {
+	if err := server.RegisterName("test", service); err != nil {
 		t.Fatalf("%v", err)
 	}
 
@@ -90,13 +39,13 @@ func TestServerRegisterName(t *testing.T) {
 		t.Fatalf("Expected 2 service entries, got %d", len(server.services.services))
 	}
 
-	svc, ok := server.services.services["calc"]
+	svc, ok := server.services.services["test"]
 	if !ok {
 		t.Fatalf("Expected service calc to be registered")
 	}
 
 	if len(svc.callbacks) != 5 {
-		t.Errorf("Expected 5 callbacks for service 'calc', got %d", len(svc.callbacks))
+		t.Errorf("Expected 5 callbacks for service 'service', got %d", len(svc.callbacks))
 	}
 }
 
@@ -111,17 +60,14 @@ func TestServer(t *testing.T) {
 		}
 		path := filepath.Join("testdata", f.Name())
 		name := strings.TrimSuffix(f.Name(), filepath.Ext(f.Name()))
-		t.Run(name, func(t *testing.T) { runTestScript(t, path) })
+		t.Run(name, func(t *testing.T) {
+			runTestScript(t, path)
+		})
 	}
 }
 
 func runTestScript(t *testing.T, file string) {
-	server := NewServer()
-	service := new(Service)
-	if err := server.RegisterName("test", service); err != nil {
-		panic(err)
-	}
-
+	server := newTestServer()
 	content, err := ioutil.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
