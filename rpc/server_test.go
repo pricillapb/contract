@@ -17,14 +17,15 @@
 package rpc
 
 import (
+	"bufio"
 	"context"
-	"encoding/json"
+	"io"
+	"io/ioutil"
 	"net"
-	"reflect"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
 type Service struct{}
@@ -99,60 +100,62 @@ func TestServerRegisterName(t *testing.T) {
 	}
 }
 
-func testServerMethodExecution(t *testing.T, method string) {
+func TestServer(t *testing.T) {
+	files, err := ioutil.ReadDir("testdata")
+	if err != nil {
+		t.Fatal("where'd my testdata go?")
+	}
+	for _, f := range files {
+		if f.IsDir() || strings.HasPrefix(f.Name(), ".") {
+			continue
+		}
+		path := filepath.Join("testdata", f.Name())
+		name := strings.TrimSuffix(f.Name(), filepath.Ext(f.Name()))
+		t.Run(name, func(t *testing.T) { runTestScript(t, path) })
+	}
+}
+
+func runTestScript(t *testing.T, file string) {
 	server := NewServer()
 	service := new(Service)
-
 	if err := server.RegisterName("test", service); err != nil {
-		t.Fatalf("%v", err)
+		panic(err)
 	}
 
-	stringArg := "string arg"
-	intArg := 1122
-	argsArg := &Args{"abcde"}
-	params := []interface{}{stringArg, intArg, argsArg}
-
-	request := map[string]interface{}{
-		"jsonrpc": "2.0", "id": 12345, "method": "test_" + method, "params": params,
+	content, err := ioutil.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-
-	go server.ServeCodec(NewJSONCodec(serverConn), OptionMethodInvocation)
-
-	out := json.NewEncoder(clientConn)
-	in := json.NewDecoder(clientConn)
-
-	if err := out.Encode(request); err != nil {
-		t.Fatal(err)
+	go server.ServeCodec(NewJSONCodec(serverConn), OptionMethodInvocation|OptionSubscriptions)
+	readbuf := bufio.NewReader(clientConn)
+	for _, line := range strings.Split(string(content), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case len(line) == 0 || strings.HasPrefix(line, "//"):
+			// skip comments, blank lines
+			continue
+		case strings.HasPrefix(line, "SEND "):
+			// write to connection
+			clientConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if _, err := io.WriteString(clientConn, line[5:]); err != nil {
+				t.Fatalf("write error: %v", err)
+			}
+		case strings.HasPrefix(line, "RECV "):
+			// read line from connection and compare text
+			clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			sent, err := readbuf.ReadString('\n')
+			if err != nil {
+				t.Fatalf("read error: %v", err)
+			}
+			sent = strings.TrimRight(sent, "\r\n")
+			if sent != line[5:] {
+				t.Errorf("wrong line from server:\nwant:  %s\ngot:   %s", line[5:], sent)
+			}
+		default:
+			panic("invalid line in test script: " + line)
+		}
 	}
-
-	var response map[string]interface{}
-	if err := in.Decode(&response); err != nil {
-		t.Fatal(err)
-	}
-	wantResponse := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      float64(12345),
-		"result": map[string]interface{}{
-			"String": stringArg,
-			"Int":    float64(intArg),
-			"Args": map[string]interface{}{
-				"S": argsArg.S,
-			},
-		},
-	}
-
-	if !reflect.DeepEqual(response, wantResponse) {
-		t.Errorf("wrong response:\ngot:  %swant: %s", spew.Sdump(response), spew.Sdump(wantResponse))
-	}
-}
-
-func TestServerMethodExecution(t *testing.T) {
-	testServerMethodExecution(t, "echo")
-}
-
-func TestServerMethodWithCtx(t *testing.T) {
-	testServerMethodExecution(t, "echoWithCtx")
 }

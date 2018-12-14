@@ -102,7 +102,6 @@ func TestNotifications(t *testing.T) {
 	}
 
 	clientConn, serverConn := net.Pipe()
-
 	go server.ServeCodec(NewJSONCodec(serverConn), OptionMethodInvocation|OptionSubscriptions)
 
 	out := json.NewEncoder(clientConn)
@@ -122,25 +121,27 @@ func TestNotifications(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var subid string
-	response := jsonSuccessResponse{Result: subid}
+	var response map[string]interface{}
 	if err := in.Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-
 	var ok bool
-	if _, ok = response.Result.(string); !ok {
-		t.Fatalf("expected subscription id, got %T", response.Result)
+	if _, ok = response["result"].(string); !ok {
+		t.Fatalf("expected subscription id, got %+v", response)
+	}
+
+	type notificationResult struct{
+		t.Fatalf("expected subscription")
 	}
 
 	for i := 0; i < n; i++ {
-		var notification jsonNotification
+		var notification map[string]interface{}
 		if err := in.Decode(&notification); err != nil {
 			t.Fatalf("%v", err)
 		}
-
-		if int(notification.Params.Result.(float64)) != val+i {
-			t.Fatalf("expected %d, got %d", val+i, notification.Params.Result)
+		sv := int(notification["params"].([]interface{})[0].(map[string]interface{})["result"].(float64))
+		if sv != val+i {
+			t.Fatalf("expected %d, got %d", val+i, sv)
 		}
 	}
 
@@ -152,64 +153,6 @@ func TestNotifications(t *testing.T) {
 	}
 }
 
-func waitForMessages(t *testing.T, in *json.Decoder, successes chan<- jsonSuccessResponse,
-	failures chan<- jsonErrResponse, notifications chan<- jsonNotification, errors chan<- error) {
-
-	// read and parse server messages
-	for {
-		var rmsg json.RawMessage
-		if err := in.Decode(&rmsg); err != nil {
-			return
-		}
-
-		var responses []map[string]interface{}
-		if rmsg[0] == '[' {
-			if err := json.Unmarshal(rmsg, &responses); err != nil {
-				errors <- fmt.Errorf("Received invalid message: %s", rmsg)
-				return
-			}
-		} else {
-			var msg map[string]interface{}
-			if err := json.Unmarshal(rmsg, &msg); err != nil {
-				errors <- fmt.Errorf("Received invalid message: %s", rmsg)
-				return
-			}
-			responses = append(responses, msg)
-		}
-
-		for _, msg := range responses {
-			// determine what kind of msg was received and broadcast
-			// it to over the corresponding channel
-			if _, found := msg["result"]; found {
-				successes <- jsonSuccessResponse{
-					Version: msg["jsonrpc"].(string),
-					Id:      msg["id"],
-					Result:  msg["result"],
-				}
-				continue
-			}
-			if _, found := msg["error"]; found {
-				params := msg["params"].(map[string]interface{})
-				failures <- jsonErrResponse{
-					Version: msg["jsonrpc"].(string),
-					Id:      msg["id"],
-					Error:   jsonError{int(params["subscription"].(float64)), params["message"].(string), params["data"]},
-				}
-				continue
-			}
-			if _, found := msg["params"]; found {
-				params := msg["params"].(map[string]interface{})
-				notifications <- jsonNotification{
-					Version: msg["jsonrpc"].(string),
-					Method:  msg["method"].(string),
-					Params:  jsonSubscription{params["subscription"].(string), params["result"]},
-				}
-				continue
-			}
-			errors <- fmt.Errorf("Received invalid message: %s", msg)
-		}
-	}
-}
 
 // TestSubscriptionMultipleNamespaces ensures that subscriptions can exists
 // for multiple different namespaces.
