@@ -75,6 +75,7 @@ func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot
 	}()
 
 	s.codecsMu.Lock()
+	s.codecs.Add(codec)
 	s.codecsMu.Unlock()
 
 	handler := newHandler(&s.services)
