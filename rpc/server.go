@@ -39,6 +39,15 @@ const (
 	OptionSubscriptions = 1 << iota // support pub sub
 )
 
+// Server represents a RPC server
+type Server struct {
+	services serviceRegistry
+
+	run      int32
+	codecsMu sync.Mutex
+	codecs   mapset.Set
+}
+
 // NewServer creates a new server instance with no registered handlers.
 func NewServer() *Server {
 	server := &Server{codecs: mapset.NewSet(), run: 1}
@@ -67,20 +76,18 @@ func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot
 	var pend sync.WaitGroup
 	defer pend.Wait()
 
-	// Remove the codec on shutdown.
+	// Add the codec and remove it on shutdown.
+	s.codecsMu.Lock()
+	s.codecs.Add(codec)
+	s.codecsMu.Unlock()
 	defer func() {
 		s.codecsMu.Lock()
 		s.codecs.Remove(codec)
 		s.codecsMu.Unlock()
 	}()
 
-	s.codecsMu.Lock()
-	s.codecs.Add(codec)
-	s.codecsMu.Unlock()
-
-	handler := newHandler(&s.services)
-
 	// Serve requests until shutdown.
+	handler := newHandler(&s.services)
 	for atomic.LoadInt32(&s.run) == 1 {
 		reqs, batch, err := codec.Read()
 		if err != nil {

@@ -19,11 +19,8 @@ package rpc
 import (
 	"fmt"
 	"math"
-	"reflect"
 	"strings"
-	"sync"
 
-	mapset "github.com/deckarep/golang-set"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
@@ -33,35 +30,6 @@ type API struct {
 	Version   string      // api version for DApp's
 	Service   interface{} // receiver instance which holds the methods
 	Public    bool        // indication if the methods must be considered safe for public use
-}
-
-// serverRequest is an incoming request
-type serverRequest struct {
-	id            interface{}
-	svcname       string
-	callb         *callback
-	args          []reflect.Value
-	isUnsubscribe bool
-	err           Error
-}
-
-// Server represents a RPC server
-type Server struct {
-	services serviceRegistry
-
-	run      int32
-	codecsMu sync.Mutex
-	codecs   mapset.Set
-}
-
-// rpcRequest represents a raw incoming RPC request
-type rpcRequest struct {
-	service  string
-	method   string
-	id       interface{}
-	isPubSub bool
-	params   interface{}
-	err      Error // invalid batch element
 }
 
 // Error wraps RPC errors, which contain an error code in addition to the message.
