@@ -28,12 +28,14 @@ import (
 )
 
 const (
-	jsonrpcVersion           = "2.0"
+	vsn                      = "2.0"
 	serviceMethodSeparator   = "_"
 	subscribeMethodSuffix    = "_subscribe"
 	unsubscribeMethodSuffix  = "_unsubscribe"
 	notificationMethodSuffix = "_subscription"
 )
+
+var null = json.RawMessage("null")
 
 type subscriptionResult struct {
 	ID     string          `json:"subscription"`
@@ -43,7 +45,7 @@ type subscriptionResult struct {
 // A value of this type can a JSON-RPC request, notification, successful response or
 // error response. Which one it is depends on the fields.
 type jsonrpcMessage struct {
-	Version string          `json:"jsonrpc"`
+	Version string          `json:"jsonrpc,omitempty"`
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
@@ -60,7 +62,7 @@ func (msg *jsonrpcMessage) isCall() bool {
 }
 
 func (msg *jsonrpcMessage) isResponse() bool {
-	return msg.hasValidID() && msg.Method == "" && len(msg.Params) == 0
+	return msg.hasValidID() && msg.Method == "" && msg.Params == nil && (msg.Result != nil || msg.Error != nil)
 }
 
 func (msg *jsonrpcMessage) hasValidID() bool {
@@ -86,13 +88,8 @@ func (msg *jsonrpcMessage) String() string {
 }
 
 func (msg *jsonrpcMessage) errorResponse(err error) *jsonrpcMessage {
-	resp := &jsonrpcMessage{Version: "2.0", ID: msg.ID, Error: &jsonError{Message: err.Error()}}
-	ec, ok := err.(Error)
-	if ok {
-		resp.Error.Code = ec.ErrorCode()
-	} else {
-		resp.Error.Code = defaultErrorCode
-	}
+	resp := errorMessage(err)
+	resp.ID = msg.ID
 	return resp
 }
 
@@ -102,12 +99,24 @@ func (msg *jsonrpcMessage) response(result interface{}) *jsonrpcMessage {
 		// TODO: wrap with 'internal server error'
 		return msg.errorResponse(err)
 	}
-	return &jsonrpcMessage{Version: "2.0", ID: msg.ID, Result: enc}
+	return &jsonrpcMessage{Version: vsn, ID: msg.ID, Result: enc}
+}
+
+func errorMessage(err error) *jsonrpcMessage {
+	msg := &jsonrpcMessage{Version: vsn, ID: null, Error: &jsonError{
+		Code:    defaultErrorCode,
+		Message: err.Error(),
+	}}
+	ec, ok := err.(Error)
+	if ok {
+		msg.Error.Code = ec.ErrorCode()
+	}
+	return msg
 }
 
 func subscriptionNotification(namespace string, id ID, data json.RawMessage) *jsonrpcMessage {
 	params, _ := json.Marshal(&subscriptionResult{ID: string(id), Result: data})
-	return &jsonrpcMessage{Version: "2.0", Method: namespace + notificationMethodSuffix, Params: params}
+	return &jsonrpcMessage{Version: vsn, Method: namespace + notificationMethodSuffix, Params: params}
 }
 
 type jsonError struct {
@@ -168,18 +177,14 @@ func (c *jsonCodec) Read() (msg []*jsonrpcMessage, batch bool, err error) {
 	c.decMu.Lock()
 	defer c.decMu.Unlock()
 
+	// Decode the next JSON object in the input stream.
+	// This verifies basic syntax, etc.
 	var rawmsg json.RawMessage
-	if err = c.decode(&rawmsg); err != nil {
+	if err := c.decode(&rawmsg); err != nil {
 		return nil, false, err
 	}
-	if isBatch(rawmsg) {
-		batch = true
-		err = json.Unmarshal(rawmsg, &msg)
-	} else {
-		msg = make([]*jsonrpcMessage, 1)
-		err = json.Unmarshal(rawmsg, &msg[0])
-	}
-	return msg, batch, err
+	msg, batch = parseMessage(rawmsg)
+	return msg, batch, nil
 }
 
 // Write sends a message to client.
@@ -203,9 +208,29 @@ func (c *jsonCodec) Closed() <-chan interface{} {
 	return c.closed
 }
 
+// parseMessage parses raw bytes as a (batch of) JSON-RPC message(s). There are no error
+// checks in this function because the raw message has already been syntax-checked when it
+// is called. Any non-JSON-RPC messages in the input return the zero value of
+// jsonrpcMessage.
+func parseMessage(raw json.RawMessage) ([]*jsonrpcMessage, bool) {
+	if !isBatch(raw) {
+		msgs := []*jsonrpcMessage{{}}
+		json.Unmarshal(raw, &msgs[0])
+		return msgs, false
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.Token() // skip '['
+	var msgs []*jsonrpcMessage
+	for dec.More() {
+		msgs = append(msgs, new(jsonrpcMessage))
+		dec.Decode(&msgs[len(msgs)-1])
+	}
+	return msgs, true
+}
+
 // isBatch returns true when the first non-whitespace characters is '['
-func isBatch(msg json.RawMessage) bool {
-	for _, c := range msg {
+func isBatch(raw json.RawMessage) bool {
+	for _, c := range raw {
 		// skip insignificant whitespace (http://www.ietf.org/rfc/rfc4627.txt)
 		if c == 0x20 || c == 0x09 || c == 0x0a || c == 0x0d {
 			continue

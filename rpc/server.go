@@ -42,6 +42,7 @@ const (
 // Server represents a RPC server
 type Server struct {
 	services serviceRegistry
+	idgen    func() ID
 
 	run      int32
 	codecsMu sync.Mutex
@@ -50,7 +51,7 @@ type Server struct {
 
 // NewServer creates a new server instance with no registered handlers.
 func NewServer() *Server {
-	server := &Server{codecs: mapset.NewSet(), run: 1}
+	server := &Server{idgen: randomIDGenerator(), codecs: mapset.NewSet(), run: 1}
 	// Register the default service providing meta information about the RPC service such
 	// as the services and methods it offers.
 	rpcService := &RPCService{server}
@@ -92,23 +93,12 @@ func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot
 		reqs, batch, err := codec.Read()
 		if err != nil {
 			if err != io.EOF {
-				log.Debug("RPC connection error", "err", err)
+				codec.Write(errorMessage(&invalidRequestError{"parse error"}))
 			}
 			break
 		}
-		// Respond with error on shutdown.
-		if atomic.LoadInt32(&s.run) != 1 {
-			err = &shutdownError{}
-			if batch {
-				resps := make([]interface{}, len(reqs))
-				for i, r := range reqs {
-					resps[i] = r.errorResponse(err)
-				}
-				codec.Write(resps)
-			} else {
-				codec.Write(reqs[0].errorResponse(err))
-			}
-			break
+		if batch && len(reqs) == 0 {
+			codec.Write(errorMessage(&invalidRequestError{"empty batch"}))
 		}
 
 		// Serve the request.
@@ -123,17 +113,19 @@ func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot
 			// connection is closed the notifier will stop and cancels all active
 			// subscriptions.
 			if options&OptionSubscriptions == OptionSubscriptions {
-				sn := newServerNotifier(codec)
+				sn := newServerNotifier(s.idgen, codec)
 				ctx = context.WithValue(ctx, serverNotifierKey{}, sn)
 				defer sn.activate()
 			}
-			var resp interface{}
 			if batch {
-				resp = handler.handleBatch(ctx, reqs)
+				if resp := handler.handleBatch(ctx, reqs); len(resp) > 0 {
+					codec.Write(resp)
+				}
 			} else {
-				resp = handler.handleMsg(ctx, reqs[0])
+				if resp := handler.handleMsg(ctx, reqs[0]); resp != nil {
+					codec.Write(resp)
+				}
 			}
-			codec.Write(resp)
 		}()
 
 		if singleShot {

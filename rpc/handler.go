@@ -73,9 +73,10 @@ func (h *handler) handleMsg(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMe
 		resp := h.handleCall(ctx, msg)
 		log.Debug("Served "+msg.Method, "id", string(msg.ID), "t", time.Since(start))
 		return resp
+	case msg.hasValidID():
+		return msg.errorResponse(&invalidRequestError{"invalid request"})
 	default:
-		// log.Debug("Dropping weird RPC message", "msg", msg)
-		return nil
+		return errorMessage(&invalidRequestError{"invalid request"})
 	}
 }
 

@@ -479,17 +479,6 @@ func TestClientReconnect(t *testing.T) {
 	}
 }
 
-func newTestServer() *Server {
-	server := NewServer()
-	if err := server.RegisterName("test", new(testService)); err != nil {
-		panic(err)
-	}
-	if err := server.RegisterName("nftest", new(notificationTestService)); err != nil {
-		panic(err)
-	}
-	return server
-}
-
 func httpTestClient(srv *Server, transport string, fl *flakeyListener) (*Client, *httptest.Server) {
 	// Create the HTTP server.
 	var hs *httptest.Server

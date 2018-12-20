@@ -17,79 +17,41 @@
 package rpc
 
 import (
+	"encoding/json"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
-/*
-
-func TestNotifications(t *testing.T) {
-	server := NewServer()
-	service := &NotificationTestService{unsubscribed: make(chan string)}
-
-	if err := server.RegisterName("eth", service); err != nil {
-		t.Fatalf("unable to register test service %v", err)
-	}
-
-	clientConn, serverConn := net.Pipe()
-	go server.ServeCodec(NewJSONCodec(serverConn), OptionMethodInvocation|OptionSubscriptions)
-
-	out := json.NewEncoder(clientConn)
-	in := json.NewDecoder(clientConn)
-
-	n := 5
-	val := 12345
-	request := map[string]interface{}{
-		"id":      1,
-		"method":  "eth_subscribe",
-		"version": "2.0",
-		"params":  []interface{}{"someSubscription", n, val},
-	}
-
-	// create subscription
-	if err := out.Encode(request); err != nil {
-		t.Fatal(err)
-	}
-
-	var response map[string]interface{}
-	if err := in.Decode(&response); err != nil {
-		t.Fatal(err)
-	}
-	var ok bool
-	if _, ok = response["result"].(string); !ok {
-		t.Fatalf("expected subscription id, got %+v", response)
-	}
-
-	type notificationResult struct{
-		t.Fatalf("expected subscription")
-	}
-
-	for i := 0; i < n; i++ {
-		var notification map[string]interface{}
-		if err := in.Decode(&notification); err != nil {
-			t.Fatalf("%v", err)
+func TestNewID(t *testing.T) {
+	hexchars := "0123456789ABCDEFabcdef"
+	for i := 0; i < 100; i++ {
+		id := string(NewID())
+		if !strings.HasPrefix(id, "0x") {
+			t.Fatalf("invalid ID prefix, want '0x...', got %s", id)
 		}
-		sv := int(notification["params"].([]interface{})[0].(map[string]interface{})["result"].(float64))
-		if sv != val+i {
-			t.Fatalf("expected %d, got %d", val+i, sv)
-		}
-	}
 
-	clientConn.Close() // causes notification unsubscribe callback to be called
-	select {
-	case <-service.unsubscribed:
-	case <-time.After(1 * time.Second):
-		t.Fatal("Unsubscribe not called after one second")
+		id = id[2:]
+		if len(id) == 0 || len(id) > 32 {
+			t.Fatalf("invalid ID length, want len(id) > 0 && len(id) <= 32), got %d", len(id))
+		}
+
+		for i := 0; i < len(id); i++ {
+			if strings.IndexByte(hexchars, id[i]) == -1 {
+				t.Fatalf("unexpected byte, want any valid hex char, got %c", id[i])
+			}
+		}
 	}
 }
-
 
 // TestSubscriptionMultipleNamespaces ensures that subscriptions can exists
 // for multiple different namespaces.
 func TestSubscriptionMultipleNamespaces(t *testing.T) {
 	var (
 		namespaces        = []string{"eth", "shh", "bzz"}
-		service           = NotificationTestService{}
+		service           = &notificationTestService{}
 		subCount          = len(namespaces) * 2
 		notificationCount = 3
 
@@ -97,24 +59,22 @@ func TestSubscriptionMultipleNamespaces(t *testing.T) {
 		clientConn, serverConn = net.Pipe()
 		out                    = json.NewEncoder(clientConn)
 		in                     = json.NewDecoder(clientConn)
-		successes              = make(chan jsonSuccessResponse)
-		failures               = make(chan jsonErrResponse)
-		notifications          = make(chan jsonNotification)
-		errors                 = make(chan error, 10)
+		successes              = make(chan subConfirmation)
+		notifications          = make(chan subscriptionResult)
+		errors                 = make(chan error, subCount*notificationCount+1)
 	)
 
 	// setup and start server
 	for _, namespace := range namespaces {
-		if err := server.RegisterName(namespace, &service); err != nil {
+		if err := server.RegisterName(namespace, service); err != nil {
 			t.Fatalf("unable to register test service %v", err)
 		}
 	}
-
 	go server.ServeCodec(NewJSONCodec(serverConn), OptionMethodInvocation|OptionSubscriptions)
 	defer server.Stop()
 
 	// wait for message and write them to the given channels
-	go waitForMessages(t, in, successes, failures, notifications, errors)
+	go waitForMessages(in, successes, notifications, errors)
 
 	// create subscriptions one by one
 	for i, namespace := range namespaces {
@@ -130,7 +90,7 @@ func TestSubscriptionMultipleNamespaces(t *testing.T) {
 		}
 	}
 
-	// create all subscriptions in 1 batch
+	// create all subscriptions in a batch.
 	var requests []interface{}
 	for i, namespace := range namespaces {
 		requests = append(requests, map[string]interface{}{
@@ -160,14 +120,12 @@ func TestSubscriptionMultipleNamespaces(t *testing.T) {
 
 	for !allReceived() {
 		select {
-		case suc := <-successes: // subscription created
-			subids[namespaces[int(suc.Id.(float64))]] = suc.Result.(string)
+		case confirmation := <-successes: // subscription created
+			subids[namespaces[confirmation.reqid]] = string(confirmation.subid)
 		case notification := <-notifications:
-			count[notification.Params.Subscription]++
+			count[notification.ID]++
 		case err := <-errors:
 			t.Fatal(err)
-		case failure := <-failures:
-			t.Errorf("received error: %v", failure.Error)
 		case <-timeout:
 			for _, namespace := range namespaces {
 				subid, found := subids[namespace]
@@ -184,25 +142,43 @@ func TestSubscriptionMultipleNamespaces(t *testing.T) {
 	}
 }
 
-*/
+type subConfirmation struct {
+	reqid int
+	subid ID
+}
 
-func TestNewID(t *testing.T) {
-	hexchars := "0123456789ABCDEFabcdef"
-	for i := 0; i < 100; i++ {
-		id := string(NewID())
-		if !strings.HasPrefix(id, "0x") {
-			t.Fatalf("invalid ID prefix, want '0x...', got %s", id)
+func waitForMessages(in *json.Decoder, successes chan subConfirmation, notifications chan subscriptionResult, errors chan error) {
+	decode := func() ([]*jsonrpcMessage, error) {
+		msg := make([]jsonrpcMessage, 1)
+		if err := in.Decode(&msg[0]); err == nil {
+			return
+		} else if {
+
 		}
-
-		id = id[2:]
-		if len(id) == 0 || len(id) > 32 {
-			t.Fatalf("invalid ID length, want len(id) > 0 && len(id) <= 32), got %d", len(id))
-		}
-
-		for i := 0; i < len(id); i++ {
-			if strings.IndexByte(hexchars, id[i]) == -1 {
-				t.Fatalf("unexpected byte, want any valid hex char, got %c", id[i])
+	}
+	
+	for {
+		switch {
+		case msg.isNotification():
+			var res subscriptionResult
+			if err := json.Unmarshal(msg.Params, &res); err != nil {
+				errors <- fmt.Errorf("invalid subscription result: %v", err)
+			} else {
+				notifications <- res
 			}
+		case msg.isResponse():
+			var c subConfirmation
+			if msg.Error != nil {
+				errors <- msg.Error
+			} else if err := json.Unmarshal(msg.Result, &c.subid); err != nil {
+				errors <- fmt.Errorf("invalid response: %v", err)
+			} else {
+				json.Unmarshal(msg.ID, &c.reqid)
+				successes <- c
+			}
+		default:
+			errors <- fmt.Errorf("unrecognized message: %v", msg)
+			return
 		}
 	}
 }

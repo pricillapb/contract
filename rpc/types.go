@@ -42,7 +42,7 @@ type Error interface {
 // a RPC session. Implementations must be go-routine safe since the codec can be called in
 // multiple go-routines concurrently.
 type ServerCodec interface {
-	// Read next request
+	// Read next request.
 	Read() (msgs []*jsonrpcMessage, isBatch bool, err error)
 	// Write msg to client.
 	Write(interface{}) error
