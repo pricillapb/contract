@@ -46,13 +46,11 @@ func TestNewID(t *testing.T) {
 	}
 }
 
-// TestSubscriptionMultipleNamespaces ensures that subscriptions can exists
-// for multiple different namespaces.
-func TestSubscriptionMultipleNamespaces(t *testing.T) {
+func TestSubscriptions(t *testing.T) {
 	var (
 		namespaces        = []string{"eth", "shh", "bzz"}
 		service           = &notificationTestService{}
-		subCount          = len(namespaces) * 2
+		subCount          = len(namespaces)
 		notificationCount = 3
 
 		server                 = NewServer()
@@ -84,25 +82,9 @@ func TestSubscriptionMultipleNamespaces(t *testing.T) {
 			"version": "2.0",
 			"params":  []interface{}{"someSubscription", notificationCount, i},
 		}
-
 		if err := out.Encode(&request); err != nil {
 			t.Fatalf("Could not create subscription: %v", err)
 		}
-	}
-
-	// create all subscriptions in a batch.
-	var requests []interface{}
-	for i, namespace := range namespaces {
-		requests = append(requests, map[string]interface{}{
-			"id":      i,
-			"method":  fmt.Sprintf("%s_subscribe", namespace),
-			"version": "2.0",
-			"params":  []interface{}{"someSubscription", notificationCount, i},
-		})
-	}
-
-	if err := out.Encode(&requests); err != nil {
-		t.Fatalf("Could not create subscription in batch form: %v", err)
 	}
 
 	timeout := time.After(30 * time.Second)
@@ -117,7 +99,6 @@ func TestSubscriptionMultipleNamespaces(t *testing.T) {
 		}
 		return done
 	}
-
 	for !allReceived() {
 		select {
 		case confirmation := <-successes: // subscription created
@@ -148,16 +129,12 @@ type subConfirmation struct {
 }
 
 func waitForMessages(in *json.Decoder, successes chan subConfirmation, notifications chan subscriptionResult, errors chan error) {
-	decode := func() ([]*jsonrpcMessage, error) {
-		msg := make([]jsonrpcMessage, 1)
-		if err := in.Decode(&msg[0]); err == nil {
-			return
-		} else if {
-
-		}
-	}
-	
 	for {
+		var msg jsonrpcMessage
+		if err := in.Decode(&msg); err != nil {
+			errors <- fmt.Errorf("decode error: %v", err)
+			return
+		}
 		switch {
 		case msg.isNotification():
 			var res subscriptionResult
