@@ -50,6 +50,8 @@ type ServerCodec interface {
 	Close()
 	// Closed when underlying connection is closed
 	Closed() <-chan interface{}
+	// RemoteAddr returns the peer address of the connection.
+	RemoteAddr() string
 }
 
 type BlockNumber int64

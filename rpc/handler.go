@@ -17,10 +17,12 @@
 package rpc
 
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -30,9 +32,8 @@ import (
 type handler struct {
 	reg           *serviceRegistry
 	unsubscribeCb *callback
-
-	respWait map[string]*requestOp          // active client requests
-	subs     map[string]*ClientSubscription // active client subscriptions
+	respWait      map[string]*requestOp          // active client requests
+	subs          map[string]*ClientSubscription // active client subscriptions
 }
 
 func newHandler(reg *serviceRegistry) *handler {
@@ -198,4 +199,168 @@ func (h *handler) unsubscribe(ctx context.Context, subid ID) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// addRequestOp registers a request operation.
+func (h *handler) addRequestOp(op *requestOp) {
+	for _, id := range op.ids {
+		h.respWait[string(id)] = op
+	}
+}
+
+// removeRequestOps stops waiting for the given request IDs.
+func (h *handler) removeRequestOp(op *requestOp) {
+	for _, id := range op.ids {
+		delete(h.respWait, string(id))
+	}
+}
+
+// closeRequestOps unblocks pending send ops and active subscriptions.
+func (h *handler) closeRequestOps(err error) {
+	didClose := make(map[*requestOp]bool)
+
+	for id, op := range h.respWait {
+		// Remove the op so that later calls will not close op.resp again.
+		delete(h.respWait, id)
+
+		if !didClose[op] {
+			op.err = err
+			close(op.resp)
+			didClose[op] = true
+		}
+	}
+	for id, sub := range h.subs {
+		delete(h.subs, id)
+		sub.quitWithError(err, false)
+	}
+}
+
+// Subscriptions.
+
+// A ClientSubscription represents a subscription established through EthSubscribe.
+type ClientSubscription struct {
+	client    *Client
+	etype     reflect.Type
+	channel   reflect.Value
+	namespace string
+	subid     string
+	in        chan json.RawMessage
+
+	quitOnce sync.Once     // ensures quit is closed once
+	quit     chan struct{} // quit is closed when the subscription exits
+	errOnce  sync.Once     // ensures err is closed once
+	err      chan error
+}
+
+func newClientSubscription(c *Client, namespace string, channel reflect.Value) *ClientSubscription {
+	sub := &ClientSubscription{
+		client:    c,
+		namespace: namespace,
+		etype:     channel.Type().Elem(),
+		channel:   channel,
+		quit:      make(chan struct{}),
+		err:       make(chan error, 1),
+		in:        make(chan json.RawMessage),
+	}
+	return sub
+}
+
+// Err returns the subscription error channel. The intended use of Err is to schedule
+// resubscription when the client connection is closed unexpectedly.
+//
+// The error channel receives a value when the subscription has ended due
+// to an error. The received error is nil if Close has been called
+// on the underlying client and no other error has occurred.
+//
+// The error channel is closed when Unsubscribe is called on the subscription.
+func (sub *ClientSubscription) Err() <-chan error {
+	return sub.err
+}
+
+// Unsubscribe unsubscribes the notification and closes the error channel.
+// It can safely be called more than once.
+func (sub *ClientSubscription) Unsubscribe() {
+	sub.quitWithError(nil, true)
+	sub.errOnce.Do(func() { close(sub.err) })
+}
+
+func (sub *ClientSubscription) quitWithError(err error, unsubscribeServer bool) {
+	sub.quitOnce.Do(func() {
+		// The dispatch loop won't be able to execute the unsubscribe call
+		// if it is blocked on deliver. Close sub.quit first because it
+		// unblocks deliver.
+		close(sub.quit)
+		if unsubscribeServer {
+			sub.requestUnsubscribe()
+		}
+		if err != nil {
+			if err == ErrClientQuit {
+				err = nil // Adhere to subscription semantics.
+			}
+			sub.err <- err
+		}
+	})
+}
+
+func (sub *ClientSubscription) deliver(result json.RawMessage) (ok bool) {
+	select {
+	case sub.in <- result:
+		return true
+	case <-sub.quit:
+		return false
+	}
+}
+
+func (sub *ClientSubscription) start() {
+	sub.quitWithError(sub.forward())
+}
+
+func (sub *ClientSubscription) forward() (err error, unsubscribeServer bool) {
+	cases := []reflect.SelectCase{
+		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(sub.quit)},
+		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(sub.in)},
+		{Dir: reflect.SelectSend, Chan: sub.channel},
+	}
+	buffer := list.New()
+	defer buffer.Init()
+	for {
+		var chosen int
+		var recv reflect.Value
+		if buffer.Len() == 0 {
+			// Idle, omit send case.
+			chosen, recv, _ = reflect.Select(cases[:2])
+		} else {
+			// Non-empty buffer, send the first queued item.
+			cases[2].Send = reflect.ValueOf(buffer.Front().Value)
+			chosen, recv, _ = reflect.Select(cases)
+		}
+
+		switch chosen {
+		case 0: // <-sub.quit
+			return nil, false
+		case 1: // <-sub.in
+			val, err := sub.unmarshal(recv.Interface().(json.RawMessage))
+			if err != nil {
+				return err, true
+			}
+			if buffer.Len() == maxClientSubscriptionBuffer {
+				return ErrSubscriptionQueueOverflow, true
+			}
+			buffer.PushBack(val)
+		case 2: // sub.channel<-
+			cases[2].Send = reflect.Value{} // Don't hold onto the value.
+			buffer.Remove(buffer.Front())
+		}
+	}
+}
+
+func (sub *ClientSubscription) unmarshal(result json.RawMessage) (interface{}, error) {
+	val := reflect.New(sub.etype)
+	err := json.Unmarshal(result, val.Interface())
+	return val.Elem().Interface(), err
+}
+
+func (sub *ClientSubscription) requestUnsubscribe() error {
+	var result interface{}
+	return sub.client.Call(&result, sub.namespace+unsubscribeMethodSuffix, sub.subid)
 }
