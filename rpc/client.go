@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -37,6 +36,8 @@ var (
 	ErrNoResult                  = errors.New("no result in JSON-RPC response")
 	ErrSubscriptionQueueOverflow = errors.New("subscription queue overflow")
 )
+
+var errClientReconnected = errors.New("client reconnected")
 
 const (
 	// Timeouts
@@ -76,12 +77,12 @@ type BatchElem struct {
 // Client represents a connection to an RPC server.
 type Client struct {
 	idCounter   uint32
-	connectFunc func(ctx context.Context) (net.Conn, error)
+	connectFunc func(ctx context.Context) (ServerCodec, error)
 	isHTTP      bool
 
-	// writeConn is only safe to access outside dispatch, with the
-	// write lock held. The write lock is taken by sending on
-	// requestOp and released by sending on sendDone.
+	// writeConn is used for writing to the connection on the caller's goroutine. It should
+	// only be accessed outside of dispatch, with the write lock held. The write lock is
+	// taken by sending on requestOp and released by sending on sendDone.
 	writeConn ServerCodec
 
 	// for dispatch
@@ -153,14 +154,14 @@ func DialContext(ctx context.Context, rawurl string) (*Client, error) {
 	}
 }
 
-func newClient(initctx context.Context, connectFunc func(context.Context) (net.Conn, error)) (*Client, error) {
+func newClient(initctx context.Context, connectFunc func(context.Context) (ServerCodec, error)) (*Client, error) {
 	conn, err := connectFunc(initctx)
 	if err != nil {
 		return nil, err
 	}
 	_, isHTTP := conn.(*httpConn)
 	c := &Client{
-		writeConn:   NewJSONCodec(conn),
+		writeConn:   conn,
 		isHTTP:      isHTTP,
 		connectFunc: connectFunc,
 		close:       make(chan struct{}),
@@ -173,7 +174,7 @@ func newClient(initctx context.Context, connectFunc func(context.Context) (net.C
 		sendDone:    make(chan error, 1),
 	}
 	if !isHTTP {
-		go c.dispatch(c.writeConn)
+		go c.dispatch(conn)
 	}
 	return c, nil
 }
@@ -423,16 +424,15 @@ func (c *Client) write(ctx context.Context, msg interface{}) error {
 func (c *Client) reconnect(ctx context.Context) error {
 	newconn, err := c.connectFunc(ctx)
 	if err != nil {
-		log.Trace(fmt.Sprintf("reconnect failed: %v", err))
+		log.Trace("RPC client reconnect failed", "err", err)
 		return err
 	}
-	codec := NewJSONCodec(newconn)
 	select {
-	case c.reconnected <- codec:
-		c.writeConn = codec
+	case c.reconnected <- newconn:
+		c.writeConn = newconn
 		return nil
 	case <-c.didClose:
-		codec.Close()
+		newconn.Close()
 		return ErrClientQuit
 	}
 }
@@ -449,21 +449,14 @@ func (c *Client) dispatch(conn ServerCodec) {
 		requestOpLock = c.requestOp // nil while the send lock is held
 		handler       = newHandler(new(serviceRegistry))
 	)
-	defer close(c.didClose)
 	defer func() {
 		close(c.closing)
-		conn.Close()
-		if handler != nil {
-			handler.closeRequestOps(ErrClientQuit)
-			// Empty read channels until read is dead.
-			for {
-				select {
-				case <-c.readOp:
-				case <-c.readErr:
-					return
-				}
-			}
+		handler.closeRequestOps(ErrClientQuit)
+		if conn != nil {
+			conn.Close()
+			c.drainRead()
 		}
+		close(c.didClose)
 	}()
 
 	for {
@@ -471,7 +464,7 @@ func (c *Client) dispatch(conn ServerCodec) {
 		case <-c.close:
 			return
 
-		// Read path.
+		// Read path:
 		case op := <-c.readOp:
 			if op.batch {
 				handler.handleBatch(context.Background(), op.msgs)
@@ -484,20 +477,29 @@ func (c *Client) dispatch(conn ServerCodec) {
 			log.Debug("RPC client read error", "err", err)
 			handler.closeRequestOps(err)
 			conn.Close()
-			handler = nil
+			conn = nil
 
+		// Reconnect:
 		case newconn := <-c.reconnected:
-			log.Debug("RPC client reconnected", "reading", handler != nil, "remote", conn.RemoteAddr())
-			if handler != nil {
-				// Wait for the previous read loop to exit. This is a rare case.
+			log.Debug("RPC client reconnected", "reading", conn != nil, "remote", newconn.RemoteAddr())
+			if conn != nil {
+				// Wait for the previous read loop to exit. This is a rare case which
+				// happens if this loop isn't notified in time after the connection breaks.
+				// In those cases the caller will notice first and reconnect.
+				handler.closeRequestOps(errClientReconnected)
 				conn.Close()
-				<-c.readErr
+				c.drainRead()
 			}
 			handler = newHandler(new(serviceRegistry))
-			go c.read(newconn)
 			conn = newconn
+			go c.read(newconn)
+			if lastOp != nil {
+				// Re-register the in-flight call on the new handler/connection because
+				// that's where it will be sent.
+				handler.addRequestOp(lastOp)
+			}
 
-		// Send path.
+		// Send path:
 		case op := <-requestOpLock:
 			// Stop listening for further send ops until the current one is done.
 			requestOpLock = nil
@@ -514,6 +516,17 @@ func (c *Client) dispatch(conn ServerCodec) {
 			// Listen for send ops again.
 			requestOpLock = c.requestOp
 			lastOp = nil
+		}
+	}
+}
+
+// drainRead drops read messages until an error occurs.
+func (c *Client) drainRead() {
+	for {
+		select {
+		case <-c.readOp:
+		case <-c.readErr:
+			return
 		}
 	}
 }

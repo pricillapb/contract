@@ -26,8 +26,8 @@ import (
 
 // DialStdIO creates a client on stdin/stdout.
 func DialStdIO(ctx context.Context) (*Client, error) {
-	return newClient(ctx, func(_ context.Context) (net.Conn, error) {
-		return stdioConn{}, nil
+	return newClient(ctx, func(_ context.Context) (ServerCodec, error) {
+		return NewJSONCodec(stdioConn{}), nil
 	})
 }
 

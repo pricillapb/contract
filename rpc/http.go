@@ -46,25 +46,29 @@ type httpConn struct {
 	client    *http.Client
 	req       *http.Request
 	closeOnce sync.Once
-	closed    chan struct{}
+	closed    chan interface{}
 }
 
 // httpConn is treated specially by Client.
-func (hc *httpConn) LocalAddr() net.Addr              { return nullAddr }
-func (hc *httpConn) RemoteAddr() net.Addr             { return nullAddr }
-func (hc *httpConn) SetReadDeadline(time.Time) error  { return nil }
-func (hc *httpConn) SetWriteDeadline(time.Time) error { return nil }
-func (hc *httpConn) SetDeadline(time.Time) error      { return nil }
-func (hc *httpConn) Write([]byte) (int, error)        { panic("Write called") }
-
-func (hc *httpConn) Read(b []byte) (int, error) {
-	<-hc.closed
-	return 0, io.EOF
+func (hc *httpConn) Write(interface{}) error {
+	panic("Write called on httpConn")
 }
 
-func (hc *httpConn) Close() error {
+func (hc *httpConn) RemoteAddr() string {
+	return hc.req.URL.String()
+}
+
+func (hc *httpConn) Read() ([]*jsonrpcMessage, bool, error) {
+	<-hc.closed
+	return nil, false, io.EOF
+}
+
+func (hc *httpConn) Close() {
 	hc.closeOnce.Do(func() { close(hc.closed) })
-	return nil
+}
+
+func (hc *httpConn) Closed() <-chan interface{} {
+	return hc.closed
 }
 
 // HTTPTimeouts represents the configuration params for the HTTP RPC server.
@@ -110,8 +114,8 @@ func DialHTTPWithClient(endpoint string, client *http.Client) (*Client, error) {
 	req.Header.Set("Accept", contentType)
 
 	initctx := context.Background()
-	return newClient(initctx, func(context.Context) (net.Conn, error) {
-		return &httpConn{client: client, req: req, closed: make(chan struct{})}, nil
+	return newClient(initctx, func(context.Context) (ServerCodec, error) {
+		return &httpConn{client: client, req: req, closed: make(chan interface{})}, nil
 	})
 }
 

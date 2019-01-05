@@ -173,6 +173,10 @@ func NewJSONCodec(rwc io.ReadWriteCloser) ServerCodec {
 	}
 }
 
+func (c *jsonCodec) RemoteAddr() string {
+	return ""
+}
+
 func (c *jsonCodec) Read() (msg []*jsonrpcMessage, batch bool, err error) {
 	c.decMu.Lock()
 	defer c.decMu.Unlock()

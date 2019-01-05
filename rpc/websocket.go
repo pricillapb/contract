@@ -60,18 +60,22 @@ func (srv *Server) WebsocketHandler(allowedOrigins []string) http.Handler {
 	return websocket.Server{
 		Handshake: wsHandshakeValidator(allowedOrigins),
 		Handler: func(conn *websocket.Conn) {
-			// Create a custom encode/decode pair to enforce payload size and number encoding
-			conn.MaxPayloadBytes = maxRequestContentLength
-
-			encoder := func(v interface{}) error {
-				return websocketJSONCodec.Send(conn, v)
-			}
-			decoder := func(v interface{}) error {
-				return websocketJSONCodec.Receive(conn, v)
-			}
-			srv.ServeCodec(NewCodec(conn, encoder, decoder), OptionMethodInvocation|OptionSubscriptions)
+			codec := newWebsocketCodec(conn)
+			srv.ServeCodec(codec, OptionMethodInvocation|OptionSubscriptions)
 		},
 	}
+}
+
+func newWebsocketCodec(conn *websocket.Conn) ServerCodec {
+	// Create a custom encode/decode pair to enforce payload size and number encoding
+	conn.MaxPayloadBytes = maxRequestContentLength
+	encoder := func(v interface{}) error {
+		return websocketJSONCodec.Send(conn, v)
+	}
+	decoder := func(v interface{}) error {
+		return websocketJSONCodec.Receive(conn, v)
+	}
+	return NewCodec(conn, encoder, decoder)
 }
 
 // NewWSServer creates a new websocket RPC server around an API provider.
@@ -155,8 +159,12 @@ func DialWebsocket(ctx context.Context, endpoint, origin string) (*Client, error
 		return nil, err
 	}
 
-	return newClient(ctx, func(ctx context.Context) (net.Conn, error) {
-		return wsDialContext(ctx, config)
+	return newClient(ctx, func(ctx context.Context) (ServerCodec, error) {
+		conn, err := wsDialContext(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+		return newWebsocketCodec(conn), nil
 	})
 }
 
