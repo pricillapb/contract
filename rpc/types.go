@@ -44,14 +44,20 @@ type Error interface {
 type ServerCodec interface {
 	// Read next request.
 	Read() (msgs []*jsonrpcMessage, isBatch bool, err error)
-	// Write msg to client.
-	Write(interface{}) error
 	// Close underlying data stream
 	Close()
 	// Closed when underlying connection is closed
 	Closed() <-chan interface{}
 	// RemoteAddr returns the peer address of the connection.
 	RemoteAddr() string
+
+	jsonWriter
+}
+
+// jsonWriter wraps Write of JSON messages. Implementations must be
+// safe for concurrent use.
+type jsonWriter interface {
+	Write(message interface{}) error
 }
 
 type BlockNumber int64

@@ -83,7 +83,7 @@ type Client struct {
 	// writeConn is used for writing to the connection on the caller's goroutine. It should
 	// only be accessed outside of dispatch, with the write lock held. The write lock is
 	// taken by sending on requestOp and released by sending on sendDone.
-	writeConn ServerCodec
+	writeConn jsonWriter
 
 	// for dispatch
 	close       chan struct{}
@@ -471,7 +471,6 @@ func (c *Client) dispatch(conn ServerCodec) {
 			} else {
 				handler.handleMsg(context.Background(), op.msgs[0])
 			}
-			// TODO send answer
 
 		case err := <-c.readErr:
 			log.Debug("RPC client read error", "err", err)
@@ -494,14 +493,14 @@ func (c *Client) dispatch(conn ServerCodec) {
 			conn = newconn
 			go c.read(newconn)
 			if lastOp != nil {
-				// Re-register the in-flight call on the new handler/connection because
-				// that's where it will be sent.
+				// Re-register the in-flight request on the new handler/connection
+				// because that's where it will be sent.
 				handler.addRequestOp(lastOp)
 			}
 
 		// Send path:
 		case op := <-requestOpLock:
-			// Stop listening for further send ops until the current one is done.
+			// Stop listening for further requests until the current one has been sent.
 			requestOpLock = nil
 			lastOp = op
 			handler.addRequestOp(op)
@@ -513,7 +512,7 @@ func (c *Client) dispatch(conn ServerCodec) {
 				// read loop goes down, it will signal all other current operations.
 				handler.removeRequestOp(lastOp)
 			}
-			// Listen for send ops again.
+			// Let the next request in.
 			requestOpLock = c.requestOp
 			lastOp = nil
 		}
