@@ -83,8 +83,8 @@ func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot
 	// connection is closed the notifier will stop and cancels all active
 	// subscriptions.
 	if options&OptionSubscriptions == OptionSubscriptions {
-		handler.allowSubscriptions = true
-		handler.subscriptionIDgen = s.idgen
+		handler.allowSubscribe = true
+		handler.idgen = s.idgen
 	}
 
 	// Add the codec and remove it on shutdown.

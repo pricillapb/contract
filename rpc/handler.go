@@ -28,58 +28,54 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
-// handler handles JSON-RPC messages. There is a handler for each connection.
+// handler handles JSON-RPC messages. There is one handler per connection. Note that
+// handler is not safe for concurrent use. Message handling never blocks indefinitely
+// because RPCs are processed on background goroutines launched by handler.
+//
+// The entry points for incoming messages are:
+//
+//    h.handleMsg(message)
+//    h.handleBatch(message)
+//
+// Outgoing calls use the requestOp struct. Register the request before sending it
+// on the connection:
+//
+//    op := &requestOp{ids: ...}
+//    h.addRequestOp(op)
+//
+// Now send the request, then wait for the reply to be delivered through handleMsg:
+//
+//    if err := op.wait(...); err != nil {
+//        h.removeRequestOp(op) // timeout, etc.
+//    }
+//
 type handler struct {
 	reg           *serviceRegistry
 	unsubscribeCb *callback
+	idgen         func() ID                      // subscription ID generator
 	respWait      map[string]*requestOp          // active client requests
 	subs          map[string]*ClientSubscription // active client subscriptions
+	callWG        sync.WaitGroup                 // pending call goroutines
+	rootCtx       context.Context                // canceled by close()
+	cancelRoot    func()                         // cancel function for rootCtx
+	conn          jsonWriter                     // where responses will be sent
 
-	calls      sync.WaitGroup
-	rootCtx    context.Context
-	cancelRoot func()
-	conn       jsonWriter // where responses will be sent
-
-	allowSubscriptions bool
-	subscriptionIDgen  func() ID
+	allowSubscribe bool
 }
 
 func newHandler(conn jsonWriter, reg *serviceRegistry) *handler {
 	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	h := &handler{
-		reg:               reg,
-		conn:              conn,
-		respWait:          make(map[string]*requestOp),
-		subs:              make(map[string]*ClientSubscription),
-		rootCtx:           rootCtx,
-		cancelRoot:        cancelRoot,
-		subscriptionIDgen: randomIDGenerator(),
+		reg:        reg,
+		conn:       conn,
+		respWait:   make(map[string]*requestOp),
+		subs:       make(map[string]*ClientSubscription),
+		rootCtx:    rootCtx,
+		cancelRoot: cancelRoot,
+		idgen:      randomIDGenerator(),
 	}
 	h.unsubscribeCb = newCallback(reflect.Value{}, reflect.ValueOf(h.unsubscribe))
 	return h
-}
-
-// close cancels all requests and waits for call goroutines to shut down.
-func (h *handler) close(err error) {
-	h.cancelAllRequests(err)
-	h.cancelRoot()
-	h.calls.Wait()
-}
-
-// startCallProc runs fn in a new goroutine and starts tracking it in the h.calls wait group.
-func (h *handler) startCallProc(fn func(context.Context)) {
-	h.calls.Add(1)
-	go func() {
-		ctx, cancel := context.WithCancel(h.rootCtx)
-		defer h.calls.Done()
-		defer cancel()
-		if h.allowSubscriptions {
-			sn := newServerNotifier(h.subscriptionIDgen, h.conn)
-			ctx = context.WithValue(ctx, serverNotifierKey{}, sn)
-			defer sn.activate()
-		}
-		fn(ctx)
-	}()
 }
 
 // handleBatch executes all messages in a batch and returns the responses.
@@ -118,6 +114,63 @@ func (h *handler) handleMsg(msg *jsonrpcMessage) {
 			h.conn.Write(answer)
 		}
 	})
+}
+
+// close cancels all requests and waits for call goroutines to shut down.
+func (h *handler) close(err error) {
+	h.cancelAllRequests(err)
+	h.cancelRoot()
+	h.callWG.Wait()
+}
+
+// addRequestOp registers a request operation.
+func (h *handler) addRequestOp(op *requestOp) {
+	for _, id := range op.ids {
+		h.respWait[string(id)] = op
+	}
+}
+
+// removeRequestOps stops waiting for the given request IDs.
+func (h *handler) removeRequestOp(op *requestOp) {
+	for _, id := range op.ids {
+		delete(h.respWait, string(id))
+	}
+}
+
+// cancelAllRequests unblocks pending requests ops and active subscriptions.
+func (h *handler) cancelAllRequests(err error) {
+	didClose := make(map[*requestOp]bool)
+
+	for id, op := range h.respWait {
+		// Remove the op so that later calls will not close op.resp again.
+		delete(h.respWait, id)
+
+		if !didClose[op] {
+			op.err = err
+			close(op.resp)
+			didClose[op] = true
+		}
+	}
+	for id, sub := range h.subs {
+		delete(h.subs, id)
+		sub.quitWithError(err, false)
+	}
+}
+
+// startCallProc runs fn in a new goroutine and starts tracking it in the h.calls wait group.
+func (h *handler) startCallProc(fn func(context.Context)) {
+	h.callWG.Add(1)
+	go func() {
+		ctx, cancel := context.WithCancel(h.rootCtx)
+		defer h.callWG.Done()
+		defer cancel()
+		if h.allowSubscribe {
+			sn := newServerNotifier(h.idgen, h.conn)
+			ctx = context.WithValue(ctx, serverNotifierKey{}, sn)
+			defer sn.activate()
+		}
+		fn(ctx)
+	}()
 }
 
 // handleImmediate executes non-call messages. It returns false if the message is a call.
@@ -271,40 +324,6 @@ func (h *handler) unsubscribe(ctx context.Context, subid ID) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-// addRequestOp registers a request operation.
-func (h *handler) addRequestOp(op *requestOp) {
-	for _, id := range op.ids {
-		h.respWait[string(id)] = op
-	}
-}
-
-// removeRequestOps stops waiting for the given request IDs.
-func (h *handler) removeRequestOp(op *requestOp) {
-	for _, id := range op.ids {
-		delete(h.respWait, string(id))
-	}
-}
-
-// cancelAllRequests unblocks pending requests ops and active subscriptions.
-func (h *handler) cancelAllRequests(err error) {
-	didClose := make(map[*requestOp]bool)
-
-	for id, op := range h.respWait {
-		// Remove the op so that later calls will not close op.resp again.
-		delete(h.respWait, id)
-
-		if !didClose[op] {
-			op.err = err
-			close(op.resp)
-			didClose[op] = true
-		}
-	}
-	for id, sub := range h.subs {
-		delete(h.subs, id)
-		sub.quitWithError(err, false)
-	}
 }
 
 // Subscriptions.
