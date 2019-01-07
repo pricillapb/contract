@@ -173,16 +173,17 @@ func (h *handler) startCallProc(fn func(context.Context)) {
 	}()
 }
 
-// handleImmediate executes non-call messages. It returns false if the message is a call.
+// handleImmediate executes non-call messages. It returns false if the message is a
+// call or requires a reply.
 func (h *handler) handleImmediate(msg *jsonrpcMessage) bool {
 	start := time.Now()
 	switch {
 	case msg.isNotification():
-		ok := strings.HasSuffix(msg.Method, notificationMethodSuffix)
-		if ok {
+		if strings.HasSuffix(msg.Method, notificationMethodSuffix) {
 			h.handleSubscriptionResult(msg)
+			return true
 		}
-		return ok
+		return false
 	case msg.isResponse():
 		h.handleResponse(msg)
 		log.Trace("Handled RPC response", "id", string(msg.ID), "t", time.Since(start))
