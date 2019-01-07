@@ -112,6 +112,7 @@ type requestOp struct {
 func (op *requestOp) wait(ctx context.Context, c *Client) (*jsonrpcMessage, error) {
 	select {
 	case <-ctx.Done():
+		// Send the timeout to dispatch so it can remove the request IDs.
 		select {
 		case c.reqTimeout <- op:
 		case <-c.closing:
@@ -451,9 +452,9 @@ func (c *Client) dispatch(conn ServerCodec) {
 	go c.read(conn)
 
 	var (
-		lastOp   *requestOp  // tracks last send operation
-		reqInitL = c.reqInit // nil while the send lock is held
-		handler  = newHandler(conn, new(serviceRegistry))
+		lastOp      *requestOp  // tracks last send operation
+		reqInitLock = c.reqInit // nil while the send lock is held
+		handler     = newHandler(conn, new(serviceRegistry))
 	)
 	defer func() {
 		close(c.closing)
@@ -505,9 +506,9 @@ func (c *Client) dispatch(conn ServerCodec) {
 			}
 
 		// Send path:
-		case op := <-reqInitL:
+		case op := <-reqInitLock:
 			// Stop listening for further requests until the current one has been sent.
-			reqInitL = nil
+			reqInitLock = nil
 			lastOp = op
 			handler.addRequestOp(op)
 
@@ -519,7 +520,7 @@ func (c *Client) dispatch(conn ServerCodec) {
 				handler.removeRequestOp(lastOp)
 			}
 			// Let the next request in.
-			reqInitL = c.reqInit
+			reqInitLock = c.reqInit
 			lastOp = nil
 
 		case op := <-c.reqTimeout:
