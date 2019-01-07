@@ -74,7 +74,6 @@ func (s *Server) RegisterName(name string, rcvr interface{}) error {
 // requests until the codec returns an error when reading a request. Requests are executed
 // concurrently when singleShot is false.
 func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot bool, options CodecOption) error {
-	// Serve requests until shutdown.
 	handler := newHandler(codec, s.idgen, &s.services)
 	defer handler.close(io.EOF)
 
@@ -96,6 +95,7 @@ func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot
 		s.codecsMu.Unlock()
 	}()
 
+	// Serve requests until shutdown.
 	for atomic.LoadInt32(&s.run) == 1 {
 		reqs, batch, err := codec.Read()
 		if err != nil {
