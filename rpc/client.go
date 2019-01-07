@@ -92,8 +92,9 @@ type Client struct {
 	reconnected chan ServerCodec // where write/reconnect sends the new connection
 	readOp      chan readOp      // read messages
 	readErr     chan error       // errors from read
-	requestOp   chan *requestOp  // for registering response IDs
-	sendDone    chan error       // signals write completion, releases write lock
+	reqInit     chan *requestOp  // register response IDs, takes write lock
+	reqSent     chan error       // signals write completion, releases write lock
+	reqTimeout  chan *requestOp  // removes response IDs when call timeout expires
 }
 
 type readOp struct {
@@ -108,9 +109,13 @@ type requestOp struct {
 	sub  *ClientSubscription  // only set for EthSubscribe requests
 }
 
-func (op *requestOp) wait(ctx context.Context) (*jsonrpcMessage, error) {
+func (op *requestOp) wait(ctx context.Context, c *Client) (*jsonrpcMessage, error) {
 	select {
 	case <-ctx.Done():
+		select {
+		case c.reqTimeout <- op:
+		case <-c.closing:
+		}
 		return nil, ctx.Err()
 	case resp := <-op.resp:
 		return resp, op.err
@@ -170,8 +175,9 @@ func newClient(initctx context.Context, connectFunc func(context.Context) (Serve
 		reconnected: make(chan ServerCodec),
 		readOp:      make(chan readOp),
 		readErr:     make(chan error),
-		requestOp:   make(chan *requestOp),
-		sendDone:    make(chan error, 1),
+		reqInit:     make(chan *requestOp),
+		reqSent:     make(chan error, 1),
+		reqTimeout:  make(chan *requestOp),
 	}
 	if !isHTTP {
 		go c.dispatch(conn)
@@ -238,7 +244,7 @@ func (c *Client) CallContext(ctx context.Context, result interface{}, method str
 	}
 
 	// dispatch has accepted the request and will close the channel when it quits.
-	switch resp, err := op.wait(ctx); {
+	switch resp, err := op.wait(ctx, c); {
 	case err != nil:
 		return err
 	case resp.Error != nil:
@@ -296,7 +302,7 @@ func (c *Client) BatchCallContext(ctx context.Context, b []BatchElem) error {
 	// Wait for all responses to come back.
 	for n := 0; n < len(b) && err == nil; n++ {
 		var resp *jsonrpcMessage
-		resp, err = op.wait(ctx)
+		resp, err = op.wait(ctx, c)
 		if err != nil {
 			break
 		}
@@ -373,7 +379,7 @@ func (c *Client) Subscribe(ctx context.Context, namespace string, channel interf
 	if err := c.send(ctx, op, msg); err != nil {
 		return nil, err
 	}
-	if _, err := op.wait(ctx); err != nil {
+	if _, err := op.wait(ctx, c); err != nil {
 		return nil, err
 	}
 	return op.sub, nil
@@ -391,9 +397,9 @@ func (c *Client) newMessage(method string, paramsIn ...interface{}) (*jsonrpcMes
 // if sending fails, op is deregistered.
 func (c *Client) send(ctx context.Context, op *requestOp, msg interface{}) error {
 	select {
-	case c.requestOp <- op:
+	case c.reqInit <- op:
 		err := c.write(ctx, msg)
-		c.sendDone <- err
+		c.reqSent <- err
 		return err
 	case <-ctx.Done():
 		// This can happen if the client is overloaded or unable to keep up with
@@ -445,13 +451,13 @@ func (c *Client) dispatch(conn ServerCodec) {
 	go c.read(conn)
 
 	var (
-		lastOp        *requestOp    // tracks last send operation
-		requestOpLock = c.requestOp // nil while the send lock is held
-		handler       = newHandler(new(serviceRegistry))
+		lastOp   *requestOp  // tracks last send operation
+		reqInitL = c.reqInit // nil while the send lock is held
+		handler  = newHandler(conn, new(serviceRegistry))
 	)
 	defer func() {
 		close(c.closing)
-		handler.closeRequestOps(ErrClientQuit)
+		handler.close(ErrClientQuit)
 		if conn != nil {
 			conn.Close()
 			c.drainRead()
@@ -467,14 +473,14 @@ func (c *Client) dispatch(conn ServerCodec) {
 		// Read path:
 		case op := <-c.readOp:
 			if op.batch {
-				handler.handleBatch(context.Background(), op.msgs)
+				handler.handleBatch(op.msgs)
 			} else {
-				handler.handleMsg(context.Background(), op.msgs[0])
+				handler.handleMsg(op.msgs[0])
 			}
 
 		case err := <-c.readErr:
 			log.Debug("RPC client read error", "err", err)
-			handler.closeRequestOps(err)
+			handler.close(err)
 			conn.Close()
 			conn = nil
 
@@ -485,11 +491,11 @@ func (c *Client) dispatch(conn ServerCodec) {
 				// Wait for the previous read loop to exit. This is a rare case which
 				// happens if this loop isn't notified in time after the connection breaks.
 				// In those cases the caller will notice first and reconnect.
-				handler.closeRequestOps(errClientReconnected)
+				handler.close(errClientReconnected)
 				conn.Close()
 				c.drainRead()
 			}
-			handler = newHandler(new(serviceRegistry))
+			handler = newHandler(newconn, new(serviceRegistry))
 			conn = newconn
 			go c.read(newconn)
 			if lastOp != nil {
@@ -499,13 +505,13 @@ func (c *Client) dispatch(conn ServerCodec) {
 			}
 
 		// Send path:
-		case op := <-requestOpLock:
+		case op := <-reqInitL:
 			// Stop listening for further requests until the current one has been sent.
-			requestOpLock = nil
+			reqInitL = nil
 			lastOp = op
 			handler.addRequestOp(op)
 
-		case err := <-c.sendDone:
+		case err := <-c.reqSent:
 			if err != nil {
 				// Remove response handlers for the last send. We remove those here
 				// because the error is already handled in Call or BatchCall. When the
@@ -513,8 +519,11 @@ func (c *Client) dispatch(conn ServerCodec) {
 				handler.removeRequestOp(lastOp)
 			}
 			// Let the next request in.
-			requestOpLock = c.requestOp
+			reqInitL = c.reqInit
 			lastOp = nil
+
+		case op := <-c.reqTimeout:
+			handler.removeRequestOp(op)
 		}
 	}
 }
