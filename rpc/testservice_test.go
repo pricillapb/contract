@@ -73,10 +73,7 @@ func (s *testService) EchoWithCtx(ctx context.Context, str string, i int, args *
 }
 
 func (s *testService) Sleep(ctx context.Context, duration time.Duration) {
-	select {
-	case <-time.After(duration):
-	case <-ctx.Done():
-	}
+	time.Sleep(duration)
 }
 
 func (s *testService) Rets() (string, error) {
