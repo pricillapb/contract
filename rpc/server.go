@@ -61,7 +61,7 @@ func NewServer() *Server {
 
 // RegisterName creates a service for the given rcvr type under the given name. When no
 // methods on the given rcvr match the criteria to be either a RPC method or a subscription
-// an error is returned. Otherwise a new service is created and added to the service
+// an error is returned. Otherwise a new service is created and a dded to the service
 // collection this server provides.
 func (s *Server) RegisterName(name string, rcvr interface{}) error {
 	return s.services.registerName(name, rcvr)
@@ -74,8 +74,18 @@ func (s *Server) RegisterName(name string, rcvr interface{}) error {
 // requests until the codec returns an error when reading a request. Requests are executed
 // concurrently when singleShot is false.
 func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot bool, options CodecOption) error {
-	var pend sync.WaitGroup
-	defer pend.Wait()
+	// Serve requests until shutdown.
+	handler := newHandler(codec, &s.services)
+	defer handler.close(io.EOF)
+
+	// If the codec supports notification include a notifier that callbacks can use
+	// to send notification to clients. It is tied to the request. If the
+	// connection is closed the notifier will stop and cancels all active
+	// subscriptions.
+	if options&OptionSubscriptions == OptionSubscriptions {
+		handler.allowSubscriptions = true
+		handler.subscriptionIDgen = s.idgen
+	}
 
 	// Add the codec and remove it on shutdown.
 	s.codecsMu.Lock()
@@ -87,8 +97,6 @@ func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot
 		s.codecsMu.Unlock()
 	}()
 
-	// Serve requests until shutdown.
-	handler := newHandler(&s.services)
 	for atomic.LoadInt32(&s.run) == 1 {
 		reqs, batch, err := codec.Read()
 		if err != nil {
@@ -102,31 +110,11 @@ func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot
 		}
 
 		// Serve the request.
-		pend.Add(1)
-		go func() {
-			defer pend.Done()
-			// This is the request-scoped context.
-			ctx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			// If the codec supports notification include a notifier that callbacks can use
-			// to send notification to clients. It is tied to the request. If the
-			// connection is closed the notifier will stop and cancels all active
-			// subscriptions.
-			if options&OptionSubscriptions == OptionSubscriptions {
-				sn := newServerNotifier(s.idgen, codec)
-				ctx = context.WithValue(ctx, serverNotifierKey{}, sn)
-				defer sn.activate()
-			}
-			if batch {
-				if resp := handler.handleBatch(ctx, reqs); len(resp) > 0 {
-					codec.Write(resp)
-				}
-			} else {
-				if resp := handler.handleMsg(ctx, reqs[0]); resp != nil {
-					codec.Write(resp)
-				}
-			}
-		}()
+		if batch {
+			handler.handleBatch(reqs)
+		} else {
+			handler.handleMsg(reqs[0])
+		}
 
 		if singleShot {
 			break

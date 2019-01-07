@@ -46,8 +46,6 @@ type ServerCodec interface {
 	Read() (msgs []*jsonrpcMessage, isBatch bool, err error)
 	// Close underlying data stream
 	Close()
-	// Closed when underlying connection is closed
-	Closed() <-chan interface{}
 	// RemoteAddr returns the peer address of the connection.
 	RemoteAddr() string
 
@@ -58,6 +56,8 @@ type ServerCodec interface {
 // safe for concurrent use.
 type jsonWriter interface {
 	Write(message interface{}) error
+	// Closed when underlying connection is closed
+	Closed() <-chan interface{}
 }
 
 type BlockNumber int64

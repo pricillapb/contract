@@ -34,41 +34,118 @@ type handler struct {
 	unsubscribeCb *callback
 	respWait      map[string]*requestOp          // active client requests
 	subs          map[string]*ClientSubscription // active client subscriptions
+
+	calls      sync.WaitGroup
+	rootCtx    context.Context
+	cancelRoot func()
+	conn       jsonWriter // where responses will be sent
+
+	allowSubscriptions bool
+	subscriptionIDgen  func() ID
 }
 
-func newHandler(reg *serviceRegistry) *handler {
+func newHandler(conn jsonWriter, reg *serviceRegistry) *handler {
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	h := &handler{
-		reg:      reg,
-		respWait: make(map[string]*requestOp),
-		subs:     make(map[string]*ClientSubscription),
+		reg:               reg,
+		conn:              conn,
+		respWait:          make(map[string]*requestOp),
+		subs:              make(map[string]*ClientSubscription),
+		rootCtx:           rootCtx,
+		cancelRoot:        cancelRoot,
+		subscriptionIDgen: randomIDGenerator(),
 	}
 	h.unsubscribeCb = newCallback(reflect.Value{}, reflect.ValueOf(h.unsubscribe))
 	return h
 }
 
-// handleBatch executes all messages in a batch and returns the responses.
-func (h *handler) handleBatch(ctx context.Context, msgs []*jsonrpcMessage) []*jsonrpcMessage {
-	answers := make([]*jsonrpcMessage, 0, len(msgs))
-	for _, msg := range msgs {
-		answer := h.handleMsg(ctx, msg)
-		if answer != nil {
-			answers = append(answers, answer)
-		}
-	}
-	return answers
+// close cancels all requests and waits for call goroutines to shut down.
+func (h *handler) close(err error) {
+	h.cancelAllRequests(err)
+	h.cancelRoot()
+	h.calls.Wait()
 }
 
-// handleMsg executes a single message and the returns the response.
-func (h *handler) handleMsg(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMessage {
+// startCallProc runs fn in a new goroutine and starts tracking it in the h.calls wait group.
+func (h *handler) startCallProc(fn func(context.Context)) {
+	h.calls.Add(1)
+	go func() {
+		ctx, cancel := context.WithCancel(h.rootCtx)
+		defer h.calls.Done()
+		defer cancel()
+		if h.allowSubscriptions {
+			sn := newServerNotifier(h.subscriptionIDgen, h.conn)
+			ctx = context.WithValue(ctx, serverNotifierKey{}, sn)
+			defer sn.activate()
+		}
+		fn(ctx)
+	}()
+}
+
+// handleBatch executes all messages in a batch and returns the responses.
+func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
+	// Handle non-call messages first:
+	calls := make([]*jsonrpcMessage, 0, len(msgs))
+	for _, msg := range msgs {
+		if handled := h.handleImmediate(msg); !handled {
+			calls = append(calls, msg)
+		}
+	}
+	if len(calls) == 0 {
+		return
+	}
+	// Process calls on a goroutine because they may block indefinitely:
+	h.startCallProc(func(ctx context.Context) {
+		answers := make([]*jsonrpcMessage, 0, len(msgs))
+		for _, msg := range calls {
+			if answer := h.handleCallMsg(ctx, msg); answer != nil {
+				answers = append(answers, answer)
+			}
+		}
+		if len(answers) > 0 {
+			h.conn.Write(answers)
+		}
+	})
+}
+
+// handleMsg handles a single message.
+func (h *handler) handleMsg(msg *jsonrpcMessage) {
+	if ok := h.handleImmediate(msg); ok {
+		return
+	}
+	h.startCallProc(func(ctx context.Context) {
+		if answer := h.handleCallMsg(ctx, msg); answer != nil {
+			h.conn.Write(answer)
+		}
+	})
+}
+
+// handleImmediate executes non-call messages. It returns false if the message is a call.
+func (h *handler) handleImmediate(msg *jsonrpcMessage) bool {
 	start := time.Now()
 	switch {
 	case msg.isNotification():
-		h.handleNotification(ctx, msg)
-		log.Trace("Handled notification", "method", msg.Method, "t", time.Since(start))
-		return nil
+		ok := strings.HasSuffix(msg.Method, notificationMethodSuffix)
+		if ok {
+			h.handleSubscriptionResult(msg)
+		}
+		return ok
 	case msg.isResponse():
 		h.handleResponse(msg)
 		log.Trace("Handled RPC response", "id", string(msg.ID), "t", time.Since(start))
+		return true
+	default:
+		return false
+	}
+}
+
+// handleCallMsg executes a call message and returns the answer.
+func (h *handler) handleCallMsg(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMessage {
+	start := time.Now()
+	switch {
+	case msg.isNotification():
+		h.handleCall(ctx, msg)
+		log.Debug("Served "+msg.Method, "t", time.Since(start))
 		return nil
 	case msg.isCall():
 		resp := h.handleCall(ctx, msg)
@@ -81,13 +158,8 @@ func (h *handler) handleMsg(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMe
 	}
 }
 
-// handleNotification processes method calls that don't need a response.
-func (h *handler) handleNotification(ctx context.Context, msg *jsonrpcMessage) {
-	if !strings.HasSuffix(msg.Method, notificationMethodSuffix) {
-		h.handleCall(ctx, msg)
-		return
-	}
-
+// handleSubscriptionResult processes subscription notifications.
+func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 	var result subscriptionResult
 	if err := json.Unmarshal(msg.Params, &result); err != nil {
 		log.Debug("dropping invalid subscription message", "msg", msg)
@@ -215,8 +287,8 @@ func (h *handler) removeRequestOp(op *requestOp) {
 	}
 }
 
-// closeRequestOps unblocks pending send ops and active subscriptions.
-func (h *handler) closeRequestOps(err error) {
+// cancelAllRequests unblocks pending requests ops and active subscriptions.
+func (h *handler) cancelAllRequests(err error) {
 	didClose := make(map[*requestOp]bool)
 
 	for id, op := range h.respWait {

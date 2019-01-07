@@ -93,7 +93,7 @@ func (s *Subscription) MarshalJSON() ([]byte, error) {
 }
 
 type serverNotifier struct {
-	codec ServerCodec
+	codec jsonWriter
 
 	idgen    func() ID
 	subMu    sync.Mutex
@@ -110,7 +110,7 @@ type serverNotifierKey struct{}
 
 // newNotifier creates a new notifier that can be used to send subscription
 // notifications to the client.
-func newServerNotifier(idgen func() ID, codec ServerCodec) *serverNotifier {
+func newServerNotifier(idgen func() ID, codec jsonWriter) *serverNotifier {
 	return &serverNotifier{
 		idgen:  idgen,
 		codec:  codec,
