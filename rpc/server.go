@@ -75,7 +75,7 @@ func (s *Server) RegisterName(name string, rcvr interface{}) error {
 // concurrently when singleShot is false.
 func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot bool, options CodecOption) error {
 	// Serve requests until shutdown.
-	handler := newHandler(codec, &s.services)
+	handler := newHandler(codec, s.idgen, &s.services)
 	defer handler.close(io.EOF)
 
 	// If the codec supports notification include a notifier that callbacks can use
@@ -84,7 +84,6 @@ func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot
 	// subscriptions.
 	if options&OptionSubscriptions == OptionSubscriptions {
 		handler.allowSubscribe = true
-		handler.idgen = s.idgen
 	}
 
 	// Add the codec and remove it on shutdown.

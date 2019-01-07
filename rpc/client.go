@@ -24,8 +24,6 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
-	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -76,7 +74,7 @@ type BatchElem struct {
 
 // Client represents a connection to an RPC server.
 type Client struct {
-	idCounter   uint32
+	idgen       func() ID
 	connectFunc func(ctx context.Context) (ServerCodec, error)
 	isHTTP      bool
 
@@ -167,6 +165,7 @@ func newClient(initctx context.Context, connectFunc func(context.Context) (Serve
 	}
 	_, isHTTP := conn.(*httpConn)
 	c := &Client{
+		idgen:       randomIDGenerator(),
 		writeConn:   conn,
 		isHTTP:      isHTTP,
 		connectFunc: connectFunc,
@@ -187,8 +186,7 @@ func newClient(initctx context.Context, connectFunc func(context.Context) (Serve
 }
 
 func (c *Client) nextID() json.RawMessage {
-	id := atomic.AddUint32(&c.idCounter, 1)
-	return []byte(strconv.FormatUint(uint64(id), 10))
+	return []byte(`"` + c.idgen() + `"`)
 }
 
 // SupportedModules calls the rpc_modules method, retrieving the list of
@@ -408,8 +406,6 @@ func (c *Client) send(ctx context.Context, op *requestOp, msg interface{}) error
 		return ctx.Err()
 	case <-c.closing:
 		return ErrClientQuit
-	case <-c.didClose:
-		return ErrClientQuit
 	}
 }
 
@@ -454,7 +450,7 @@ func (c *Client) dispatch(conn ServerCodec) {
 	var (
 		lastOp      *requestOp  // tracks last send operation
 		reqInitLock = c.reqInit // nil while the send lock is held
-		handler     = newHandler(conn, new(serviceRegistry))
+		handler     = newHandler(conn, c.idgen, new(serviceRegistry))
 	)
 	defer func() {
 		close(c.closing)
@@ -496,7 +492,7 @@ func (c *Client) dispatch(conn ServerCodec) {
 				conn.Close()
 				c.drainRead()
 			}
-			handler = newHandler(newconn, new(serviceRegistry))
+			handler = newHandler(newconn, c.idgen, new(serviceRegistry))
 			conn = newconn
 			go c.read(newconn)
 			if lastOp != nil {
