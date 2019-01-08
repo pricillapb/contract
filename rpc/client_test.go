@@ -106,6 +106,11 @@ func TestClientCancelIPC(t *testing.T)       { testClientCancel("ipc", t) }
 // This test checks that requests made through CallContext can be canceled by canceling
 // the context.
 func testClientCancel(transport string, t *testing.T) {
+	// These tests take a lot of time, run them all at once.
+	// You probably want to run with -parallel 1 or comment out
+	// the call to t.Parallel if you enable the logging.
+	t.Parallel()
+
 	server := newTestServer()
 	defer server.Stop()
 
@@ -142,11 +147,6 @@ func testClientCancel(transport string, t *testing.T) {
 		panic("unknown transport: " + transport)
 	}
 
-	// These tests take a lot of time, run them all at once.
-	// You probably want to run with -parallel 1 or comment out
-	// the call to t.Parallel if you enable the logging.
-	t.Parallel()
-
 	// The actual test starts here.
 	var (
 		wg       sync.WaitGroup
@@ -174,7 +174,8 @@ func testClientCancel(transport string, t *testing.T) {
 			}
 			// Now perform a call with the context.
 			// The key thing here is that no call will ever complete successfully.
-			err := client.CallContext(ctx, nil, "test_sleep", 2*maxContextCancelTimeout)
+			sleepTime := maxContextCancelTimeout + 20*time.Millisecond
+			err := client.CallContext(ctx, nil, "test_sleep", sleepTime)
 			if err != nil {
 				log.Debug(fmt.Sprint("got expected error:", err))
 			} else {
@@ -424,7 +425,7 @@ func TestClientReconnect(t *testing.T) {
 		return srv, l
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
 	// Start a server and corresponding client.
