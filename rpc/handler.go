@@ -116,9 +116,10 @@ func (h *handler) handleMsg(msg *jsonrpcMessage) {
 	})
 }
 
-// close cancels all requests and waits for call goroutines to shut down.
-func (h *handler) close(err error) {
-	h.cancelAllRequests(err)
+// close cancels all requests except for inflightReq and waits for
+// call goroutines to shut down.
+func (h *handler) close(err error, inflightReq *requestOp) {
+	h.cancelAllRequests(err, inflightReq)
 	h.cancelRoot()
 	h.callWG.Wait()
 }
@@ -137,9 +138,12 @@ func (h *handler) removeRequestOp(op *requestOp) {
 	}
 }
 
-// cancelAllRequests unblocks pending requests ops and active subscriptions.
-func (h *handler) cancelAllRequests(err error) {
+// cancelAllRequests unblocks and removes pending requests and active subscriptions.
+func (h *handler) cancelAllRequests(err error, inflightReq *requestOp) {
 	didClose := make(map[*requestOp]bool)
+	if inflightReq != nil {
+		didClose[inflightReq] = true
+	}
 
 	for id, op := range h.respWait {
 		// Remove the op so that later calls will not close op.resp again.
@@ -216,7 +220,7 @@ func (h *handler) handleCallMsg(ctx context.Context, msg *jsonrpcMessage) *jsonr
 func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 	var result subscriptionResult
 	if err := json.Unmarshal(msg.Params, &result); err != nil {
-		log.Debug("dropping invalid subscription message", "msg", msg)
+		log.Debug("Dropping invalid subscription message", "msg", msg)
 		return
 	}
 	if h.subs[result.ID] != nil {
@@ -228,7 +232,7 @@ func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 func (h *handler) handleResponse(msg *jsonrpcMessage) {
 	op := h.respWait[string(msg.ID)]
 	if op == nil {
-		log.Debug("unsolicited response", "msg", msg)
+		log.Debug("Unsolicited RPC response", "id", string(msg.ID))
 		return
 	}
 	delete(h.respWait, string(msg.ID))

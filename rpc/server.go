@@ -75,7 +75,7 @@ func (s *Server) RegisterName(name string, rcvr interface{}) error {
 // concurrently when singleShot is false.
 func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot bool, options CodecOption) error {
 	handler := newHandler(codec, s.idgen, &s.services)
-	defer handler.close(io.EOF)
+	defer handler.close(io.EOF, nil)
 
 	// If the codec supports notification include a notifier that callbacks can use
 	// to send notification to clients. It is tied to the request. If the

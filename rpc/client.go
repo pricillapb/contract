@@ -444,9 +444,6 @@ func (c *Client) reconnect(ctx context.Context) error {
 // It sends read messages to waiting calls to Call and BatchCall
 // and subscription notifications to registered subscriptions.
 func (c *Client) dispatch(conn ServerCodec) {
-	// Spawn the initial read loop.
-	go c.read(conn)
-
 	var (
 		lastOp      *requestOp  // tracks last send operation
 		reqInitLock = c.reqInit // nil while the send lock is held
@@ -454,13 +451,16 @@ func (c *Client) dispatch(conn ServerCodec) {
 	)
 	defer func() {
 		close(c.closing)
-		handler.close(ErrClientQuit)
+		handler.close(ErrClientQuit, nil)
 		if conn != nil {
 			conn.Close()
 			c.drainRead()
 		}
 		close(c.didClose)
 	}()
+
+	// Spawn the initial read loop.
+	go c.read(conn)
 
 	for {
 		select {
@@ -477,7 +477,7 @@ func (c *Client) dispatch(conn ServerCodec) {
 
 		case err := <-c.readErr:
 			log.Debug("RPC client read error", "err", err)
-			handler.close(err)
+			handler.close(err, lastOp)
 			conn.Close()
 			conn = nil
 
@@ -487,19 +487,19 @@ func (c *Client) dispatch(conn ServerCodec) {
 			if conn != nil {
 				// Wait for the previous read loop to exit. This is a rare case which
 				// happens if this loop isn't notified in time after the connection breaks.
-				// In those cases the caller will notice first and reconnect.
-				handler.close(errClientReconnected)
+				// In those cases the caller will notice first and reconnect. Closing the
+				// handler terminates all waiting requests (closing op.resp) except for
+				// lastOp, which will be transferred to the new handler.
+				handler.close(errClientReconnected, lastOp)
 				conn.Close()
 				c.drainRead()
 			}
 			handler = newHandler(newconn, c.idgen, new(serviceRegistry))
 			conn = newconn
 			go c.read(newconn)
-			if lastOp != nil {
-				// Re-register the in-flight request on the new handler/connection
-				// because that's where it will be sent.
-				handler.addRequestOp(lastOp)
-			}
+			// Re-register the in-flight request on the new handler/connection
+			// because that's where it will be sent.
+			handler.addRequestOp(lastOp)
 
 		// Send path:
 		case op := <-reqInitLock:
@@ -510,9 +510,8 @@ func (c *Client) dispatch(conn ServerCodec) {
 
 		case err := <-c.reqSent:
 			if err != nil {
-				// Remove response handlers for the last send. We remove those here
-				// because the error is already handled in Call or BatchCall. When the
-				// read loop goes down, it will signal all other current operations.
+				// Remove response handlers for the last send. When the read loop
+				// goes down, it will signal all other current operations.
 				handler.removeRequestOp(lastOp)
 			}
 			// Let the next request in.
@@ -537,12 +536,12 @@ func (c *Client) drainRead() {
 }
 
 // read decodes RPC messages from a codec, feeding them into dispatch.
-func (c *Client) read(codec ServerCodec) error {
+func (c *Client) read(codec ServerCodec) {
 	for {
 		msgs, batch, err := codec.Read()
 		if err != nil {
 			c.readErr <- err
-			return err
+			return
 		}
 		c.readOp <- readOp{msgs, batch}
 	}
