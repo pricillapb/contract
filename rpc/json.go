@@ -18,6 +18,7 @@ package rpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -33,6 +35,8 @@ const (
 	subscribeMethodSuffix    = "_subscribe"
 	unsubscribeMethodSuffix  = "_unsubscribe"
 	notificationMethodSuffix = "_subscription"
+
+	defaultWriteTimeout = 10 * time.Second // used if context has no deadline
 )
 
 var null = json.RawMessage("null")
@@ -136,6 +140,11 @@ func (err *jsonError) ErrorCode() int {
 	return err.Code
 }
 
+type Conn interface {
+	io.ReadWriteCloser
+	SetWriteDeadline(time.Time) error
+}
+
 // jsonCodec reads and writes JSON-RPC messages to the underlying connection. It also has
 // support for parsing arguments and serializing (result) objects.
 type jsonCodec struct {
@@ -145,32 +154,27 @@ type jsonCodec struct {
 	decode func(v interface{}) error // decoder to allow multiple transports
 	encMu  sync.Mutex                // guards the encoder
 	encode func(v interface{}) error // encoder to allow multiple transports
-	rw     io.ReadWriteCloser        // connection
+	conn   Conn
 }
 
 // NewCodec creates a new RPC server codec with support for JSON-RPC 2.0 based
 // on explicitly given encoding and decoding methods.
-func NewCodec(rwc io.ReadWriteCloser, encode, decode func(v interface{}) error) ServerCodec {
+func NewCodec(conn Conn, encode, decode func(v interface{}) error) ServerCodec {
 	return &jsonCodec{
 		closed: make(chan interface{}),
 		encode: encode,
 		decode: decode,
-		rw:     rwc,
+		conn:   conn,
 	}
 }
 
 // NewJSONCodec creates a new RPC server codec with support for JSON-RPC 2.0.
-func NewJSONCodec(rwc io.ReadWriteCloser) ServerCodec {
-	enc := json.NewEncoder(rwc)
-	dec := json.NewDecoder(rwc)
+func NewJSONCodec(conn Conn) ServerCodec {
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(conn)
 	dec.UseNumber()
 
-	return &jsonCodec{
-		closed: make(chan interface{}),
-		encode: enc.Encode,
-		decode: dec.Decode,
-		rw:     rwc,
-	}
+	return NewCodec(conn, enc.Encode, dec.Decode)
 }
 
 func (c *jsonCodec) RemoteAddr() string {
@@ -192,10 +196,15 @@ func (c *jsonCodec) Read() (msg []*jsonrpcMessage, batch bool, err error) {
 }
 
 // Write sends a message to client.
-func (c *jsonCodec) Write(v interface{}) error {
+func (c *jsonCodec) Write(ctx context.Context, v interface{}) error {
 	c.encMu.Lock()
 	defer c.encMu.Unlock()
 
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(defaultWriteTimeout)
+	}
+	c.conn.SetWriteDeadline(deadline)
 	return c.encode(v)
 }
 
@@ -203,7 +212,7 @@ func (c *jsonCodec) Write(v interface{}) error {
 func (c *jsonCodec) Close() {
 	c.closer.Do(func() {
 		close(c.closed)
-		c.rw.Close()
+		c.conn.Close()
 	})
 }
 

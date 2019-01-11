@@ -18,6 +18,7 @@ package rpc
 
 import (
 	"bufio"
+	"context"
 	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -152,7 +153,9 @@ func (n *serverNotifier) send(sub *Subscription, data interface{}) error {
 	if err != nil {
 		return err
 	}
-	return n.codec.Write(subscriptionNotification(sub.namespace, sub.ID, enc))
+	// TODO: figure out where this context should come from.
+	ctx := context.Background()
+	return n.codec.Write(ctx, subscriptionNotification(sub.namespace, sub.ID, enc))
 }
 
 // unsubscribe a subscription.

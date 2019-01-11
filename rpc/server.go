@@ -17,6 +17,7 @@
 package rpc
 
 import (
+	"context"
 	"io"
 	"sync/atomic"
 
@@ -99,7 +100,7 @@ func (s *Server) serveSingleRequest(codec ServerCodec) {
 	reqs, batch, err := codec.Read()
 	if err != nil {
 		if err != io.EOF {
-			codec.Write(errorMessage(&invalidRequestError{"parse error"}))
+			codec.Write(context.Background(), errorMessage(&invalidRequestError{"parse error"}))
 		}
 		return
 	}

@@ -17,6 +17,7 @@
 package rpc
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -52,11 +53,11 @@ type ServerCodec interface {
 	jsonWriter
 }
 
-// jsonWriter wraps Write of JSON messages. Implementations must be
-// safe for concurrent use.
+// jsonWriter can write JSON messages to its underlying connection.
+// Implementations must be safe for concurrent use.
 type jsonWriter interface {
-	Write(message interface{}) error
-	// Closed when underlying connection is closed
+	Write(context.Context, interface{}) error
+	// Closed returns a channel which is closed when the connection is closed.
 	Closed() <-chan interface{}
 }
 

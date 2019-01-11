@@ -84,7 +84,7 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 	// Emit error response for empty batches:
 	if len(msgs) == 0 {
 		h.startCallProc(func(ctx context.Context) {
-			h.conn.Write(errorMessage(&invalidRequestError{"empty batch"}))
+			h.conn.Write(ctx, errorMessage(&invalidRequestError{"empty batch"}))
 		})
 		return
 	}
@@ -108,7 +108,7 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 			}
 		}
 		if len(answers) > 0 {
-			h.conn.Write(answers)
+			h.conn.Write(ctx, answers)
 		}
 	})
 }
@@ -120,7 +120,7 @@ func (h *handler) handleMsg(msg *jsonrpcMessage) {
 	}
 	h.startCallProc(func(ctx context.Context) {
 		if answer := h.handleCallMsg(ctx, msg); answer != nil {
-			h.conn.Write(answer)
+			h.conn.Write(ctx, answer)
 		}
 	})
 }

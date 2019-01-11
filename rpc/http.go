@@ -50,7 +50,7 @@ type httpConn struct {
 }
 
 // httpConn is treated specially by Client.
-func (hc *httpConn) Write(interface{}) error {
+func (hc *httpConn) Write(context.Context, interface{}) error {
 	panic("Write called on httpConn")
 }
 
@@ -184,16 +184,23 @@ func (hc *httpConn) doRequest(ctx context.Context, msg interface{}) (io.ReadClos
 	return resp.Body, nil
 }
 
-// httpReadWriteNopCloser wraps a io.Reader and io.Writer with a NOP Close method.
-type httpReadWriteNopCloser struct {
+// httpServerConn turns a HTTP connection into a Conn.
+type httpServerConn struct {
 	io.Reader
 	io.Writer
 }
 
-// Close does nothing and returns always nil
-func (t *httpReadWriteNopCloser) Close() error {
-	return nil
+func newHTTPServerConn(r *http.Request, w http.ResponseWriter) ServerCodec {
+	body := io.LimitReader(r.Body, maxRequestContentLength)
+	conn := &httpServerConn{Reader: body, Writer: w}
+	return NewJSONCodec(conn)
 }
+
+// Close does nothing and always returns nil.
+func (t *httpServerConn) Close() error { return nil }
+
+// SetWriteDeadline does nothing and always returns nil.
+func (t *httpServerConn) SetWriteDeadline(time.Time) error { return nil }
 
 // NewHTTPServer creates a new HTTP RPC server around an API provider.
 //
@@ -249,11 +256,9 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx = context.WithValue(ctx, "Origin", origin)
 	}
 
-	body := io.LimitReader(r.Body, maxRequestContentLength)
-	codec := NewJSONCodec(&httpReadWriteNopCloser{body, w})
-	defer codec.Close()
-
 	w.Header().Set("content-type", contentType)
+	codec := newHTTPServerConn(r, w)
+	defer codec.Close()
 	srv.serveSingleRequest(codec)
 }
 

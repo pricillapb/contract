@@ -40,8 +40,7 @@ var (
 const (
 	// Timeouts
 	tcpKeepAliveInterval = 30 * time.Second
-	defaultDialTimeout   = 10 * time.Second // used when dialing if the context has no deadline
-	defaultWriteTimeout  = 10 * time.Second // used for calls if the context has no deadline
+	defaultDialTimeout   = 10 * time.Second // used if context has no deadline
 	subscribeTimeout     = 5 * time.Second  // overall timeout eth_subscribe, rpc_modules calls
 )
 
@@ -427,8 +426,7 @@ func (c *Client) write(ctx context.Context, msg interface{}) error {
 			return err
 		}
 	}
-	// TODO: pass context
-	err := c.writeConn.Write(msg)
+	err := c.writeConn.Write(ctx, msg)
 	if err != nil {
 		c.writeConn = nil
 	}
@@ -438,6 +436,12 @@ func (c *Client) write(ctx context.Context, msg interface{}) error {
 func (c *Client) reconnect(ctx context.Context) error {
 	if c.reconnectFunc == nil {
 		return errDead
+	}
+
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel func()
+		ctx, cancel = context.WithTimeout(ctx, defaultDialTimeout)
+		defer cancel()
 	}
 	newconn, err := c.reconnectFunc(ctx)
 	if err != nil {
