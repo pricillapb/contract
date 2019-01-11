@@ -188,16 +188,22 @@ func (hc *httpConn) doRequest(ctx context.Context, msg interface{}) (io.ReadClos
 type httpServerConn struct {
 	io.Reader
 	io.Writer
+	r *http.Request
 }
 
 func newHTTPServerConn(r *http.Request, w http.ResponseWriter) ServerCodec {
 	body := io.LimitReader(r.Body, maxRequestContentLength)
-	conn := &httpServerConn{Reader: body, Writer: w}
+	conn := &httpServerConn{Reader: body, Writer: w, r: r}
 	return NewJSONCodec(conn)
 }
 
 // Close does nothing and always returns nil.
 func (t *httpServerConn) Close() error { return nil }
+
+// RemoteAddr returns the peer address of the underlying connection.
+func (t *httpServerConn) RemoteAddr() string {
+	return t.r.RemoteAddr
+}
 
 // SetWriteDeadline does nothing and always returns nil.
 func (t *httpServerConn) SetWriteDeadline(time.Time) error { return nil }

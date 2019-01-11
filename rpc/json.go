@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"reflect"
 	"strings"
 	"sync"
@@ -148,24 +149,36 @@ type Conn interface {
 // jsonCodec reads and writes JSON-RPC messages to the underlying connection. It also has
 // support for parsing arguments and serializing (result) objects.
 type jsonCodec struct {
-	closer sync.Once                 // close closed channel once
-	closed chan interface{}          // closed on Close
-	decMu  sync.Mutex                // guards the decoder
-	decode func(v interface{}) error // decoder to allow multiple transports
-	encMu  sync.Mutex                // guards the encoder
-	encode func(v interface{}) error // encoder to allow multiple transports
-	conn   Conn
+	remoteAddr string
+	closer     sync.Once                 // close closed channel once
+	closed     chan interface{}          // closed on Close
+	decMu      sync.Mutex                // guards the decoder
+	decode     func(v interface{}) error // decoder to allow multiple transports
+	encMu      sync.Mutex                // guards the encoder
+	encode     func(v interface{}) error // encoder to allow multiple transports
+	conn       Conn
 }
 
 // NewCodec creates a new RPC server codec with support for JSON-RPC 2.0 based
 // on explicitly given encoding and decoding methods.
 func NewCodec(conn Conn, encode, decode func(v interface{}) error) ServerCodec {
-	return &jsonCodec{
-		closed: make(chan interface{}),
-		encode: encode,
-		decode: decode,
-		conn:   conn,
+	codec := &jsonCodec{
+		remoteAddr: "unknown",
+		closed:     make(chan interface{}),
+		encode:     encode,
+		decode:     decode,
+		conn:       conn,
 	}
+
+	// Try to figure out the remote address.
+	type remoteNetAddr interface{ RemoteAddr() net.Addr }
+	type remoteStringAddr interface{ RemoteAddr() string }
+	if netra, ok := conn.(remoteNetAddr); ok {
+		codec.remoteAddr = netra.RemoteAddr().String()
+	} else if sra, ok := conn.(remoteStringAddr); ok {
+		codec.remoteAddr = sra.RemoteAddr()
+	}
+	return codec
 }
 
 // NewJSONCodec creates a new RPC server codec with support for JSON-RPC 2.0.
@@ -173,12 +186,11 @@ func NewJSONCodec(conn Conn) ServerCodec {
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
 	dec.UseNumber()
-
 	return NewCodec(conn, enc.Encode, dec.Decode)
 }
 
 func (c *jsonCodec) RemoteAddr() string {
-	return ""
+	return c.remoteAddr
 }
 
 func (c *jsonCodec) Read() (msg []*jsonrpcMessage, batch bool, err error) {
