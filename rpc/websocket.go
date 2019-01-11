@@ -112,6 +112,10 @@ func wsHandshakeValidator(allowedOrigins []string) func(*websocket.Config, *http
 	log.Debug(fmt.Sprintf("Allowed origin(s) for WS RPC interface %v\n", origins.ToSlice()))
 
 	f := func(cfg *websocket.Config, req *http.Request) error {
+		// Set config origin to the peer address to make RemoteAddr work.
+		cfg.Origin = &url.URL{Scheme: "ws", Host: req.RemoteAddr}
+
+		// Verify origin against whitelist.
 		origin := strings.ToLower(req.Header.Get("Origin"))
 		if allowAllOrigins || origins.Contains(origin) {
 			return nil
