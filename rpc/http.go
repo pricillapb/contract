@@ -265,7 +265,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", contentType)
 	codec := newHTTPServerConn(r, w)
 	defer codec.Close()
-	srv.serveSingleRequest(codec)
+	srv.serveSingleRequest(r.Context(), codec)
 }
 
 // validateRequest returns a non-zero response code and error message if the

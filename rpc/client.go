@@ -71,8 +71,6 @@ type BatchElem struct {
 	Error error
 }
 
-type reconnectFunc func(ctx context.Context) (ServerCodec, error)
-
 // Client represents a connection to an RPC server.
 type Client struct {
 	idgen    func() ID
@@ -97,6 +95,26 @@ type Client struct {
 	reqInit     chan *requestOp  // register response IDs, takes write lock
 	reqSent     chan error       // signals write completion, releases write lock
 	reqTimeout  chan *requestOp  // removes response IDs when call timeout expires
+}
+
+type reconnectFunc func(ctx context.Context) (ServerCodec, error)
+
+type clientContextKey struct{}
+
+type clientConn struct {
+	codec   ServerCodec
+	handler *handler
+}
+
+func (c *Client) newClientConn(conn ServerCodec) *clientConn {
+	ctx := context.WithValue(context.Background(), clientContextKey{}, c)
+	handler := newHandler(ctx, conn, c.idgen, c.services)
+	return &clientConn{conn, handler}
+}
+
+func (cc *clientConn) close(err error, inflightReq *requestOp) {
+	cc.codec.Close()
+	cc.handler.close(err, inflightReq)
 }
 
 type readOp struct {
@@ -160,6 +178,13 @@ func DialContext(ctx context.Context, rawurl string) (*Client, error) {
 	default:
 		return nil, fmt.Errorf("no known transport for URL scheme %q", u.Scheme)
 	}
+}
+
+// Client retrieves the client from the context, if any. This can be used to perform
+// 'reverse calls' in a handler method.
+func ClientFromContext(ctx context.Context) (*Client, bool) {
+	client, ok := ctx.Value(clientContextKey{}).(*Client)
+	return client, ok
 }
 
 func newClient(initctx context.Context, connect reconnectFunc) (*Client, error) {
@@ -461,24 +486,24 @@ func (c *Client) reconnect(ctx context.Context) error {
 // dispatch is the main loop of the client.
 // It sends read messages to waiting calls to Call and BatchCall
 // and subscription notifications to registered subscriptions.
-func (c *Client) dispatch(conn ServerCodec) {
+func (c *Client) dispatch(codec ServerCodec) {
 	var (
 		lastOp      *requestOp  // tracks last send operation
 		reqInitLock = c.reqInit // nil while the send lock is held
-		handler     = newHandler(conn, c.idgen, c.services)
+		conn        = c.newClientConn(codec)
+		reading     = true
 	)
 	defer func() {
 		close(c.closing)
-		handler.close(ErrClientQuit, nil)
-		if conn != nil {
-			conn.Close()
+		if reading {
+			conn.close(ErrClientQuit, nil)
 			c.drainRead()
 		}
 		close(c.didClose)
 	}()
 
 	// Spawn the initial read loop.
-	go c.read(conn)
+	go c.read(codec)
 
 	for {
 		select {
@@ -488,56 +513,54 @@ func (c *Client) dispatch(conn ServerCodec) {
 		// Read path:
 		case op := <-c.readOp:
 			if op.batch {
-				handler.handleBatch(op.msgs)
+				conn.handler.handleBatch(op.msgs)
 			} else {
-				handler.handleMsg(op.msgs[0])
+				conn.handler.handleMsg(op.msgs[0])
 			}
 
 		case err := <-c.readErr:
 			log.Debug("RPC client read error", "err", err)
-			handler.close(err, lastOp)
-			conn.Close()
-			conn = nil
+			conn.close(err, lastOp)
+			reading = false
 
 		// Reconnect:
-		case newconn := <-c.reconnected:
-			log.Debug("RPC client reconnected", "reading", conn != nil, "remote", newconn.RemoteAddr())
-			if conn != nil {
+		case newcodec := <-c.reconnected:
+			log.Debug("RPC client reconnected", "reading", reading, "remote", newcodec.RemoteAddr())
+			go c.read(newcodec)
+			if reading {
 				// Wait for the previous read loop to exit. This is a rare case which
 				// happens if this loop isn't notified in time after the connection breaks.
 				// In those cases the caller will notice first and reconnect. Closing the
 				// handler terminates all waiting requests (closing op.resp) except for
 				// lastOp, which will be transferred to the new handler.
-				handler.close(errClientReconnected, lastOp)
-				conn.Close()
+				conn.close(errClientReconnected, lastOp)
 				c.drainRead()
 			}
-			handler = newHandler(newconn, c.idgen, c.services)
-			conn = newconn
-			go c.read(newconn)
-			// Re-register the in-flight request on the new handler/connection
+			reading = true
+			conn = c.newClientConn(newcodec)
+			// Re-register the in-flight request on the new handler
 			// because that's where it will be sent.
-			handler.addRequestOp(lastOp)
+			conn.handler.addRequestOp(lastOp)
 
 		// Send path:
 		case op := <-reqInitLock:
 			// Stop listening for further requests until the current one has been sent.
 			reqInitLock = nil
 			lastOp = op
-			handler.addRequestOp(op)
+			conn.handler.addRequestOp(op)
 
 		case err := <-c.reqSent:
 			if err != nil {
 				// Remove response handlers for the last send. When the read loop
 				// goes down, it will signal all other current operations.
-				handler.removeRequestOp(lastOp)
+				conn.handler.removeRequestOp(lastOp)
 			}
 			// Let the next request in.
 			reqInitLock = c.reqInit
 			lastOp = nil
 
 		case op := <-c.reqTimeout:
-			handler.removeRequestOp(op)
+			conn.handler.removeRequestOp(op)
 		}
 	}
 }

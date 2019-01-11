@@ -87,20 +87,20 @@ func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
 // serveSingleRequest reads and processes a single RPC request from the given codec. This
 // is used to serve HTTP connections. Subscriptions and reverse calls are not allowed in
 // this mode.
-func (s *Server) serveSingleRequest(codec ServerCodec) {
+func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 	// Don't serve if server is stopped.
 	if atomic.LoadInt32(&s.run) == 0 {
 		return
 	}
 
-	h := newHandler(codec, s.idgen, &s.services)
+	h := newHandler(ctx, codec, s.idgen, &s.services)
 	h.allowSubscribe = false
 	defer h.close(io.EOF, nil)
 
 	reqs, batch, err := codec.Read()
 	if err != nil {
 		if err != io.EOF {
-			codec.Write(context.Background(), errorMessage(&invalidRequestError{"parse error"}))
+			codec.Write(ctx, errorMessage(&invalidRequestError{"parse error"}))
 		}
 		return
 	}

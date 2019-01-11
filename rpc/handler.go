@@ -63,8 +63,8 @@ type handler struct {
 	allowSubscribe bool
 }
 
-func newHandler(conn jsonWriter, idgen func() ID, reg *serviceRegistry) *handler {
-	rootCtx, cancelRoot := context.WithCancel(context.Background())
+func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *serviceRegistry) *handler {
+	rootCtx, cancelRoot := context.WithCancel(connCtx)
 	h := &handler{
 		reg:            reg,
 		idgen:          idgen,

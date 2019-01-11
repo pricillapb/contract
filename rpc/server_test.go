@@ -44,8 +44,8 @@ func TestServerRegisterName(t *testing.T) {
 		t.Fatalf("Expected service calc to be registered")
 	}
 
-	if len(svc.callbacks) != 5 {
-		t.Errorf("Expected 5 callbacks for service 'service', got %d", len(svc.callbacks))
+	if len(svc.callbacks) != 6 {
+		t.Errorf("Expected 6 callbacks for service 'service', got %d", len(svc.callbacks))
 	}
 }
 
@@ -84,18 +84,19 @@ func runTestScript(t *testing.T, file string) {
 			// skip comments, blank lines
 			continue
 		case strings.HasPrefix(line, "--> "):
+			t.Log(line)
 			// write to connection
 			clientConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 			if _, err := io.WriteString(clientConn, line[4:]+"\n"); err != nil {
 				t.Fatalf("write error: %v", err)
 			}
 		case strings.HasPrefix(line, "<-- "):
+			t.Log(line)
 			want := line[4:]
 			// read line from connection and compare text
 			clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			sent, err := readbuf.ReadString('\n')
 			if err != nil {
-				t.Logf("waiting for line: %s", want)
 				t.Fatalf("read error: %v", err)
 			}
 			sent = strings.TrimRight(sent, "\r\n")

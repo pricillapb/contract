@@ -19,6 +19,7 @@ package rpc
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"sync"
 	"time"
 )
@@ -90,6 +91,16 @@ func (s *testService) InvalidRets2() (string, string) {
 
 func (s *testService) InvalidRets3() (string, string, error) {
 	return "", "", nil
+}
+
+func (s *testService) CallMeBack(ctx context.Context, method string, args []interface{}) (interface{}, error) {
+	c, ok := ClientFromContext(ctx)
+	if !ok {
+		return nil, errors.New("no client")
+	}
+	var result interface{}
+	err := c.Call(&result, method, args...)
+	return result, err
 }
 
 func (s *testService) Subscription(ctx context.Context) (*Subscription, error) {
