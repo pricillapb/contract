@@ -66,13 +66,14 @@ type handler struct {
 func newHandler(conn jsonWriter, idgen func() ID, reg *serviceRegistry) *handler {
 	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	h := &handler{
-		reg:        reg,
-		idgen:      idgen,
-		conn:       conn,
-		respWait:   make(map[string]*requestOp),
-		subs:       make(map[string]*ClientSubscription),
-		rootCtx:    rootCtx,
-		cancelRoot: cancelRoot,
+		reg:            reg,
+		idgen:          idgen,
+		conn:           conn,
+		respWait:       make(map[string]*requestOp),
+		subs:           make(map[string]*ClientSubscription),
+		rootCtx:        rootCtx,
+		cancelRoot:     cancelRoot,
+		allowSubscribe: true,
 	}
 	h.unsubscribeCb = newCallback(reflect.Value{}, reflect.ValueOf(h.unsubscribe))
 	return h

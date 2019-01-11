@@ -33,9 +33,9 @@ var (
 	ErrClientQuit                = errors.New("client is closed")
 	ErrNoResult                  = errors.New("no result in JSON-RPC response")
 	ErrSubscriptionQueueOverflow = errors.New("subscription queue overflow")
+	errClientReconnected         = errors.New("client reconnected")
+	errDead                      = errors.New("connection lost")
 )
-
-var errClientReconnected = errors.New("client reconnected")
 
 const (
 	// Timeouts
@@ -72,11 +72,16 @@ type BatchElem struct {
 	Error error
 }
 
+type reconnectFunc func(ctx context.Context) (ServerCodec, error)
+
 // Client represents a connection to an RPC server.
 type Client struct {
-	idgen       func() ID
-	connectFunc func(ctx context.Context) (ServerCodec, error)
-	isHTTP      bool
+	idgen    func() ID
+	isHTTP   bool
+	services *serviceRegistry
+
+	// This function, if non-nil, is called when the connection is lost.
+	reconnectFunc reconnectFunc
 
 	// writeConn is used for writing to the connection on the caller's goroutine. It should
 	// only be accessed outside of dispatch, with the write lock held. The write lock is
@@ -158,17 +163,23 @@ func DialContext(ctx context.Context, rawurl string) (*Client, error) {
 	}
 }
 
-func newClient(initctx context.Context, connectFunc func(context.Context) (ServerCodec, error)) (*Client, error) {
-	conn, err := connectFunc(initctx)
+func newClient(initctx context.Context, connect reconnectFunc) (*Client, error) {
+	conn, err := connect(initctx)
 	if err != nil {
 		return nil, err
 	}
+	c := initClient(conn, randomIDGenerator(), new(serviceRegistry))
+	c.reconnectFunc = connect
+	return c, nil
+}
+
+func initClient(conn ServerCodec, idgen func() ID, services *serviceRegistry) *Client {
 	_, isHTTP := conn.(*httpConn)
 	c := &Client{
-		idgen:       randomIDGenerator(),
-		writeConn:   conn,
+		idgen:       idgen,
 		isHTTP:      isHTTP,
-		connectFunc: connectFunc,
+		services:    services,
+		writeConn:   conn,
 		close:       make(chan struct{}),
 		closing:     make(chan struct{}),
 		didClose:    make(chan struct{}),
@@ -182,7 +193,7 @@ func newClient(initctx context.Context, connectFunc func(context.Context) (Serve
 	if !isHTTP {
 		go c.dispatch(conn)
 	}
-	return c, nil
+	return c
 }
 
 func (c *Client) nextID() json.RawMessage {
@@ -425,7 +436,10 @@ func (c *Client) write(ctx context.Context, msg interface{}) error {
 }
 
 func (c *Client) reconnect(ctx context.Context) error {
-	newconn, err := c.connectFunc(ctx)
+	if c.reconnectFunc == nil {
+		return errDead
+	}
+	newconn, err := c.reconnectFunc(ctx)
 	if err != nil {
 		log.Trace("RPC client reconnect failed", "err", err)
 		return err
@@ -447,7 +461,7 @@ func (c *Client) dispatch(conn ServerCodec) {
 	var (
 		lastOp      *requestOp  // tracks last send operation
 		reqInitLock = c.reqInit // nil while the send lock is held
-		handler     = newHandler(conn, c.idgen, new(serviceRegistry))
+		handler     = newHandler(conn, c.idgen, c.services)
 	)
 	defer func() {
 		close(c.closing)
@@ -494,7 +508,7 @@ func (c *Client) dispatch(conn ServerCodec) {
 				conn.Close()
 				c.drainRead()
 			}
-			handler = newHandler(newconn, c.idgen, new(serviceRegistry))
+			handler = newHandler(newconn, c.idgen, c.services)
 			conn = newconn
 			go c.read(newconn)
 			// Re-register the in-flight request on the new handler/connection

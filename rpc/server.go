@@ -17,9 +17,7 @@
 package rpc
 
 import (
-	"context"
 	"io"
-	"sync"
 	"sync/atomic"
 
 	mapset "github.com/deckarep/golang-set"
@@ -43,9 +41,7 @@ const (
 type Server struct {
 	services serviceRegistry
 	idgen    func() ID
-
 	run      int32
-	codecsMu sync.Mutex
 	codecs   mapset.Set
 }
 
@@ -67,74 +63,51 @@ func (s *Server) RegisterName(name string, rcvr interface{}) error {
 	return s.services.registerName(name, rcvr)
 }
 
-// serveRequest reads requests from the codec, calls the RPC callback and writes the
-// response to the given codec.
-//
-// If singleShot is true it will process a single request, otherwise it will handle
-// requests until the codec returns an error when reading a request. Requests are executed
-// concurrently when singleShot is false.
-func (s *Server) serveRequest(ctx context.Context, codec ServerCodec, singleShot bool, options CodecOption) error {
-	handler := newHandler(codec, s.idgen, &s.services)
-	defer handler.close(io.EOF, nil)
-
-	// If the codec supports notification include a notifier that callbacks can use
-	// to send notification to clients. It is tied to the request. If the
-	// connection is closed the notifier will stop and cancels all active
-	// subscriptions.
-	if options&OptionSubscriptions == OptionSubscriptions {
-		handler.allowSubscribe = true
-	}
-
-	// Add the codec and remove it on shutdown.
-	s.codecsMu.Lock()
-	s.codecs.Add(codec)
-	s.codecsMu.Unlock()
-	defer func() {
-		s.codecsMu.Lock()
-		s.codecs.Remove(codec)
-		s.codecsMu.Unlock()
-	}()
-
-	// Serve requests until shutdown.
-	for atomic.LoadInt32(&s.run) == 1 {
-		reqs, batch, err := codec.Read()
-		if err != nil {
-			if err != io.EOF {
-				codec.Write(errorMessage(&invalidRequestError{"parse error"}))
-			}
-			break
-		}
-		if batch && len(reqs) == 0 {
-			codec.Write(errorMessage(&invalidRequestError{"empty batch"}))
-		}
-
-		// Serve the request.
-		if batch {
-			handler.handleBatch(reqs)
-		} else {
-			handler.handleMsg(reqs[0])
-		}
-
-		if singleShot {
-			break
-		}
-	}
-	return nil
-}
-
 // ServeCodec reads incoming requests from codec, calls the appropriate callback and writes
 // the response back using the given codec. It will block until the codec is closed or the
 // server is stopped. In either case the codec is closed.
 func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
 	defer codec.Close()
-	s.serveRequest(context.Background(), codec, false, options)
+
+	// Don't serve if server is stopped.
+	if atomic.LoadInt32(&s.run) == 0 {
+		return
+	}
+
+	// Add the codec to the set so it can be closed by Stop.
+	s.codecs.Add(codec)
+	defer s.codecs.Remove(codec)
+
+	c := initClient(codec, s.idgen, &s.services)
+	<-codec.Closed()
+	c.Close()
 }
 
-// ServeSingleRequest reads and processes a single RPC request from the given codec. It
-// will not close the codec unless a non-recoverable error has occurred. Note, this method
-// will return after a single request has been processed!
-func (s *Server) ServeSingleRequest(ctx context.Context, codec ServerCodec, options CodecOption) {
-	s.serveRequest(ctx, codec, true, options)
+// serveSingleRequest reads and processes a single RPC request from the given codec. This
+// is used to serve HTTP connections. Subscriptions and reverse calls are not allowed in
+// this mode.
+func (s *Server) serveSingleRequest(codec ServerCodec) {
+	// Don't serve if server is stopped.
+	if atomic.LoadInt32(&s.run) == 0 {
+		return
+	}
+
+	h := newHandler(codec, s.idgen, &s.services)
+	h.allowSubscribe = false
+	defer h.close(io.EOF, nil)
+
+	reqs, batch, err := codec.Read()
+	if err != nil {
+		if err != io.EOF {
+			codec.Write(errorMessage(&invalidRequestError{"parse error"}))
+		}
+		return
+	}
+	if batch {
+		h.handleBatch(reqs)
+	} else {
+		h.handleMsg(reqs[0])
+	}
 }
 
 // Stop stops reading new requests, waits for stopPendingRequestTimeout to allow pending
@@ -143,8 +116,6 @@ func (s *Server) ServeSingleRequest(ctx context.Context, codec ServerCodec, opti
 func (s *Server) Stop() {
 	if atomic.CompareAndSwapInt32(&s.run, 1, 0) {
 		log.Debug("RPC server shutting down")
-		s.codecsMu.Lock()
-		defer s.codecsMu.Unlock()
 		s.codecs.Each(func(c interface{}) bool {
 			c.(ServerCodec).Close()
 			return true
