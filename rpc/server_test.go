@@ -44,8 +44,9 @@ func TestServerRegisterName(t *testing.T) {
 		t.Fatalf("Expected service calc to be registered")
 	}
 
-	if len(svc.callbacks) != 6 {
-		t.Errorf("Expected 6 callbacks for service 'service', got %d", len(svc.callbacks))
+	wantCallbacks := 7
+	if len(svc.callbacks) != wantCallbacks {
+		t.Errorf("Expected %d callbacks for service 'service', got %d", wantCallbacks, len(svc.callbacks))
 	}
 }
 

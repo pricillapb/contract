@@ -103,6 +103,19 @@ func (s *testService) CallMeBack(ctx context.Context, method string, args []inte
 	return result, err
 }
 
+func (s *testService) CallMeBackLater(ctx context.Context, method string, args []interface{}) error {
+	c, ok := ClientFromContext(ctx)
+	if !ok {
+		return errors.New("no client")
+	}
+	go func() {
+		<-ctx.Done()
+		var result interface{}
+		c.Call(&result, method, args...)
+	}()
+	return nil
+}
+
 func (s *testService) Subscription(ctx context.Context) (*Subscription, error) {
 	return nil, nil
 }
