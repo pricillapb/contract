@@ -98,6 +98,17 @@ func TestClientBatchRequest(t *testing.T) {
 	}
 }
 
+func TestClientNotify(t *testing.T) {
+	server := newTestServer()
+	defer server.Stop()
+	client := DialInProc(server)
+	defer client.Close()
+
+	if err := client.Notify(context.Background(), "test_echo", "hello", 10, &Args{"world"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // func TestClientCancelInproc(t *testing.T) { testClientCancel("inproc", t) }
 func TestClientCancelWebsocket(t *testing.T) { testClientCancel("ws", t) }
 func TestClientCancelHTTP(t *testing.T)      { testClientCancel("http", t) }
