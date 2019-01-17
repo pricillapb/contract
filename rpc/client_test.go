@@ -430,7 +430,7 @@ func TestClientReconnect(t *testing.T) {
 		srv := newTestServer()
 		l, err := net.Listen("tcp", addr)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal("can't listen:", err)
 		}
 		go http.Serve(l, srv.WebsocketHandler([]string{"*"}))
 		return srv, l
@@ -452,16 +452,17 @@ func TestClientReconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Shut down the server and try calling again. It shouldn't work.
+	// Shut down the server and allow for some cool down time so we can listen on the same
+	// address again.
 	l1.Close()
 	s1.Stop()
+	time.Sleep(2 * time.Second)
+
+	// Try calling again. It shouldn't work.
 	if err := client.CallContext(ctx, &resp, "test_echo", "", 2, nil); err == nil {
 		t.Error("successful call while the server is down")
 		t.Logf("resp: %#v", resp)
 	}
-
-	// Allow for some cool down time so we can listen on the same address again.
-	time.Sleep(2 * time.Second)
 
 	// Start it up again and call again. The connection should be reestablished.
 	// We spawn multiple calls here to check whether this hangs somehow.
@@ -485,7 +486,7 @@ func TestClientReconnect(t *testing.T) {
 			errcount++
 		}
 	}
-	t.Log("err:", err)
+	t.Logf("%d errors, last error: %v", errcount, err)
 	if errcount > 1 {
 		t.Errorf("expected one error after disconnect, got %d", errcount)
 	}
