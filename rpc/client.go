@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -73,9 +75,11 @@ type BatchElem struct {
 
 // Client represents a connection to an RPC server.
 type Client struct {
-	idgen    func() ID
+	idgen    func() ID // for subscriptions
 	isHTTP   bool
 	services *serviceRegistry
+
+	idCounter uint32
 
 	// This function, if non-nil, is called when the connection is lost.
 	reconnectFunc reconnectFunc
@@ -221,7 +225,8 @@ func initClient(conn ServerCodec, idgen func() ID, services *serviceRegistry) *C
 }
 
 func (c *Client) nextID() json.RawMessage {
-	return []byte(`"` + c.idgen() + `"`)
+	id := atomic.AddUint32(&c.idCounter, 1)
+	return strconv.AppendUint(nil, uint64(id), 10)
 }
 
 // SupportedModules calls the rpc_modules method, retrieving the list of
