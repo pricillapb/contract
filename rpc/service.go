@@ -66,7 +66,7 @@ func (r *serviceRegistry) registerName(name string, rcvr interface{}) error {
 	}
 	callbacks := suitableCallbacks(rcvrVal)
 	if len(callbacks) == 0 {
-		return fmt.Errorf("Service %T doesn't have any suitable methods/subscriptions to expose", rcvr)
+		return fmt.Errorf("service %T doesn't have any suitable methods/subscriptions to expose", rcvr)
 	}
 
 	r.mu.Lock()
@@ -172,7 +172,7 @@ func (c *callback) makeArgTypes() {
 	if c.rcvr.IsValid() {
 		firstArg++
 	}
-	if fntype.NumIn() >= 2 && fntype.In(1) == contextType {
+	if fntype.NumIn() > firstArg && fntype.In(firstArg) == contextType {
 		c.hasCtx = true
 		firstArg++
 	}

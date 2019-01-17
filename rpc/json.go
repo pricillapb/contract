@@ -119,11 +119,6 @@ func errorMessage(err error) *jsonrpcMessage {
 	return msg
 }
 
-func subscriptionNotification(namespace string, id ID, data json.RawMessage) *jsonrpcMessage {
-	params, _ := json.Marshal(&subscriptionResult{ID: string(id), Result: data})
-	return &jsonrpcMessage{Version: vsn, Method: namespace + notificationMethodSuffix, Params: params}
-}
-
 type jsonError struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`

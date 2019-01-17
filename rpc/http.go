@@ -40,8 +40,6 @@ const (
 	maxRequestContentLength = 1024 * 512
 )
 
-var nullAddr, _ = net.ResolveTCPAddr("tcp", "127.0.0.1:0")
-
 type httpConn struct {
 	client    *http.Client
 	req       *http.Request
@@ -265,7 +263,7 @@ func (srv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", contentType)
 	codec := newHTTPServerConn(r, w)
 	defer codec.Close()
-	srv.serveSingleRequest(r.Context(), codec)
+	srv.serveSingleRequest(ctx, codec)
 }
 
 // validateRequest returns a non-zero response code and error message if the

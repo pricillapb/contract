@@ -17,7 +17,6 @@
 package rpc
 
 import (
-	"container/list"
 	"context"
 	"encoding/json"
 	"reflect"
@@ -50,17 +49,24 @@ import (
 //    }
 //
 type handler struct {
-	reg           *serviceRegistry
-	unsubscribeCb *callback
-	idgen         func() ID                      // subscription ID generator
-	respWait      map[string]*requestOp          // active client requests
-	subs          map[string]*ClientSubscription // active client subscriptions
-	callWG        sync.WaitGroup                 // pending call goroutines
-	rootCtx       context.Context                // canceled by close()
-	cancelRoot    func()                         // cancel function for rootCtx
-	conn          jsonWriter                     // where responses will be sent
-
+	reg            *serviceRegistry
+	unsubscribeCb  *callback
+	idgen          func() ID                      // subscription ID generator
+	respWait       map[string]*requestOp          // active client requests
+	clientSubs     map[string]*ClientSubscription // active client subscriptions
+	callWG         sync.WaitGroup                 // pending call goroutines
+	rootCtx        context.Context                // canceled by close()
+	cancelRoot     func()                         // cancel function for rootCtx
+	conn           jsonWriter                     // where responses will be sent
 	allowSubscribe bool
+
+	subLock    sync.Mutex
+	serverSubs map[ID]*Subscription
+}
+
+type callProc struct {
+	ctx       context.Context
+	notifiers []*Notifier
 }
 
 func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *serviceRegistry) *handler {
@@ -70,10 +76,11 @@ func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *
 		idgen:          idgen,
 		conn:           conn,
 		respWait:       make(map[string]*requestOp),
-		subs:           make(map[string]*ClientSubscription),
+		clientSubs:     make(map[string]*ClientSubscription),
 		rootCtx:        rootCtx,
 		cancelRoot:     cancelRoot,
 		allowSubscribe: true,
+		serverSubs:     make(map[ID]*Subscription),
 	}
 	h.unsubscribeCb = newCallback(reflect.Value{}, reflect.ValueOf(h.unsubscribe))
 	return h
@@ -83,8 +90,8 @@ func newHandler(connCtx context.Context, conn jsonWriter, idgen func() ID, reg *
 func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 	// Emit error response for empty batches:
 	if len(msgs) == 0 {
-		h.startCallProc(func(ctx context.Context) {
-			h.conn.Write(ctx, errorMessage(&invalidRequestError{"empty batch"}))
+		h.startCallProc(func(cp *callProc) {
+			h.conn.Write(cp.ctx, errorMessage(&invalidRequestError{"empty batch"}))
 		})
 		return
 	}
@@ -100,15 +107,19 @@ func (h *handler) handleBatch(msgs []*jsonrpcMessage) {
 		return
 	}
 	// Process calls on a goroutine because they may block indefinitely:
-	h.startCallProc(func(ctx context.Context) {
+	h.startCallProc(func(cp *callProc) {
 		answers := make([]*jsonrpcMessage, 0, len(msgs))
 		for _, msg := range calls {
-			if answer := h.handleCallMsg(ctx, msg); answer != nil {
+			if answer := h.handleCallMsg(cp, msg); answer != nil {
 				answers = append(answers, answer)
 			}
 		}
+		h.addSubscriptions(cp.notifiers)
 		if len(answers) > 0 {
-			h.conn.Write(ctx, answers)
+			h.conn.Write(cp.ctx, answers)
+		}
+		for _, n := range cp.notifiers {
+			n.activate()
 		}
 	})
 }
@@ -118,9 +129,14 @@ func (h *handler) handleMsg(msg *jsonrpcMessage) {
 	if ok := h.handleImmediate(msg); ok {
 		return
 	}
-	h.startCallProc(func(ctx context.Context) {
-		if answer := h.handleCallMsg(ctx, msg); answer != nil {
-			h.conn.Write(ctx, answer)
+	h.startCallProc(func(cp *callProc) {
+		answer := h.handleCallMsg(cp, msg)
+		h.addSubscriptions(cp.notifiers)
+		if answer != nil {
+			h.conn.Write(cp.ctx, answer)
+		}
+		for _, n := range cp.notifiers {
+			n.activate()
 		}
 	})
 }
@@ -131,6 +147,7 @@ func (h *handler) close(err error, inflightReq *requestOp) {
 	h.cancelAllRequests(err, inflightReq)
 	h.cancelRoot()
 	h.callWG.Wait()
+	h.cancelServerSubscriptions(err)
 }
 
 // addRequestOp registers a request operation.
@@ -164,25 +181,43 @@ func (h *handler) cancelAllRequests(err error, inflightReq *requestOp) {
 			didClose[op] = true
 		}
 	}
-	for id, sub := range h.subs {
-		delete(h.subs, id)
+	for id, sub := range h.clientSubs {
+		delete(h.clientSubs, id)
 		sub.quitWithError(err, false)
 	}
 }
 
+func (h *handler) addSubscriptions(nn []*Notifier) {
+	h.subLock.Lock()
+	defer h.subLock.Unlock()
+
+	for _, n := range nn {
+		if sub := n.takeSubscription(); sub != nil {
+			h.serverSubs[sub.ID] = sub
+		}
+	}
+}
+
+// cancelServerSubscriptions removes all subscriptions and closes their error channels.
+func (h *handler) cancelServerSubscriptions(err error) {
+	h.subLock.Lock()
+	defer h.subLock.Unlock()
+
+	for id, s := range h.serverSubs {
+		s.err <- err
+		close(s.err)
+		delete(h.serverSubs, id)
+	}
+}
+
 // startCallProc runs fn in a new goroutine and starts tracking it in the h.calls wait group.
-func (h *handler) startCallProc(fn func(context.Context)) {
+func (h *handler) startCallProc(fn func(*callProc)) {
 	h.callWG.Add(1)
 	go func() {
 		ctx, cancel := context.WithCancel(h.rootCtx)
 		defer h.callWG.Done()
 		defer cancel()
-		if h.allowSubscribe {
-			sn := newServerNotifier(h.idgen, h.conn)
-			ctx = context.WithValue(ctx, serverNotifierKey{}, sn)
-			defer sn.activate()
-		}
-		fn(ctx)
+		fn(&callProc{ctx: ctx})
 	}()
 }
 
@@ -206,25 +241,6 @@ func (h *handler) handleImmediate(msg *jsonrpcMessage) bool {
 	}
 }
 
-// handleCallMsg executes a call message and returns the answer.
-func (h *handler) handleCallMsg(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMessage {
-	start := time.Now()
-	switch {
-	case msg.isNotification():
-		h.handleCall(ctx, msg)
-		log.Debug("Served "+msg.Method, "t", time.Since(start))
-		return nil
-	case msg.isCall():
-		resp := h.handleCall(ctx, msg)
-		log.Debug("Served "+msg.Method, "id", string(msg.ID), "t", time.Since(start))
-		return resp
-	case msg.hasValidID():
-		return msg.errorResponse(&invalidRequestError{"invalid request"})
-	default:
-		return errorMessage(&invalidRequestError{"invalid request"})
-	}
-}
-
 // handleSubscriptionResult processes subscription notifications.
 func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 	var result subscriptionResult
@@ -232,8 +248,8 @@ func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 		log.Debug("Dropping invalid subscription message", "msg", msg)
 		return
 	}
-	if h.subs[result.ID] != nil {
-		h.subs[result.ID].deliver(result.Result)
+	if h.clientSubs[result.ID] != nil {
+		h.clientSubs[result.ID].deliver(result.Result)
 	}
 }
 
@@ -260,14 +276,33 @@ func (h *handler) handleResponse(msg *jsonrpcMessage) {
 	}
 	if op.err = json.Unmarshal(msg.Result, &op.sub.subid); op.err == nil {
 		go op.sub.start()
-		h.subs[op.sub.subid] = op.sub
+		h.clientSubs[op.sub.subid] = op.sub
+	}
+}
+
+// handleCallMsg executes a call message and returns the answer.
+func (h *handler) handleCallMsg(ctx *callProc, msg *jsonrpcMessage) *jsonrpcMessage {
+	start := time.Now()
+	switch {
+	case msg.isNotification():
+		h.handleCall(ctx, msg)
+		log.Debug("Served "+msg.Method, "t", time.Since(start))
+		return nil
+	case msg.isCall():
+		resp := h.handleCall(ctx, msg)
+		log.Debug("Served "+msg.Method, "id", string(msg.ID), "t", time.Since(start))
+		return resp
+	case msg.hasValidID():
+		return msg.errorResponse(&invalidRequestError{"invalid request"})
+	default:
+		return errorMessage(&invalidRequestError{"invalid request"})
 	}
 }
 
 // handleCall processes method calls.
-func (h *handler) handleCall(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMessage {
+func (h *handler) handleCall(cp *callProc, msg *jsonrpcMessage) *jsonrpcMessage {
 	if msg.isSubscribe() {
-		return h.handleSubscribe(ctx, msg)
+		return h.handleSubscribe(cp, msg)
 	}
 	var callb *callback
 	if msg.isUnsubscribe() {
@@ -283,13 +318,12 @@ func (h *handler) handleCall(ctx context.Context, msg *jsonrpcMessage) *jsonrpcM
 		return msg.errorResponse(&invalidParamsError{err.Error()})
 	}
 
-	return h.runMethod(ctx, msg, callb, args)
+	return h.runMethod(cp.ctx, msg, callb, args)
 }
 
 // handleSubscribe processes *_subscribe method calls.
-func (h *handler) handleSubscribe(ctx context.Context, msg *jsonrpcMessage) *jsonrpcMessage {
-	sn, ok := ctx.Value(serverNotifierKey{}).(*serverNotifier)
-	if !ok {
+func (h *handler) handleSubscribe(cp *callProc, msg *jsonrpcMessage) *jsonrpcMessage {
+	if !h.allowSubscribe {
 		return msg.errorResponse(ErrNotificationsUnsupported)
 	}
 
@@ -313,8 +347,9 @@ func (h *handler) handleSubscribe(ctx context.Context, msg *jsonrpcMessage) *jso
 	args = args[1:]
 
 	// Install notifier in context so the subscription handler can find it.
-	n := &Notifier{namespace, sn}
-	ctx = context.WithValue(ctx, notifierKey{}, n)
+	n := &Notifier{h: h, namespace: namespace}
+	cp.notifiers = append(cp.notifiers, n)
+	ctx := context.WithValue(cp.ctx, notifierKey{}, n)
 
 	return h.runMethod(ctx, msg, callb, args)
 }
@@ -329,143 +364,15 @@ func (h *handler) runMethod(ctx context.Context, msg *jsonrpcMessage, callb *cal
 }
 
 // unsubscribe is the callback function for all *_unsubscribe calls.
-func (h *handler) unsubscribe(ctx context.Context, subid ID) (bool, error) {
-	sn, ok := ctx.Value(serverNotifierKey{}).(*serverNotifier)
-	if !ok {
-		return false, ErrNotificationsUnsupported
+func (h *handler) unsubscribe(ctx context.Context, id ID) (bool, error) {
+	h.subLock.Lock()
+	defer h.subLock.Unlock()
+
+	s := h.serverSubs[id]
+	if s == nil {
+		return false, ErrSubscriptionNotFound
 	}
-	if err := sn.unsubscribe(subid); err != nil {
-		return false, err
-	}
+	close(s.err)
+	delete(h.serverSubs, id)
 	return true, nil
-}
-
-// Subscriptions.
-
-// A ClientSubscription represents a subscription established through EthSubscribe.
-type ClientSubscription struct {
-	client    *Client
-	etype     reflect.Type
-	channel   reflect.Value
-	namespace string
-	subid     string
-	in        chan json.RawMessage
-
-	quitOnce sync.Once     // ensures quit is closed once
-	quit     chan struct{} // quit is closed when the subscription exits
-	errOnce  sync.Once     // ensures err is closed once
-	err      chan error
-}
-
-func newClientSubscription(c *Client, namespace string, channel reflect.Value) *ClientSubscription {
-	sub := &ClientSubscription{
-		client:    c,
-		namespace: namespace,
-		etype:     channel.Type().Elem(),
-		channel:   channel,
-		quit:      make(chan struct{}),
-		err:       make(chan error, 1),
-		in:        make(chan json.RawMessage),
-	}
-	return sub
-}
-
-// Err returns the subscription error channel. The intended use of Err is to schedule
-// resubscription when the client connection is closed unexpectedly.
-//
-// The error channel receives a value when the subscription has ended due
-// to an error. The received error is nil if Close has been called
-// on the underlying client and no other error has occurred.
-//
-// The error channel is closed when Unsubscribe is called on the subscription.
-func (sub *ClientSubscription) Err() <-chan error {
-	return sub.err
-}
-
-// Unsubscribe unsubscribes the notification and closes the error channel.
-// It can safely be called more than once.
-func (sub *ClientSubscription) Unsubscribe() {
-	sub.quitWithError(nil, true)
-	sub.errOnce.Do(func() { close(sub.err) })
-}
-
-func (sub *ClientSubscription) quitWithError(err error, unsubscribeServer bool) {
-	sub.quitOnce.Do(func() {
-		// The dispatch loop won't be able to execute the unsubscribe call
-		// if it is blocked on deliver. Close sub.quit first because it
-		// unblocks deliver.
-		close(sub.quit)
-		if unsubscribeServer {
-			sub.requestUnsubscribe()
-		}
-		if err != nil {
-			if err == ErrClientQuit {
-				err = nil // Adhere to subscription semantics.
-			}
-			sub.err <- err
-		}
-	})
-}
-
-func (sub *ClientSubscription) deliver(result json.RawMessage) (ok bool) {
-	select {
-	case sub.in <- result:
-		return true
-	case <-sub.quit:
-		return false
-	}
-}
-
-func (sub *ClientSubscription) start() {
-	sub.quitWithError(sub.forward())
-}
-
-func (sub *ClientSubscription) forward() (err error, unsubscribeServer bool) {
-	cases := []reflect.SelectCase{
-		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(sub.quit)},
-		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(sub.in)},
-		{Dir: reflect.SelectSend, Chan: sub.channel},
-	}
-	buffer := list.New()
-	defer buffer.Init()
-	for {
-		var chosen int
-		var recv reflect.Value
-		if buffer.Len() == 0 {
-			// Idle, omit send case.
-			chosen, recv, _ = reflect.Select(cases[:2])
-		} else {
-			// Non-empty buffer, send the first queued item.
-			cases[2].Send = reflect.ValueOf(buffer.Front().Value)
-			chosen, recv, _ = reflect.Select(cases)
-		}
-
-		switch chosen {
-		case 0: // <-sub.quit
-			return nil, false
-		case 1: // <-sub.in
-			val, err := sub.unmarshal(recv.Interface().(json.RawMessage))
-			if err != nil {
-				return err, true
-			}
-			if buffer.Len() == maxClientSubscriptionBuffer {
-				return ErrSubscriptionQueueOverflow, true
-			}
-			buffer.PushBack(val)
-		case 2: // sub.channel<-
-			cases[2].Send = reflect.Value{} // Don't hold onto the value.
-			buffer.Remove(buffer.Front())
-		}
-	}
-}
-
-func (sub *ClientSubscription) unmarshal(result json.RawMessage) (interface{}, error) {
-	val := reflect.New(sub.etype)
-	err := json.Unmarshal(result, val.Interface())
-	return val.Elem().Interface(), err
-}
-
-func (sub *ClientSubscription) requestUnsubscribe() error {
-	var result interface{}
-	return sub.client.Call(&result, sub.namespace+unsubscribeMethodSuffix, sub.subid)
 }

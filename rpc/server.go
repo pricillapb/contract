@@ -100,7 +100,7 @@ func (s *Server) serveSingleRequest(ctx context.Context, codec ServerCodec) {
 	reqs, batch, err := codec.Read()
 	if err != nil {
 		if err != io.EOF {
-			codec.Write(ctx, errorMessage(&invalidRequestError{"parse error"}))
+			codec.Write(ctx, errorMessage(&invalidMessageError{"parse error"}))
 		}
 		return
 	}

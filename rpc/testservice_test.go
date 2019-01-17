@@ -121,7 +121,6 @@ func (s *testService) Subscription(ctx context.Context) (*Subscription, error) {
 }
 
 type notificationTestService struct {
-	mu                      sync.Mutex
 	unsubscribed            chan string
 	gotHangSubscriptionReq  chan struct{}
 	unblockHangSubscription chan struct{}
@@ -170,7 +169,6 @@ func (s *notificationTestService) HangSubscription(ctx context.Context, val int)
 	if !supported {
 		return nil, ErrNotificationsUnsupported
 	}
-
 	s.gotHangSubscriptionReq <- struct{}{}
 	<-s.unblockHangSubscription
 	subscription := notifier.CreateSubscription()
