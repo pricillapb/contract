@@ -420,11 +420,14 @@ func (c *Client) Subscribe(ctx context.Context, namespace string, channel interf
 }
 
 func (c *Client) newMessage(method string, paramsIn ...interface{}) (*jsonrpcMessage, error) {
-	params, err := json.Marshal(paramsIn)
-	if err != nil {
-		return nil, err
+	msg := &jsonrpcMessage{Version: vsn, ID: c.nextID(), Method: method}
+	if paramsIn != nil { // prevent sending "params":null
+		var err error
+		if msg.Params, err = json.Marshal(paramsIn); err != nil {
+			return nil, err
+		}
 	}
-	return &jsonrpcMessage{Version: "2.0", ID: c.nextID(), Method: method, Params: params}, nil
+	return msg, nil
 }
 
 // send registers op with the dispatch loop, then sends msg on the connection.

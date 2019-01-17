@@ -161,8 +161,7 @@ func TestServerUnsubscribe(t *testing.T) {
 			}
 			return
 		case err := <-errors:
-			t.Error(err)
-			return
+			t.Fatal(err)
 		case <-notifications:
 			// drop notifications
 		}
