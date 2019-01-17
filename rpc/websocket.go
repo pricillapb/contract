@@ -56,12 +56,12 @@ var websocketJSONCodec = websocket.Codec{
 //
 // allowedOrigins should be a comma-separated list of allowed origin URLs.
 // To allow connections with any origin, pass "*".
-func (srv *Server) WebsocketHandler(allowedOrigins []string) http.Handler {
+func (s *Server) WebsocketHandler(allowedOrigins []string) http.Handler {
 	return websocket.Server{
 		Handshake: wsHandshakeValidator(allowedOrigins),
 		Handler: func(conn *websocket.Conn) {
 			codec := newWebsocketCodec(conn)
-			srv.ServeCodec(codec, OptionMethodInvocation|OptionSubscriptions)
+			s.ServeCodec(codec, OptionMethodInvocation|OptionSubscriptions)
 		},
 	}
 }

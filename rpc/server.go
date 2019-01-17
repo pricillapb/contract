@@ -27,7 +27,9 @@ import (
 
 const MetadataApi = "rpc"
 
-// CodecOption specifies which type of messages this codec supports
+// CodecOption specifies which type of messages a codec supports.
+//
+// Deprecated: this option is no longer honored by Server.
 type CodecOption int
 
 const (
@@ -38,7 +40,7 @@ const (
 	OptionSubscriptions = 1 << iota // support pub sub
 )
 
-// Server represents a RPC server
+// Server is an RPC server.
 type Server struct {
 	services serviceRegistry
 	idgen    func() ID
@@ -67,6 +69,8 @@ func (s *Server) RegisterName(name string, rcvr interface{}) error {
 // ServeCodec reads incoming requests from codec, calls the appropriate callback and writes
 // the response back using the given codec. It will block until the codec is closed or the
 // server is stopped. In either case the codec is closed.
+//
+// Note that codec options are no longer supported.
 func (s *Server) ServeCodec(codec ServerCodec, options CodecOption) {
 	defer codec.Close()
 

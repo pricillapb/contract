@@ -16,14 +16,17 @@
 
 /*
 
-Package rpc provides access to the exported methods of an object across a network or other
-I/O connection. After creating a server instance objects can be registered, making it
-visible from the outside. Exported methods that follow specific conventions can be called
-remotely. It also has support for the publish/subscribe pattern.
+Package rpc implements bi-directional JSON-RPC 2.0 on multiple transports.
+
+It provides access to the exported methods of an object across a network or other I/O
+connection. After creating a server or client instance, objects can be registered to make
+them visible as 'services'. Exported methods that follow specific conventions can be
+called remotely. It also has support for the publish/subscribe pattern.
+
+RPC Methods
 
 Methods that satisfy the following criteria are made available for remote access:
 
- - object must be exported
  - method must be exported
  - method returns 0, 1 (response or error) or 2 (response and error) values
  - method argument(s) must be exported or builtin types
@@ -76,31 +79,40 @@ An example server which uses the JSON codec:
  for {
 	c, _ := l.AcceptUnix()
 	codec := v2.NewJSONCodec(c)
-	go server.ServeCodec(codec)
+	go server.ServeCodec(codec, 0)
  }
+
+Subscriptions
 
 The package also supports the publish subscribe pattern through the use of subscriptions.
 A method that is considered eligible for notifications must satisfy the following
 criteria:
 
- - object must be exported
  - method must be exported
  - first method argument type must be context.Context
  - method argument(s) must be exported or builtin types
- - method must return the tuple Subscription, error
+ - method must have return types (rpc.Subscription, error)
 
 An example method:
 
- func (s *BlockChainService) NewBlocks(ctx context.Context) (Subscription, error) {
+ func (s *BlockChainService) NewBlocks(ctx context.Context) (rpc.Subscription, error) {
  	...
  }
 
-Subscriptions are deleted when:
+When the service containing the subscription method is registered to the server, for
+example under the "blockchain" namespace, a subscription is created by calling the
+"blockchain_subscribe" method.
 
- - the user sends an unsubscribe request
- - the connection which was used to create the subscription is closed. This can be initiated
-   by the client and server. The server will close the connection on a write error or when
-   the queue of buffered notifications gets too big.
+Subscriptions are deleted when the user sends an unsubscribe request or when the
+connection which was used to create the subscription is closed. This can be initiated by
+the client and server. The server will close the connection for any write error.
 
+For more information about subscriptions, see https://github.com/ethereum/go-ethereum/wiki/RPC-PUB-SUB.
+
+Reverse Calls
+
+In any method handler, an instance of rpc.Client can be accessed through the
+ClientFromContext method. Using this client instance, server-to-client method calls can be
+performed on the RPC connection.
 */
 package rpc
