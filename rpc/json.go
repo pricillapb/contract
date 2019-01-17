@@ -148,7 +148,6 @@ type jsonCodec struct {
 	remoteAddr string
 	closer     sync.Once                 // close closed channel once
 	closed     chan interface{}          // closed on Close
-	decMu      sync.Mutex                // guards the decoder
 	decode     func(v interface{}) error // decoder to allow multiple transports
 	encMu      sync.Mutex                // guards the encoder
 	encode     func(v interface{}) error // encoder to allow multiple transports
@@ -190,9 +189,6 @@ func (c *jsonCodec) RemoteAddr() string {
 }
 
 func (c *jsonCodec) Read() (msg []*jsonrpcMessage, batch bool, err error) {
-	c.decMu.Lock()
-	defer c.decMu.Unlock()
-
 	// Decode the next JSON object in the input stream.
 	// This verifies basic syntax, etc.
 	var rawmsg json.RawMessage
