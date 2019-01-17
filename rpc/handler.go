@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -234,7 +235,7 @@ func (h *handler) handleImmediate(msg *jsonrpcMessage) bool {
 		return false
 	case msg.isResponse():
 		h.handleResponse(msg)
-		log.Trace("Handled RPC response", "id", string(msg.ID), "t", time.Since(start))
+		log.Trace("Handled RPC response", "reqid", idForLog{msg.ID}, "conn", h.conn.RemoteAddr(), "t", time.Since(start))
 		return true
 	default:
 		return false
@@ -245,7 +246,7 @@ func (h *handler) handleImmediate(msg *jsonrpcMessage) bool {
 func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 	var result subscriptionResult
 	if err := json.Unmarshal(msg.Params, &result); err != nil {
-		log.Debug("Dropping invalid subscription message", "msg", msg)
+		log.Debug("Dropping invalid subscription message", "conn", h.conn.RemoteAddr())
 		return
 	}
 	if h.clientSubs[result.ID] != nil {
@@ -257,7 +258,7 @@ func (h *handler) handleSubscriptionResult(msg *jsonrpcMessage) {
 func (h *handler) handleResponse(msg *jsonrpcMessage) {
 	op := h.respWait[string(msg.ID)]
 	if op == nil {
-		log.Debug("Unsolicited RPC response", "id", string(msg.ID))
+		log.Debug("Unsolicited RPC response", "reqid", idForLog{msg.ID}, "conn", h.conn.RemoteAddr())
 		return
 	}
 	delete(h.respWait, string(msg.ID))
@@ -286,11 +287,11 @@ func (h *handler) handleCallMsg(ctx *callProc, msg *jsonrpcMessage) *jsonrpcMess
 	switch {
 	case msg.isNotification():
 		h.handleCall(ctx, msg)
-		log.Debug("Served "+msg.Method, "t", time.Since(start))
+		log.Debug("Served "+msg.Method, "conn", h.conn.RemoteAddr(), "t", time.Since(start))
 		return nil
 	case msg.isCall():
 		resp := h.handleCall(ctx, msg)
-		log.Debug("Served "+msg.Method, "reqid", string(msg.ID), "t", time.Since(start))
+		log.Debug("Served "+msg.Method, "reqid", idForLog{msg.ID}, "conn", h.conn.RemoteAddr(), "t", time.Since(start))
 		return resp
 	case msg.hasValidID():
 		return msg.errorResponse(&invalidRequestError{"invalid request"})
@@ -375,4 +376,13 @@ func (h *handler) unsubscribe(ctx context.Context, id ID) (bool, error) {
 	close(s.err)
 	delete(h.serverSubs, id)
 	return true, nil
+}
+
+type idForLog struct{ json.RawMessage }
+
+func (id idForLog) String() string {
+	if s, err := strconv.Unquote(string(id.RawMessage)); err == nil {
+		return s
+	}
+	return string(id.RawMessage)
 }

@@ -43,13 +43,8 @@ type Error interface {
 // a RPC session. Implementations must be go-routine safe since the codec can be called in
 // multiple go-routines concurrently.
 type ServerCodec interface {
-	// Read next request.
 	Read() (msgs []*jsonrpcMessage, isBatch bool, err error)
-	// Close underlying data stream
 	Close()
-	// RemoteAddr returns the peer address of the connection.
-	RemoteAddr() string
-
 	jsonWriter
 }
 
@@ -59,6 +54,8 @@ type jsonWriter interface {
 	Write(context.Context, interface{}) error
 	// Closed returns a channel which is closed when the connection is closed.
 	Closed() <-chan interface{}
+	// RemoteAddr returns the peer address of the connection.
+	RemoteAddr() string
 }
 
 type BlockNumber int64
