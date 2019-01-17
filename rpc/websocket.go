@@ -22,6 +22,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -109,7 +110,7 @@ func wsHandshakeValidator(allowedOrigins []string) func(*websocket.Config, *http
 		}
 	}
 
-	log.Debug(fmt.Sprintf("Allowed origin(s) for WS RPC interface %v\n", origins.ToSlice()))
+	log.Debug(fmt.Sprintf("Allowed origin(s) for WS RPC interface %v", origins.ToSlice()))
 
 	f := func(cfg *websocket.Config, req *http.Request) error {
 		// Set config origin to the peer address to make RemoteAddr work.
@@ -120,8 +121,8 @@ func wsHandshakeValidator(allowedOrigins []string) func(*websocket.Config, *http
 		if allowAllOrigins || origins.Contains(origin) {
 			return nil
 		}
-		log.Warn(fmt.Sprintf("origin '%s' not allowed on WS-RPC interface\n", origin))
-		return fmt.Errorf("origin %s not allowed", origin)
+		log.Warn("Rejected WebSocket connection", "origin", origin)
+		return errors.New("origin not allowed")
 	}
 
 	return f
