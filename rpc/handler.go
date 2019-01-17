@@ -290,7 +290,7 @@ func (h *handler) handleCallMsg(ctx *callProc, msg *jsonrpcMessage) *jsonrpcMess
 		return nil
 	case msg.isCall():
 		resp := h.handleCall(ctx, msg)
-		log.Debug("Served "+msg.Method, "id", string(msg.ID), "t", time.Since(start))
+		log.Debug("Served "+msg.Method, "reqid", string(msg.ID), "t", time.Since(start))
 		return resp
 	case msg.hasValidID():
 		return msg.errorResponse(&invalidRequestError{"invalid request"})
