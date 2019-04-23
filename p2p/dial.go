@@ -289,7 +289,7 @@ func (s *dialstate) taskDone(t task, now time.Time) {
 }
 
 func (t *dialTask) Do(srv *Server) {
-	if t.dest.Incomplete() {
+	if t.dest.Incomplete() || t.dest.Seq() == 0 {
 		if !t.resolve(srv) {
 			return
 		}
