@@ -54,9 +54,28 @@ func (t *Tree) Sign(key *ecdsa.PrivateKey, seq uint, domain string) (string, err
 	return link.url(), nil
 }
 
+func (t *Tree) SetSignature(pubkey *ecdsa.PublicKey, seq uint, signature string) error {
+	sig, err := b64format.DecodeString(signature)
+	if err != nil {
+		return err
+	}
+	root := *t.root
+	root.seq = seq
+	root.sig = sig
+	if !root.verifySignature(pubkey) {
+		return errInvalidSig
+	}
+	return nil
+}
+
 // Seq returns the update sequence number of the tree.
 func (t *Tree) Seq() uint {
 	return t.root.seq
+}
+
+// Signature returns the signature of the tree.
+func (t *Tree) Signature() string {
+	return b64format.EncodeToString(t.root.sig)
 }
 
 // ToTXT returns all DNS TXT records required for the tree.
