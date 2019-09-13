@@ -29,7 +29,6 @@ import (
 	"github.com/ethereum/go-ethereum/console"
 	"github.com/ethereum/go-ethereum/p2p/dnsdisc"
 	"github.com/ethereum/go-ethereum/p2p/enode"
-	"github.com/ethereum/go-ethereum/p2p/enr"
 	cli "gopkg.in/urfave/cli.v1"
 )
 
@@ -99,7 +98,8 @@ func dnsSync(ctx *cli.Context) error {
 	}
 	meta := dnsMetaJSON{URL: url, Seq: t.Seq(), Links: t.Links()}
 	def := &dnsDefinition{Meta: meta, Nodes: nodes}
-	return writeTreeDefinition(outdir, def)
+	writeTreeDefinition(outdir, def)
+	return nil
 }
 
 // dnsToTXT peforms dnsTXTCommand.
@@ -109,21 +109,15 @@ func dnsToTXT(ctx *cli.Context) error {
 		output = ctx.Args().Get(1)
 		domain = ctx.String(dnsDomainFlag.Name)
 	)
-	if ctx.NArg() <= 1 {
+	if ctx.NArg() < 1 {
 		return fmt.Errorf("need tree definition directory as argument")
 	}
 	if output == "" {
 		output = "-" // default to stdout
 	}
 
-	def, err := loadTreeDefinition(defdir)
-	if err != nil {
-		return err
-	}
-	key, err := loadSigningKey(ctx)
-	if err != nil {
-		return err
-	}
+	def := loadTreeDefinition(defdir)
+	key := loadSigningKey(ctx)
 	t, err := dnsdisc.MakeTree(def.Nodes, def.Meta.Links)
 	if err != nil {
 		return err
@@ -131,25 +125,26 @@ func dnsToTXT(ctx *cli.Context) error {
 	if _, err := t.Sign(key, def.Meta.Seq, domain); err != nil {
 		return fmt.Errorf("Can't sign: %v", err)
 	}
-	return writeTXTJSON(output, t.ToTXT(domain))
+	writeTXTJSON(output, t.ToTXT(domain))
+	return nil
 }
 
 // loadSigningKey loads a private key in Ethereum keystore format.
-func loadSigningKey(ctx *cli.Context) (*ecdsa.PrivateKey, error) {
+func loadSigningKey(ctx *cli.Context) *ecdsa.PrivateKey {
 	file := ctx.String(dnsKeyfileFlag.Name)
 	if file == "" {
-		return nil, fmt.Errorf("Please specify a key file using the -%s option.", dnsKeyfileFlag.Name)
+		exit(fmt.Errorf("Please specify a key file using the -%s option.", dnsKeyfileFlag.Name))
 	}
 	keyjson, err := ioutil.ReadFile(file)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to read the keyfile at '%s': %v", file, err)
+		exit(fmt.Errorf("Failed to read the keyfile at '%s': %v", file, err))
 	}
 	password, _ := console.Stdin.PromptPassword("Please enter the password for '%s': ")
 	key, err := keystore.DecryptKey(keyjson, password)
 	if err != nil {
-		return nil, fmt.Errorf("Error decrypting key: %v", err)
+		exit(fmt.Errorf("Error decrypting key: %v", err))
 	}
-	return key.PrivateKey, nil
+	return key.PrivateKey
 }
 
 // dnsClient configures the DNS discovery client from command line flags.
@@ -193,64 +188,48 @@ type dnsMetaJSON struct {
 	Links []string `json:"links"`
 }
 
-type nodeJSON struct {
-	ID     enode.ID    `json:"id"`
-	Record *enr.Record `json:"record"`
-}
-
 // loadTreeDefinition loads a directory in 'definition' format.
-func loadTreeDefinition(directory string) (*dnsDefinition, error) {
+func loadTreeDefinition(directory string) *dnsDefinition {
 	metaFile, nodesFile := treeDefinitionFiles(directory)
+	nodes := loadNodesJSON(nodesFile)
 	var def dnsDefinition
-	var nodes []nodeJSON
 	if err := common.LoadJSON(metaFile, &def.Meta); err != nil {
-		return nil, err
-	}
-	if err := common.LoadJSON(nodesFile, &nodes); err != nil {
-		return nil, err
+		exit(err)
 	}
 	// Check link syntax.
 	for _, link := range def.Meta.Links {
 		if _, _, err := dnsdisc.ParseURL(link); err != nil {
-			return nil, fmt.Errorf("invalid link %q: %v", link, err)
+			exit(fmt.Errorf("invalid link %q: %v", link, err))
 		}
 	}
 	// Check/convert nodes.
 	def.Nodes = make([]*enode.Node, len(nodes))
 	for i, dn := range nodes {
-		n, err := enode.New(enode.ValidSchemes, dn.Record)
-		if err != nil {
-			return nil, fmt.Errorf("invalid node %v: %v", dn.ID, err)
+		if dn.ID != dn.Record.ID() {
+			exit(fmt.Errorf("invalid node %v: 'id' does not match ID %v from record", dn.ID, dn.Record.ID()))
 		}
-		if dn.ID != n.ID() {
-			return nil, fmt.Errorf("invalid node %v: 'id' does not match ID %v from record", dn.ID, n.ID())
-		}
-		def.Nodes[i] = n
+		def.Nodes[i] = dn.Record
 	}
-	return &def, nil
+	return &def
 }
 
 // writeTreeDefinition writes a DNS node tree definition to the given directory.
-func writeTreeDefinition(directory string, def *dnsDefinition) error {
+func writeTreeDefinition(directory string, def *dnsDefinition) {
 	metaJSON, err := json.MarshalIndent(&def.Meta, "", "  ")
 	if err != nil {
-		panic(err)
+		exit(err)
 	}
 	// Convert nodes.
 	nodes := make([]nodeJSON, len(def.Nodes))
 	for i, n := range def.Nodes {
-		nodes[i] = nodeJSON{ID: n.ID(), Record: n.Record()}
-	}
-	nodesJSON, err := json.MarshalIndent(nodes, "", "  ")
-	if err != nil {
-		panic(err)
+		nodes[i] = nodeJSON{ID: n.ID(), Seq: n.Seq(), Record: n}
 	}
 	// Write.
 	metaFile, nodesFile := treeDefinitionFiles(directory)
+	writeNodesJSON(nodesFile, nodes)
 	if err := ioutil.WriteFile(metaFile, metaJSON, 0644); err != nil {
-		return err
+		exit(err)
 	}
-	return ioutil.WriteFile(nodesFile, nodesJSON, 0644)
 }
 
 func treeDefinitionFiles(directory string) (string, string) {
@@ -260,31 +239,32 @@ func treeDefinitionFiles(directory string) (string, string) {
 }
 
 // loadTXTJSON loads TXT records in JSON format.
-func loadTXTJSON(file string) ([]dnsdisc.TXT, error) {
+func loadTXTJSON(file string) []dnsdisc.TXT {
 	var txt dnsTXTJSON
 	if err := common.LoadJSON(file, &txt); err != nil {
-		return nil, err
+		exit(err)
 	}
 	var result []dnsdisc.TXT
 	for name, record := range txt {
 		result = append(result, dnsdisc.TXT{Name: name, Content: record.Value})
 	}
-	return result, nil
+	return result
 }
 
 // writeTXTJSON writes TXT records in JSON format.
-func writeTXTJSON(file string, records []dnsdisc.TXT) error {
+func writeTXTJSON(file string, records []dnsdisc.TXT) {
 	txt := make(dnsTXTJSON)
 	for _, r := range records {
 		txt[r.Name] = dnsTXT{Value: r.Content}
 	}
 	txtJSON, err := json.MarshalIndent(txt, "", "  ")
 	if err != nil {
-		return err
+		exit(err)
 	}
 	if file == "-" {
 		os.Stdout.Write(txtJSON)
-		return nil
 	}
-	return ioutil.WriteFile(file, txtJSON, 0644)
+	if err := ioutil.WriteFile(file, txtJSON, 0644); err != nil {
+		exit(err)
+	}
 }
