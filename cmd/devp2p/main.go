@@ -17,11 +17,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
@@ -93,4 +96,30 @@ func exit(err interface{}) {
 	}
 	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
+}
+
+// Node JSON file format.
+
+type nodeJSON struct {
+	ID     enode.ID    `json:"id"`
+	Seq    uint64      `json:"seq"`
+	Record *enode.Node `json:"record"`
+}
+
+func loadNodesJSON(file string) []nodeJSON {
+	var nodes []nodeJSON
+	if err := common.LoadJSON(file, &nodes); err != nil {
+		exit(err)
+	}
+	return nodes
+}
+
+func writeNodesJSON(file string, nodes []nodeJSON) {
+	nodesJSON, err := json.MarshalIndent(nodes, "", "  ")
+	if err != nil {
+		exit(err)
+	}
+	if err := ioutil.WriteFile(file, nodesJSON, 0644); err != nil {
+		exit(err)
+	}
 }

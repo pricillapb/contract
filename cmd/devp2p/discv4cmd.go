@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -37,23 +38,34 @@ var (
 			discv4PingCommand,
 			discv4RequestRecordCommand,
 			discv4ResolveCommand,
+			discv4ResolveJSONCommand,
 		},
 	}
 	discv4PingCommand = cli.Command{
-		Name:   "ping",
-		Usage:  "Sends ping to a node",
-		Action: discv4Ping,
+		Name:      "ping",
+		Usage:     "Sends ping to a node",
+		Action:    discv4Ping,
+		ArgsUsage: "<node>",
 	}
 	discv4RequestRecordCommand = cli.Command{
-		Name:   "requestenr",
-		Usage:  "Requests a node record using EIP-868 enrRequest",
-		Action: discv4RequestRecord,
+		Name:      "requestenr",
+		Usage:     "Requests a node record using EIP-868 enrRequest",
+		Action:    discv4RequestRecord,
+		ArgsUsage: "<node>",
 	}
 	discv4ResolveCommand = cli.Command{
-		Name:   "resolve",
-		Usage:  "Finds a node in the DHT",
-		Action: discv4Resolve,
-		Flags:  []cli.Flag{bootnodesFlag},
+		Name:      "resolve",
+		Usage:     "Finds a node in the DHT",
+		Action:    discv4Resolve,
+		ArgsUsage: "<node>",
+		Flags:     []cli.Flag{bootnodesFlag},
+	}
+	discv4ResolveJSONCommand = cli.Command{
+		Name:      "resolve-json",
+		Usage:     "Re-resolves nodes in a nodes.json file",
+		Action:    discv4ResolveJSON,
+		Flags:     []cli.Flag{bootnodesFlag},
+		ArgsUsage: "<nodes.json file>",
 	}
 )
 
@@ -94,6 +106,41 @@ func discv4Resolve(ctx *cli.Context) error {
 	defer disc.Close()
 
 	fmt.Println(disc.Resolve(n).String())
+	return nil
+}
+
+func discv4ResolveJSON(ctx *cli.Context) error {
+	if ctx.NArg() < 1 {
+		return fmt.Errorf("need nodes file as argument")
+	}
+	disc := startV4(ctx)
+	defer disc.Close()
+	file := ctx.Args().Get(0)
+
+	// Load existing nodes in file.
+	var json []nodeJSON
+	if common.FileExist(file) {
+		json = loadNodesJSON(file)
+	}
+	var nodes []*enode.Node
+	for _, jn := range json {
+		nodes = append(nodes, jn.Record)
+	}
+	// Add nodes from command line arguments.
+	for i := 1; i < ctx.NArg(); i++ {
+		n, err := parseNode(ctx.Args().Get(i))
+		if err != nil {
+			exit(err)
+		}
+		nodes = append(nodes, n)
+	}
+
+	result := make([]nodeJSON, len(nodes))
+	for i, n := range nodes {
+		n = disc.Resolve(n)
+		result[i] = nodeJSON{ID: n.ID(), Seq: n.Seq(), Record: n}
+	}
+	writeNodesJSON(file, result)
 	return nil
 }
 
