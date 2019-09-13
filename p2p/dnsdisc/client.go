@@ -172,7 +172,7 @@ func (c *Client) collectTree(ct *clientTree) *Tree {
 
 func (c *Client) resolveRoot(ctx context.Context, loc *linkEntry) (rootEntry, error) {
 	txts, err := c.cfg.Resolver.LookupTXT(ctx, loc.domain)
-	c.cfg.Logger.Trace(fmt.Sprintf("DNS discovery root lookup %s", loc.domain), "err", err)
+	c.cfg.Logger.Trace("Updating DNS discovery root", "tree", loc.domain, "err", err)
 	if err != nil {
 		return rootEntry{}, err
 	}
@@ -202,7 +202,7 @@ func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, 
 	}
 	name := hash + "." + domain
 	txts, err := c.cfg.Resolver.LookupTXT(ctx, hash+"."+domain)
-	c.cfg.Logger.Trace(fmt.Sprintf("DNS discovery lookup %s", name), "err", err)
+	c.cfg.Logger.Trace("DNS discovery lookup", "name", name, "err", err)
 	if err != nil {
 		return nil, err
 	}
