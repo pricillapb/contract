@@ -23,15 +23,15 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/crypto/sha3"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/rlp"
+	"golang.org/x/crypto/sha3"
 )
 
 type TXT struct {
@@ -40,29 +40,22 @@ type TXT struct {
 
 // Tree is a merkle tree of node records.
 type Tree struct {
-	location linkEntry
-	root     *rootEntry
-	entries  map[string]entry
-	// sync-related fields (for Client)
-	lastUpdate time.Time
-	missing    []string
-}
-
-func newTreeAt(loc linkEntry) *Tree {
-	return &Tree{location: loc, entries: make(map[string]entry)}
+	root    *rootEntry
+	entries map[string]entry
 }
 
 // Sign signs the tree with the given private key and sets the update sequence number.
-func (t *Tree) Sign(key *ecdsa.PrivateKey, seq uint) error {
+func (t *Tree) Sign(key *ecdsa.PrivateKey, seq uint, domain string) (string, error) {
 	root := *t.root
 	root.seq = seq
 	sig, err := crypto.Sign(root.sigHash(), key)
 	if err != nil {
-		return err
+		return "", err
 	}
 	root.sig = sig
 	t.root = &root
-	return nil
+	link := &linkEntry{domain, &key.PublicKey}
+	return link.url(), nil
 }
 
 // Seq returns the update sequence number of the tree.
@@ -103,23 +96,26 @@ func MakeTree(nodes []*enode.Node, links []string) (*Tree, error) {
 	})
 
 	// Create the leaf list.
-	leaves := make([]entry, len(records)+len(links))
+	enrNodes := make([]entry, len(records))
 	for i, r := range records {
-		leaves[i] = enrEntry{r}
+		enrNodes[i] = &enrEntry{r}
 	}
+	linkNodes := make([]entry, len(links))
 	for i, l := range links {
 		le, err := parseURL(l)
 		if err != nil {
 			return nil, err
 		}
-		leaves[len(records)+i] = le
+		linkNodes[i] = le
 	}
 
 	// Create intermediate nodes.
 	t := &Tree{entries: make(map[string]entry)}
-	top := t.build(leaves)
-	t.entries[subdomain(top)] = top
-	t.root = &rootEntry{hash: subdomain(top)}
+	eroot := t.build(enrNodes)
+	t.entries[subdomain(eroot)] = eroot
+	lroot := t.build(linkNodes)
+	t.entries[subdomain(lroot)] = lroot
+	t.root = &rootEntry{eroot: subdomain(eroot), lroot: subdomain(lroot)}
 	return t, nil
 }
 
@@ -133,7 +129,7 @@ func (t *Tree) build(entries []entry) entry {
 			hashes[i] = subdomain(e)
 			t.entries[hashes[i]] = e
 		}
-		return subtreeEntry{hashes}
+		return &subtreeEntry{hashes}
 	}
 	var roots []entry
 	for len(entries) > 0 {
@@ -156,9 +152,10 @@ type entry interface {
 
 type (
 	rootEntry struct {
-		hash string
-		seq  uint
-		sig  []byte
+		eroot string
+		lroot string
+		seq   uint
+		sig   []byte
 	}
 	subtreeEntry struct {
 		children []string
@@ -180,36 +177,45 @@ var (
 )
 
 func subdomain(e entry) string {
-	hash := crypto.Keccak256([]byte(e.String()))
-	return b32format.EncodeToString(hash[:16])
+	h := sha3.NewLegacyKeccak256()
+	io.WriteString(h, e.String())
+	return b32format.EncodeToString(h.Sum(nil)[:16])
 }
 
-func (e rootEntry) String() string {
-	return fmt.Sprintf("enrtree-root=v1 hash=%s seq=%d sig=%s", e.hash, e.seq, b64format.EncodeToString(e.sig))
+func (e *rootEntry) String() string {
+	return fmt.Sprintf(rootPrefix+" e=%s l=%s seq=%d sig=%s", e.eroot, e.lroot, e.seq, b64format.EncodeToString(e.sig))
 }
 
-func (e rootEntry) sigHash() []byte {
-	h := sha3.NewKeccak256()
-	fmt.Fprintf(h, "enrtree-root=v1 hash=%s seq=%d", e.hash, e.seq)
+func (e *rootEntry) sigHash() []byte {
+	h := sha3.NewLegacyKeccak256()
+	fmt.Fprintf(h, rootPrefix+" e=%s l=%s seq=%d", e.eroot, e.lroot, e.seq)
 	return h.Sum(nil)
 }
 
-func (e rootEntry) verifySignature(pubkey *ecdsa.PublicKey) bool {
+func (e *rootEntry) verifySignature(pubkey *ecdsa.PublicKey) bool {
 	sig := e.sig[:len(e.sig)-1] // remove recovery id
 	return crypto.VerifySignature(crypto.FromECDSAPub(pubkey), e.sigHash(), sig)
 }
 
-func (e subtreeEntry) String() string {
+func (e *subtreeEntry) String() string {
 	return "enrtree=" + strings.Join(e.children, ",")
 }
 
-func (e enrEntry) String() string {
+func (e *enrEntry) String() string {
 	enc, _ := rlp.EncodeToBytes(e.record)
 	return "enr=" + b64format.EncodeToString(enc)
 }
 
-func (e linkEntry) String() string {
-	return fmt.Sprintf("enrtree-link=%s@%s", b32format.EncodeToString(crypto.CompressPubkey(e.pubkey)), e.domain)
+func (e *linkEntry) String() string {
+	return "enrtree-link=" + e.link()
+}
+
+func (e *linkEntry) url() string {
+	return "enrtree://" + e.link()
+}
+
+func (e *linkEntry) link() string {
+	return fmt.Sprintf("%s@%s", b32format.EncodeToString(crypto.CompressPubkey(e.pubkey)), e.domain)
 }
 
 // Entry Parsing
@@ -222,6 +228,7 @@ var (
 	errInvalidENR   = errors.New("invalid node record")
 	errInvalidChild = errors.New("invalid child hash")
 	errInvalidSig   = errors.New("invalid base64 signature")
+	errSyntax       = errors.New("invalid syntax")
 )
 
 type entryError struct {
@@ -248,21 +255,22 @@ func parseEntry(e string) (entry, error) {
 	}
 }
 
+const rootPrefix = "enrtree-root=v1"
+
 func parseRoot(e string) (rootEntry, error) {
-	var hash, sig string
+	var eroot, lroot, sig string
 	var seq uint
-	if _, err := fmt.Sscanf(e, "enrtree-root=v1 hash=%s seq=%d sig=%s", &hash, &seq, &sig); err != nil {
-		fmt.Println(err)
-		return rootEntry{}, entryError{"root", err}
+	if _, err := fmt.Sscanf(e, rootPrefix+" e=%s l=%s seq=%d sig=%s", &eroot, &lroot, &seq, &sig); err != nil {
+		return rootEntry{}, entryError{"root", errSyntax}
 	}
-	if !isValidHash(hash) {
+	if !isValidHash(eroot) || !isValidHash(lroot) {
 		return rootEntry{}, entryError{"root", errInvalidChild}
 	}
 	sigb, err := b64format.DecodeString(sig)
 	if err != nil || len(sigb) != 65 {
 		return rootEntry{}, entryError{"root", errInvalidSig}
 	}
-	return rootEntry{hash, seq, sigb}, nil
+	return rootEntry{eroot, lroot, seq, sigb}, nil
 }
 
 func parseLink(e string) (entry, error) {
@@ -279,7 +287,7 @@ func parseLink(e string) (entry, error) {
 	if err != nil {
 		return nil, entryError{"link", errBadPubkey}
 	}
-	return linkEntry{domain, key}, nil
+	return &linkEntry{domain, key}, nil
 }
 
 func parseSubtree(e string) (entry, error) {
@@ -290,7 +298,7 @@ func parseSubtree(e string) (entry, error) {
 		}
 		hashes = append(hashes, c)
 	}
-	return subtreeEntry{hashes}, nil
+	return &subtreeEntry{hashes}, nil
 }
 
 func parseENR(e string) (entry, error) {
@@ -302,7 +310,7 @@ func parseENR(e string) (entry, error) {
 	if err := rlp.DecodeBytes(enc, &rec); err != nil {
 		return nil, entryError{"enr", err}
 	}
-	return enrEntry{&rec}, nil
+	return &enrEntry{&rec}, nil
 }
 
 func isValidHash(s string) bool {
@@ -317,14 +325,14 @@ func isValidHash(s string) bool {
 
 // URL encoding
 
-func parseURL(url string) (linkEntry, error) {
+func parseURL(url string) (*linkEntry, error) {
 	const scheme = "enrtree://"
 	if !strings.HasPrefix(url, scheme) {
-		return linkEntry{}, fmt.Errorf("wrong/missing scheme 'enrtree'")
+		return nil, fmt.Errorf("wrong/missing scheme 'enrtree'")
 	}
 	le, err := parseLink(url[len(scheme):])
 	if err != nil {
-		return linkEntry{}, err.(entryError).err
+		return nil, err.(entryError).err
 	}
-	return le.(linkEntry), nil
+	return le.(*linkEntry), nil
 }

@@ -20,13 +20,12 @@ package dnsdisc
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
 const defaultTimeout = 5 * time.Second
@@ -38,8 +37,9 @@ type Resolver interface {
 
 // Client discovers nodes by querying DNS servers.
 type Client struct {
-	trees    map[string]*Tree
 	resolver Resolver
+	trees    map[string]*clientTree
+	entries  map[string]entry // global entry cache
 }
 
 // NewClient creates a client. If resolver is nil, the default DNS resolver is used.
@@ -49,7 +49,8 @@ func NewClient(resolver Resolver, urls ...string) (*Client, error) {
 	}
 	c := &Client{
 		resolver: resolver,
-		trees:    make(map[string]*Tree),
+		trees:    make(map[string]*clientTree),
+		entries:  make(map[string]entry),
 	}
 	for _, url := range urls {
 		if err := c.AddTree(url); err != nil {
@@ -65,10 +66,14 @@ func (c *Client) AddTree(url string) error {
 	if err != nil {
 		return fmt.Errorf("invalid enrtree URL: %v", err)
 	}
-	if existing, ok := c.trees[le.domain]; ok && !keysEqual(existing.location.pubkey, le.pubkey) {
-		return fmt.Errorf("conflicting public keys for domain %q", le.domain)
+	existing, ok := c.trees[le.domain]
+	if ok {
+		if existing.matchPubkey(le.pubkey) {
+			return fmt.Errorf("conflicting public keys for domain %q", le.domain)
+		}
+		return nil
 	}
-	c.trees[le.domain] = newTreeAt(le)
+	c.trees[le.domain] = newClientTree(c, le)
 	return nil
 }
 
@@ -79,81 +84,55 @@ func (c *Client) SyncTree(url string) (*Tree, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid enrtree URL: %v", err)
 	}
-	var t *Tree
-	if existing, ok := c.trees[le.domain]; ok && keysEqual(existing.location.pubkey, le.pubkey) {
-		t = existing
+	var ct *clientTree
+	if existing, ok := c.trees[le.domain]; ok && existing.matchPubkey(le.pubkey) {
+		ct = existing
 	} else {
-		t = newTreeAt(le)
+		ct = newClientTree(c, le)
 	}
-	err = c.syncTree(t)
-	return t, err
+	if err := ct.syncAll(); err != nil {
+		return nil, err
+	}
+	return c.collectTree(ct), nil
 }
 
-// RandomNode returns a random node from any tree added to the client.
-func (c *Client) RandomNode(ctx context.Context) *enode.Node {
-	return nil
-}
-
-func (c *Client) syncTree(t *Tree) error {
-	if err := c.updateRoot(t); err != nil {
-		return err
-	}
-	for len(t.missing) > 0 {
-		hash := t.missing[0]
-		t.missing = t.missing[1:]
-
-		if _, ok := t.entries[hash]; ok {
-			continue // branch available locally, skip sync
+// collectTree creates a stand-alone tree from the node cache.
+func (c *Client) collectTree(ct *clientTree) *Tree {
+	t := &Tree{root: ct.root, entries: make(map[string]entry)}
+	missing := []string{ct.links.root, ct.enrs.root}
+	for len(missing) > 0 {
+		e := c.entries[missing[0]]
+		t.entries[missing[0]] = e
+		if subtree, ok := e.(*subtreeEntry); ok {
+			missing = append(missing, subtree.children...)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
-		e, err := c.resolveEntry(ctx, t.location.domain, hash)
-		cancel()
-		switch e := e.(type) {
-		case enrEntry, linkEntry:
-			t.entries[hash] = e
-		case subtreeEntry:
-			t.entries[hash] = e
-			t.missing = append(t.missing, e.children...)
-		default:
-			return err
-		}
+		missing = missing[1:]
 	}
-	return nil
+	return t
 }
 
-// updateRoot ensures that the given tree has an up-to-date root.
-func (c *Client) updateRoot(t *Tree) error {
-	if t.root != nil {
-		// TODO: Implement last update threshold. If last update too long ago, re-fetch. If
-		// re-fetch doesn't work (i.e. we're offline), use the existing root.
-		return nil
-	}
-	t.lastUpdate = time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
-	defer cancel()
-	root, err := c.resolveRoot(ctx, t.location)
-	if err != nil {
-		return err
-	}
-	t.root = &root
-	t.missing = []string{root.hash}
-	return nil
-}
-
-func (c *Client) resolveRoot(ctx context.Context, loc linkEntry) (rootEntry, error) {
+func (c *Client) resolveRoot(ctx context.Context, loc *linkEntry) (rootEntry, error) {
 	txts, err := c.resolver.LookupTXT(ctx, loc.domain)
 	if err != nil {
 		return rootEntry{}, err
 	}
 	for _, txt := range txts {
-		if e, err := parseRoot(txt); err == nil {
-			if !e.verifySignature(loc.pubkey) {
-				return e, fmt.Errorf("invalid signature")
-			}
-			return e, nil
+		if strings.HasPrefix(txt, rootPrefix) {
+			return parseAndVerifyRoot(txt, loc)
 		}
 	}
 	return rootEntry{}, fmt.Errorf("no root found at %q", loc.domain)
+}
+
+func parseAndVerifyRoot(txt string, loc *linkEntry) (rootEntry, error) {
+	e, err := parseRoot(txt)
+	if err != nil {
+		return e, err
+	}
+	if !e.verifySignature(loc.pubkey) {
+		return e, entryError{"root", errInvalidSig}
+	}
+	return e, nil
 }
 
 func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, error) {
@@ -174,8 +153,4 @@ func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, 
 		}
 	}
 	return nil, err
-}
-
-func keysEqual(k1, k2 *ecdsa.PublicKey) bool {
-	return k1.Curve == k2.Curve && k1.X.Cmp(k2.X) == 0 && k1.Y.Cmp(k2.Y) == 0
 }
