@@ -14,43 +14,73 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-// Package dnsdisc implements node discovery via DNS (EIP-1459).
 package dnsdisc
 
 import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
-const defaultTimeout = 5 * time.Second
+// Client discovers nodes by querying DNS servers.
+type Client struct {
+	cfg     Config
+	trees   map[string]*clientTree
+	entries map[string]entry // global entry cache
+}
+
+// Config holds configuration options for the client.
+type Config struct {
+	Timeout         time.Duration      // timeout used for DNS lookups (default 5s)
+	RecheckInterval time.Duration      // time between tree root update checks (default 30min)
+	ValidSchemes    enr.IdentityScheme // acceptable ENR identity schemes (default enode.ValidSchemes)
+	Resolver        Resolver           // the DNS resolver to use (defaults to system DNS)
+	Logger          log.Logger         // destination of client log messages (defaults to root logger)
+}
 
 // Resolver is a DNS resolver that can query TXT records.
 type Resolver interface {
 	LookupTXT(ctx context.Context, domain string) ([]string, error)
 }
 
-// Client discovers nodes by querying DNS servers.
-type Client struct {
-	resolver Resolver
-	trees    map[string]*clientTree
-	entries  map[string]entry // global entry cache
+func (cfg Config) withDefaults() Config {
+	const (
+		defaultTimeout = 5 * time.Second
+		defaultRecheck = 30 * time.Minute
+	)
+	if cfg.Timeout == 0 {
+		cfg.Timeout = defaultTimeout
+	}
+	if cfg.RecheckInterval == 0 {
+		cfg.RecheckInterval = defaultRecheck
+	}
+	if cfg.ValidSchemes == nil {
+		cfg.ValidSchemes = enode.ValidSchemes
+	}
+	if cfg.Resolver == nil {
+		cfg.Resolver = new(net.Resolver)
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = log.Root()
+	}
+	return cfg
 }
 
-// NewClient creates a client. If resolver is nil, the default DNS resolver is used.
-func NewClient(resolver Resolver, urls ...string) (*Client, error) {
-	if resolver == nil {
-		resolver = new(net.Resolver)
-	}
+// NewClient creates a client.
+func NewClient(cfg Config, urls ...string) (*Client, error) {
 	c := &Client{
-		resolver: resolver,
-		trees:    make(map[string]*clientTree),
-		entries:  make(map[string]entry),
+		cfg:     cfg.withDefaults(),
+		trees:   make(map[string]*clientTree),
+		entries: make(map[string]entry),
 	}
 	for _, url := range urls {
 		if err := c.AddTree(url); err != nil {
@@ -96,6 +126,35 @@ func (c *Client) SyncTree(url string) (*Tree, error) {
 	return c.collectTree(ct), nil
 }
 
+// RandomNode retrieves the next random node.
+func (c *Client) RandomNode(ctx context.Context) *enode.Node {
+	for {
+		ct := c.randomTree()
+		if ct == nil {
+			return nil
+		}
+		n, err := ct.syncRandom(ctx)
+		if err != nil {
+			c.cfg.Logger.Debug("Error in DNS discovery lookup", "tree", ct.loc.domain, "err", err)
+			continue
+		}
+		if n != nil {
+			return n
+		}
+	}
+}
+
+// randomTree returns a random tree.
+func (c *Client) randomTree() *clientTree {
+	limit := rand.Intn(len(c.trees))
+	for _, ct := range c.trees {
+		if limit--; limit == 0 {
+			return ct
+		}
+	}
+	return nil
+}
+
 // collectTree creates a stand-alone tree from the node cache.
 func (c *Client) collectTree(ct *clientTree) *Tree {
 	t := &Tree{root: ct.root, entries: make(map[string]entry)}
@@ -112,7 +171,8 @@ func (c *Client) collectTree(ct *clientTree) *Tree {
 }
 
 func (c *Client) resolveRoot(ctx context.Context, loc *linkEntry) (rootEntry, error) {
-	txts, err := c.resolver.LookupTXT(ctx, loc.domain)
+	txts, err := c.cfg.Resolver.LookupTXT(ctx, loc.domain)
+	c.cfg.Logger.Trace(fmt.Sprintf("DNS discovery root lookup %s", loc.domain), "err", err)
 	if err != nil {
 		return rootEntry{}, err
 	}
@@ -140,7 +200,9 @@ func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, 
 	if err != nil {
 		return nil, fmt.Errorf("invalid base32 hash")
 	}
-	txts, err := c.resolver.LookupTXT(ctx, hash+"."+domain)
+	name := hash + "." + domain
+	txts, err := c.cfg.Resolver.LookupTXT(ctx, hash+"."+domain)
+	c.cfg.Logger.Trace(fmt.Sprintf("DNS discovery lookup %s", name), "err", err)
 	if err != nil {
 		return nil, err
 	}

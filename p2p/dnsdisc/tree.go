@@ -78,6 +78,32 @@ func (t *Tree) ToTXT(domain string) []TXT {
 	return records
 }
 
+// Links returns all links contained in the tree.
+func (t *Tree) Links() []string {
+	var links []string
+	for _, e := range t.entries {
+		if le, ok := e.(*linkEntry); ok {
+			links = append(links, le.url())
+		}
+	}
+	return links
+}
+
+// Nodes returns all nodes contained in the tree.
+func (t *Tree) Nodes(validSchemes enr.IdentityScheme) ([]*enode.Node, error) {
+	var nodes []*enode.Node
+	for hash, e := range t.entries {
+		if ee, ok := e.(*enrEntry); ok {
+			n, err := enode.New(validSchemes, ee.record)
+			if err != nil {
+				return nodes, fmt.Errorf("invalid node at %s: %v", hash, err)
+			}
+			nodes = append(nodes, n)
+		}
+	}
+	return nodes, nil
+}
+
 var (
 	hashAbbrev  = 16
 	maxChildren = 300 / (hashAbbrev * (13 / 8))
@@ -96,24 +122,24 @@ func MakeTree(nodes []*enode.Node, links []string) (*Tree, error) {
 	})
 
 	// Create the leaf list.
-	enrNodes := make([]entry, len(records))
+	enrEntries := make([]entry, len(records))
 	for i, r := range records {
-		enrNodes[i] = &enrEntry{r}
+		enrEntries[i] = &enrEntry{r}
 	}
-	linkNodes := make([]entry, len(links))
+	linkEntries := make([]entry, len(links))
 	for i, l := range links {
 		le, err := parseURL(l)
 		if err != nil {
 			return nil, err
 		}
-		linkNodes[i] = le
+		linkEntries[i] = le
 	}
 
 	// Create intermediate nodes.
 	t := &Tree{entries: make(map[string]entry)}
-	eroot := t.build(enrNodes)
+	eroot := t.build(enrEntries)
 	t.entries[subdomain(eroot)] = eroot
-	lroot := t.build(linkNodes)
+	lroot := t.build(linkEntries)
 	t.entries[subdomain(lroot)] = lroot
 	t.root = &rootEntry{eroot: subdomain(eroot), lroot: subdomain(lroot)}
 	return t, nil
@@ -325,10 +351,19 @@ func isValidHash(s string) bool {
 
 // URL encoding
 
+// ParseURL parses an enrtree:// URL and returns its components.
+func ParseURL(url string) (domain string, pubkey *ecdsa.PublicKey, err error) {
+	le, err := parseURL(url)
+	if err != nil {
+		return "", nil, err
+	}
+	return le.domain, le.pubkey, nil
+}
+
 func parseURL(url string) (*linkEntry, error) {
 	const scheme = "enrtree://"
 	if !strings.HasPrefix(url, scheme) {
-		return nil, fmt.Errorf("wrong/missing scheme 'enrtree'")
+		return nil, fmt.Errorf("wrong/missing scheme 'enrtree' in URL")
 	}
 	le, err := parseLink(url[len(scheme):])
 	if err != nil {

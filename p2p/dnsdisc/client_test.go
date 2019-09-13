@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/internal/testlog"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
@@ -53,7 +55,7 @@ func TestClientSyncTree(t *testing.T) {
 		"6ENOKQN2BOKNIFFQW56UPMFC7A.n": {"enr=-HW4QO7fsG9CUu_f9SPwjFx8pKL7Huyu5oULkdKNg5rpZndpD-Y_QIIb9AwOx1MoclwQoPWb47EbjmeLOXJq0CnZmF8CgmlkgnY0iXNlY3AyNTZrMaED_aHP9nTJDJoZdTn-PftTCGrOZPg-18bqvsdB9_OBzIA="},
 		"NKPAZPIMU5YADTIXWWYVICDVQI.n": {"enr=-HW4QHihi1ZXeISPgoEfNZ1X8Y9MJnG5lEe2ahcfxLlY4GS2YJwW26w8UltTCGN64jwqdQJKccqohlzU3sS8qLIU8OIBgmlkgnY0iXNlY3AyNTZrMaEC7XwtBeeStrNXoEYa3OsFl-XTmI6pWvjrighCz_djt5A="},
 	})
-	c, _ := NewClient(r)
+	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
 	stree, err := c.SyncTree("enrtree://APFGGTFOBVE2ZNAB3CSMNNX6RRK3ODIRLP2AA5U4YFAA6MSYZUYTQ@n")
 	if err != nil {
 		t.Fatal("sync error:", err)
