@@ -57,6 +57,7 @@ func init() {
 	app.Commands = []cli.Command{
 		enrdumpCommand,
 		discv4Command,
+		dnsCommand,
 	}
 }
 
