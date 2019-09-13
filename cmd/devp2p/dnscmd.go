@@ -23,6 +23,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
@@ -38,6 +39,7 @@ var (
 		Usage: "DNS Discovery Commands",
 		Subcommands: []cli.Command{
 			dnsSyncCommand,
+			dnsSignCommand,
 			dnsTXTCommand,
 		},
 	}
@@ -48,12 +50,18 @@ var (
 		Action:    dnsSync,
 		Flags:     []cli.Flag{dnsTimeoutFlag},
 	}
+	dnsSignCommand = cli.Command{
+		Name:      "sign",
+		Usage:     "Sign a DNS discovery tree",
+		ArgsUsage: "<tree-directory> <key-file>",
+		Action:    dnsSign,
+		Flags:     []cli.Flag{dnsDomainFlag},
+	}
 	dnsTXTCommand = cli.Command{
 		Name:      "to-txt",
 		Usage:     "Create a DNS TXT records for a discovery tree",
 		ArgsUsage: "<tree-directory> <output-file>",
 		Action:    dnsToTXT,
-		Flags:     []cli.Flag{dnsKeyfileFlag, dnsDomainFlag},
 	}
 )
 
@@ -61,10 +69,6 @@ var (
 	dnsTimeoutFlag = cli.DurationFlag{
 		Name:  "timeout",
 		Usage: "Timeout for DNS lookups",
-	}
-	dnsKeyfileFlag = cli.StringFlag{
-		Name:  "keyfile",
-		Usage: "Key file for signing the tree.",
 	}
 	dnsDomainFlag = cli.StringFlag{
 		Name:  "domain",
@@ -92,54 +96,76 @@ func dnsSync(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	nodes, err := t.Nodes(enode.ValidSchemes)
+	def := treeToDefinition(url, t)
+	def.Meta.LastModified = time.Now()
+	writeTreeDefinition(outdir, def)
+	return nil
+}
+
+func dnsSign(ctx *cli.Context) error {
+	if ctx.NArg() < 2 {
+		return fmt.Errorf("need tree definition directory and key file as arguments")
+	}
+	var (
+		defdir  = ctx.Args().Get(0)
+		keyfile = ctx.Args().Get(1)
+		domain  = ctx.String(dnsDomainFlag.Name)
+	)
+	def := loadTreeDefinition(defdir)
+	key := loadSigningKey(keyfile)
+	t, err := dnsdisc.MakeTree(def.Nodes, def.Meta.Links)
 	if err != nil {
 		return err
 	}
-	meta := dnsMetaJSON{URL: url, Seq: t.Seq(), Links: t.Links()}
-	def := &dnsDefinition{Meta: meta, Nodes: nodes}
-	writeTreeDefinition(outdir, def)
+	url, err := t.Sign(key, def.Meta.Seq, domain)
+	if err != nil {
+		return fmt.Errorf("Can't sign: %v", err)
+	}
+	def = treeToDefinition(url, t)
+	def.Meta.LastModified = time.Now()
+	writeTreeDefinition(defdir, def)
 	return nil
 }
 
 // dnsToTXT peforms dnsTXTCommand.
 func dnsToTXT(ctx *cli.Context) error {
-	var (
-		defdir = ctx.Args().Get(0)
-		output = ctx.Args().Get(1)
-		domain = ctx.String(dnsDomainFlag.Name)
-	)
 	if ctx.NArg() < 1 {
 		return fmt.Errorf("need tree definition directory as argument")
 	}
+	var (
+		defdir = ctx.Args().Get(0)
+		output = ctx.Args().Get(1)
+	)
 	if output == "" {
 		output = "-" // default to stdout
 	}
 
 	def := loadTreeDefinition(defdir)
-	key := loadSigningKey(ctx)
+	domain, pubkey, err := dnsdisc.ParseURL(def.Meta.URL)
+	if err != nil {
+		return fmt.Errorf("invalid 'url': %v", err)
+	}
+	if def.Meta.Sig == "" {
+		return fmt.Errorf("missing signature, run 'devp2p dns sign' first")
+	}
 	t, err := dnsdisc.MakeTree(def.Nodes, def.Meta.Links)
 	if err != nil {
 		return err
 	}
-	if _, err := t.Sign(key, def.Meta.Seq, domain); err != nil {
-		return fmt.Errorf("Can't sign: %v", err)
+	if err := t.SetSignature(pubkey, def.Meta.Seq, def.Meta.Sig); err != nil {
+		return err
 	}
 	writeTXTJSON(output, t.ToTXT(domain))
 	return nil
 }
 
 // loadSigningKey loads a private key in Ethereum keystore format.
-func loadSigningKey(ctx *cli.Context) *ecdsa.PrivateKey {
-	file := ctx.String(dnsKeyfileFlag.Name)
-	if file == "" {
-		exit(fmt.Errorf("Please specify a key file using the -%s option.", dnsKeyfileFlag.Name))
-	}
-	keyjson, err := ioutil.ReadFile(file)
+func loadSigningKey(keyfile string) *ecdsa.PrivateKey {
+	keyjson, err := ioutil.ReadFile(keyfile)
 	if err != nil {
-		exit(fmt.Errorf("Failed to read the keyfile at '%s': %v", file, err))
+		exit(fmt.Errorf("Failed to read the keyfile at '%s': %v", keyfile, err))
 	}
-	password, _ := console.Stdin.PromptPassword("Please enter the password for '%s': ")
+	password, _ := console.Stdin.PromptPassword("Please enter the password for '" + keyfile + "': ")
 	key, err := keystore.DecryptKey(keyjson, password)
 	if err != nil {
 		exit(fmt.Errorf("Error decrypting key: %v", err))
@@ -183,9 +209,25 @@ type dnsDefinition struct {
 }
 
 type dnsMetaJSON struct {
-	URL   string   `json:"url,omitempty"`
-	Seq   uint     `json:"seq"`
-	Links []string `json:"links"`
+	URL          string    `json:"url,omitempty"`
+	Seq          uint      `json:"seq"`
+	Sig          string    `json:"signature"`
+	Links        []string  `json:"links,omitempty"`
+	LastModified time.Time `json:"lastModified"`
+}
+
+func treeToDefinition(url string, t *dnsdisc.Tree) *dnsDefinition {
+	meta := dnsMetaJSON{
+		URL:   url,
+		Seq:   t.Seq(),
+		Sig:   t.Signature(),
+		Links: t.Links(),
+	}
+	nodes, err := t.Nodes(enode.ValidSchemes)
+	if err != nil {
+		exit(err)
+	}
+	return &dnsDefinition{Meta: meta, Nodes: nodes}
 }
 
 // loadTreeDefinition loads a directory in 'definition' format.
@@ -225,6 +267,9 @@ func writeTreeDefinition(directory string, def *dnsDefinition) {
 		nodes[i] = nodeJSON{ID: n.ID(), Seq: n.Seq(), Record: n}
 	}
 	// Write.
+	if err := os.Mkdir(directory, 0744); err != nil && !os.IsExist(err) {
+		exit(err)
+	}
 	metaFile, nodesFile := treeDefinitionFiles(directory)
 	writeNodesJSON(nodesFile, nodes)
 	if err := ioutil.WriteFile(metaFile, metaJSON, 0644); err != nil {
@@ -239,30 +284,24 @@ func treeDefinitionFiles(directory string) (string, string) {
 }
 
 // loadTXTJSON loads TXT records in JSON format.
-func loadTXTJSON(file string) []dnsdisc.TXT {
-	var txt dnsTXTJSON
+func loadTXTJSON(file string) map[string]string {
+	var txt map[string]string
 	if err := common.LoadJSON(file, &txt); err != nil {
 		exit(err)
 	}
-	var result []dnsdisc.TXT
-	for name, record := range txt {
-		result = append(result, dnsdisc.TXT{Name: name, Content: record.Value})
-	}
-	return result
+	return txt
 }
 
 // writeTXTJSON writes TXT records in JSON format.
-func writeTXTJSON(file string, records []dnsdisc.TXT) {
-	txt := make(dnsTXTJSON)
-	for _, r := range records {
-		txt[r.Name] = dnsTXT{Value: r.Content}
-	}
+func writeTXTJSON(file string, txt map[string]string) {
 	txtJSON, err := json.MarshalIndent(txt, "", "  ")
 	if err != nil {
 		exit(err)
 	}
 	if file == "-" {
 		os.Stdout.Write(txtJSON)
+		fmt.Println()
+		return
 	}
 	if err := ioutil.WriteFile(file, txtJSON, 0644); err != nil {
 		exit(err)
