@@ -34,10 +34,6 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
-type TXT struct {
-	Name, Content string
-}
-
 // Tree is a merkle tree of node records.
 type Tree struct {
 	root    *rootEntry
@@ -64,16 +60,14 @@ func (t *Tree) Seq() uint {
 }
 
 // ToTXT returns all DNS TXT records required for the tree.
-func (t *Tree) ToTXT(domain string) []TXT {
-	records := []TXT{
-		{domain, t.root.String()},
-	}
+func (t *Tree) ToTXT(domain string) map[string]string {
+	records := map[string]string{domain: t.root.String()}
 	for _, e := range t.entries {
 		sd := subdomain(e)
 		if domain != "" {
 			sd = domain + "." + sd
 		}
-		records = append(records, TXT{sd, e.String()})
+		records[sd] = e.String()
 	}
 	return records
 }
