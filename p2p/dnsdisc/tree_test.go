@@ -33,11 +33,11 @@ func TestParseRoot(t *testing.T) {
 	}{
 		{
 			input: "enrtree-root=v1 e=TO4Q75OQ2N7DX4EOOR7X66A6OM seq=3 sig=N-YY6UB9xD0hFx1Gmnt7v0RfSxch5tKyry2SRDoLx7B4GfPXagwLxQqyf7gAMvApFn_ORwZQekMWa_pXrcGCtw=",
-			err:   entryError{typ: "root", err: errSyntax},
+			err:   entryError{"root", errSyntax},
 		},
 		{
 			input: "enrtree-root=v1 e=TO4Q75OQ2N7DX4EOOR7X66A6OM l=TO4Q75OQ2N7DX4EOOR7X66A6OM seq=3 sig=N-YY6UB9xD0hFx1Gmnt7v0RfSxch5tKyry2SRDoLx7B4GfPXagwLxQqyf7gAMvApFn_ORwZQekMWa_pXrcGCtw=",
-			err:   entryError{typ: "root", err: errInvalidSig},
+			err:   entryError{"root", errInvalidSig},
 		},
 	}
 	for i, test := range tests {
@@ -60,11 +60,11 @@ func TestParseEntry(t *testing.T) {
 		// Subtrees:
 		{
 			input: "enrtree=1,2",
-			err:   entryError{typ: "subtree", err: errInvalidChild},
+			err:   entryError{"subtree", errInvalidChild},
 		},
 		{
 			input: "enrtree=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-			err:   entryError{typ: "subtree", err: errInvalidChild},
+			err:   entryError{"subtree", errInvalidChild},
 		},
 		{
 			input: "enrtree=",
@@ -85,15 +85,15 @@ func TestParseEntry(t *testing.T) {
 		},
 		{
 			input: "enrtree-link=nodes.example.org",
-			err:   entryError{typ: "link", err: errNoPubkey},
+			err:   entryError{"link", errNoPubkey},
 		},
 		{
 			input: "enrtree-link=AP62DT7WOTEQZGQZOU474PP3KMEGVTTE7A7NPRXKX3DUD57@nodes.example.org",
-			err:   entryError{typ: "link", err: errBadPubkey},
+			err:   entryError{"link", errBadPubkey},
 		},
 		{
 			input: "enrtree-link=AP62DT7WONEQZGQZOU474PP3KMEGVTTE7A7NPRXKX3DUD57TQHGIA@nodes.example.org",
-			err:   entryError{typ: "link", err: errBadPubkey},
+			err:   entryError{"link", errBadPubkey},
 		},
 		// ENRs
 		{
@@ -102,7 +102,7 @@ func TestParseEntry(t *testing.T) {
 		},
 		{
 			input: "enr=-HW4QLZHjM4vZXkbp-5xJoHsKSbE7W39FPC8283X-y8oHcHPTnDDlIlzL5ArvDUlHZVDPgmFASrh7cWgLOLxj4wprRkHgmlkgnY0iXNlY3AyNTZrMaEC3t2jLMhDpCDX5mbSEwDn4L3iUfyXzoO8G28XvjGRkrAg=",
-			err:   entryError{typ: "enr", err: errInvalidENR},
+			err:   entryError{"enr", errInvalidENR},
 		},
 		// Invalid:
 		{input: "", err: errUnknownEntry},

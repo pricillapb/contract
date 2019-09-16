@@ -67,7 +67,7 @@ func TestClientSyncTreeBadNode(t *testing.T) {
 	}
 	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
 	_, err := c.SyncTree("enrtree://APFGGTFOBVE2ZNAB3CSMNNX6RRK3ODIRLP2AA5U4YFAA6MSYZUYTQ@n")
-	wantErr := entryError{typ: "enr", name: "ZFJZDQKSOMJRYYQSZKJZC54HCF.n", err: errInvalidENR}
+	wantErr := nameError{name: "ZFJZDQKSOMJRYYQSZKJZC54HCF.n", err: entryError{typ: "enr", err: errInvalidENR}}
 	if err != wantErr {
 		t.Fatalf("expected sync error %q, got %v", wantErr, err)
 	}
@@ -76,24 +76,6 @@ func TestClientSyncTreeBadNode(t *testing.T) {
 type countResolver struct {
 	qcount int
 	child  Resolver
-}
-
-func newCountResolver(r Resolver) *countResolver {
-	return &countResolver{child: r}
-}
-
-func (cr *countResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
-	cr.qcount++
-	return cr.child.LookupTXT(ctx, name)
-}
-
-type mapResolver map[string]string
-
-func (mr mapResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
-	if record, ok := mr[name]; ok {
-		return []string{record}, nil
-	}
-	return nil, nil
 }
 
 var (
@@ -133,4 +115,22 @@ func hexkey(s string) *ecdsa.PrivateKey {
 		panic("invalid private key " + s)
 	}
 	return k
+}
+
+func newCountResolver(r Resolver) *countResolver {
+	return &countResolver{child: r}
+}
+
+func (cr *countResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	cr.qcount++
+	return cr.child.LookupTXT(ctx, name)
+}
+
+type mapResolver map[string]string
+
+func (mr mapResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	if record, ok := mr[name]; ok {
+		return []string{record}, nil
+	}
+	return nil, nil
 }

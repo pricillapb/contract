@@ -212,15 +212,11 @@ func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, 
 			continue
 		}
 		if !bytes.HasPrefix(crypto.Keccak256([]byte(txt)), wantHash) {
-			return nil, fmt.Errorf("hash mismatch at %s.%s", hash, domain)
-		}
-		if ee, ok := err.(entryError); ok {
-			ee.name = name
-			return nil, ee
+			err = nameError{name, errHashMismatch}
 		} else if err != nil {
-			return nil, err
+			err = nameError{name, err}
 		}
-		return e, nil
+		return e, err
 	}
-	return nil, fmt.Errorf("no entry found at %q", name)
+	return nil, nameError{name, errNoEntry}
 }

@@ -21,7 +21,6 @@ import (
 	"crypto/ecdsa"
 	"encoding/base32"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -260,33 +259,8 @@ func (e *linkEntry) link() string {
 
 // Entry Parsing
 
-var (
-	errUnknownEntry = errors.New("unknown entry type")
-	errEmptySubtree = errors.New("empty subtree")
-	errNoPubkey     = errors.New("missing public key")
-	errBadPubkey    = errors.New("invalid public key")
-	errInvalidENR   = errors.New("invalid node record")
-	errInvalidChild = errors.New("invalid child hash")
-	errInvalidSig   = errors.New("invalid base64 signature")
-	errSyntax       = errors.New("invalid syntax")
-)
-
 const minHashLength = 10
 const rootPrefix = "enrtree-root=v1"
-
-type entryError struct {
-	typ  string
-	name string
-	err  error
-}
-
-func (err entryError) Error() string {
-	loc := ""
-	if err.name != "" {
-		loc = " at " + err.name + ""
-	}
-	return fmt.Sprintf("invalid %s entry%s: %v", err.typ, loc, err.err)
-}
 
 func parseEntry(e string) (entry, error) {
 	switch {
@@ -305,14 +279,14 @@ func parseRoot(e string) (rootEntry, error) {
 	var eroot, lroot, sig string
 	var seq uint
 	if _, err := fmt.Sscanf(e, rootPrefix+" e=%s l=%s seq=%d sig=%s", &eroot, &lroot, &seq, &sig); err != nil {
-		return rootEntry{}, entryError{typ: "root", err: errSyntax}
+		return rootEntry{}, entryError{"root", errSyntax}
 	}
 	if !isValidHash(eroot) || !isValidHash(lroot) {
-		return rootEntry{}, entryError{typ: "root", err: errInvalidChild}
+		return rootEntry{}, entryError{"root", errInvalidChild}
 	}
 	sigb, err := b64format.DecodeString(sig)
 	if err != nil || len(sigb) != crypto.SignatureLength {
-		return rootEntry{}, entryError{typ: "root", err: errInvalidSig}
+		return rootEntry{}, entryError{"root", errInvalidSig}
 	}
 	return rootEntry{eroot, lroot, seq, sigb}, nil
 }
@@ -320,16 +294,16 @@ func parseRoot(e string) (rootEntry, error) {
 func parseLink(e string) (entry, error) {
 	pos := strings.IndexByte(e, '@')
 	if pos == -1 {
-		return nil, entryError{typ: "link", err: errNoPubkey}
+		return nil, entryError{"link", errNoPubkey}
 	}
 	keystring, domain := e[:pos], e[pos+1:]
 	keybytes, err := b32format.DecodeString(keystring)
 	if err != nil {
-		return nil, entryError{typ: "link", err: errBadPubkey}
+		return nil, entryError{"link", errBadPubkey}
 	}
 	key, err := crypto.DecompressPubkey(keybytes)
 	if err != nil {
-		return nil, entryError{typ: "link", err: errBadPubkey}
+		return nil, entryError{"link", errBadPubkey}
 	}
 	return &linkEntry{domain, key}, nil
 }
@@ -341,7 +315,7 @@ func parseSubtree(e string) (entry, error) {
 	hashes := make([]string, 0, strings.Count(e, ","))
 	for _, c := range strings.Split(e, ",") {
 		if !isValidHash(c) {
-			return nil, entryError{typ: "subtree", err: errInvalidChild}
+			return nil, entryError{"subtree", errInvalidChild}
 		}
 		hashes = append(hashes, c)
 	}
@@ -351,11 +325,11 @@ func parseSubtree(e string) (entry, error) {
 func parseENR(e string) (entry, error) {
 	enc, err := b64format.DecodeString(e)
 	if err != nil {
-		return nil, entryError{typ: "enr", err: errInvalidENR}
+		return nil, entryError{"enr", errInvalidENR}
 	}
 	var rec enr.Record
 	if err := rlp.DecodeBytes(enc, &rec); err != nil {
-		return nil, entryError{typ: "enr", err: err}
+		return nil, entryError{"enr", err}
 	}
 	return &enrEntry{&rec}, nil
 }
