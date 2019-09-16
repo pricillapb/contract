@@ -157,17 +157,26 @@ func dnsToTXT(ctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid 'url' field: %v", err)
 	}
-	if def.Meta.Sig == "" {
-		return fmt.Errorf("missing signature, run 'devp2p dns sign' first")
-	}
 	t, err := dnsdisc.MakeTree(def.Meta.Seq, def.Nodes, def.Meta.Links)
 	if err != nil {
 		return err
 	}
-	if err := t.SetSignature(pubkey, def.Meta.Sig); err != nil {
+	if err := ensureValidTreeSignature(t, pubkey, def.Meta.Sig); err != nil {
 		return err
 	}
 	writeTXTJSON(output, t.ToTXT(domain))
+	return nil
+}
+
+// ensureValidTreeSignature checks that sig is valid for tree and assigns it as the
+// tree's signature if valid.
+func ensureValidTreeSignature(t *dnsdisc.Tree, pubkey *ecdsa.PublicKey, sig string) error {
+	if sig == "" {
+		return fmt.Errorf("missing signature, run 'devp2p dns sign' first")
+	}
+	if err := t.SetSignature(pubkey, sig); err != nil {
+		return fmt.Errorf("invalid signature on tree, run 'devp2p dns sign' to update it.")
+	}
 	return nil
 }
 
