@@ -55,7 +55,7 @@ var (
 		Usage:     "Sign a DNS discovery tree",
 		ArgsUsage: "<tree-directory> <key-file>",
 		Action:    dnsSign,
-		Flags:     []cli.Flag{dnsDomainFlag},
+		Flags:     []cli.Flag{dnsDomainFlag, dnsSeqFlag},
 	}
 	dnsTXTCommand = cli.Command{
 		Name:      "to-txt",
@@ -72,8 +72,12 @@ var (
 	}
 	dnsDomainFlag = cli.StringFlag{
 		Name:  "domain",
-		Usage: "Domain name of the tree.",
+		Usage: "Domain name of the tree",
 		Value: "localhost",
+	}
+	dnsSeqFlag = cli.UintFlag{
+		Name:  "seq",
+		Usage: "New sequence number of the tree",
 	}
 )
 
@@ -121,6 +125,12 @@ func dnsSign(ctx *cli.Context) error {
 	}
 	if ctx.IsSet(dnsDomainFlag.Name) {
 		domain = ctx.String(dnsDomainFlag.Name)
+	}
+	if ctx.IsSet(dnsSeqFlag.Name) {
+		def.Meta.Seq = uint(ctx.Uint(dnsSeqFlag.Name))
+	} else {
+		// Auto-bump sequence number if not supplied via flag.
+		def.Meta.Seq++
 	}
 	t, err := dnsdisc.MakeTree(def.Meta.Seq, def.Nodes, def.Meta.Links)
 	if err != nil {
