@@ -113,9 +113,12 @@ func (t *Tree) Nodes() []*enode.Node {
 	return nodes
 }
 
-var (
+const (
 	hashAbbrev  = 16
 	maxChildren = 300 / (hashAbbrev * (13 / 8))
+	// for parsing
+	minHashLength = 10
+	rootPrefix    = "enrtree-root=v1"
 )
 
 // MakeTree creates a tree containing the given nodes and links.
@@ -256,9 +259,6 @@ func (e *linkEntry) link() string {
 }
 
 // Entry Parsing
-
-const minHashLength = 10
-const rootPrefix = "enrtree-root=v1"
 
 func parseEntry(e string, validSchemes enr.IdentityScheme) (entry, error) {
 	switch {
