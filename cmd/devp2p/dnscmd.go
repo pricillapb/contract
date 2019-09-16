@@ -129,8 +129,7 @@ func dnsSign(ctx *cli.Context) error {
 	if ctx.IsSet(dnsSeqFlag.Name) {
 		def.Meta.Seq = uint(ctx.Uint(dnsSeqFlag.Name))
 	} else {
-		// Auto-bump sequence number if not supplied via flag.
-		def.Meta.Seq++
+		def.Meta.Seq++ // Auto-bump sequence number if not supplied via flag.
 	}
 	t, err := dnsdisc.MakeTree(def.Meta.Seq, def.Nodes, def.Meta.Links)
 	if err != nil {
