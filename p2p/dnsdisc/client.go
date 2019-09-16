@@ -33,9 +33,10 @@ import (
 
 // Client discovers nodes by querying DNS servers.
 type Client struct {
-	cfg     Config
-	trees   map[string]*clientTree
-	entries map[string]entry // global entry cache
+	cfg       Config
+	trees     map[string]*clientTree
+	rootTrees map[*clientTree]struct{} // explicitly added trees only
+	entries   map[string]entry         // global entry cache
 }
 
 // Config holds configuration options for the client.
@@ -78,9 +79,10 @@ func (cfg Config) withDefaults() Config {
 // NewClient creates a client.
 func NewClient(cfg Config, urls ...string) (*Client, error) {
 	c := &Client{
-		cfg:     cfg.withDefaults(),
-		trees:   make(map[string]*clientTree),
-		entries: make(map[string]entry),
+		cfg:       cfg.withDefaults(),
+		trees:     make(map[string]*clientTree),
+		rootTrees: make(map[*clientTree]struct{}),
+		entries:   make(map[string]entry),
 	}
 	for _, url := range urls {
 		if err := c.AddTree(url); err != nil {
@@ -96,15 +98,22 @@ func (c *Client) AddTree(url string) error {
 	if err != nil {
 		return fmt.Errorf("invalid enrtree URL: %v", err)
 	}
-	existing, ok := c.trees[le.domain]
+	tree, ok := c.trees[le.domain]
 	if ok {
-		if existing.matchPubkey(le.pubkey) {
+		if tree.matchPubkey(le.pubkey) {
 			return fmt.Errorf("conflicting public keys for domain %q", le.domain)
 		}
-		return nil
+	} else {
+		tree = c.addTree(le)
 	}
-	c.trees[le.domain] = newClientTree(c, le)
+	c.rootTrees[tree] = struct{}{}
 	return nil
+}
+
+func (c *Client) addTree(le *linkEntry) *clientTree {
+	ct := newClientTree(c, le)
+	c.trees[le.domain] = ct
+	return ct
 }
 
 // SyncTree downloads the entire node tree at the given URL. This doesn't add the tree for
@@ -135,7 +144,10 @@ func (c *Client) RandomNode(ctx context.Context) *enode.Node {
 		}
 		n, err := ct.syncRandom(ctx)
 		if err != nil {
-			c.cfg.Logger.Debug("Error in DNS discovery lookup", "tree", ct.loc.domain, "err", err)
+			if err == ctx.Err() {
+				return nil // context canceled.
+			}
+			c.cfg.Logger.Debug("Error in DNS random node sync", "tree", ct.loc.domain, "err", err)
 			continue
 		}
 		if n != nil {
@@ -174,6 +186,7 @@ func (c *Client) collectTree(ct *clientTree) *Tree {
 	return t
 }
 
+// resolveRoot retrieves a root entry via DNS.
 func (c *Client) resolveRoot(ctx context.Context, loc *linkEntry) (rootEntry, error) {
 	txts, err := c.cfg.Resolver.LookupTXT(ctx, loc.domain)
 	c.cfg.Logger.Trace("Updating DNS discovery root", "tree", loc.domain, "err", err)
@@ -199,7 +212,22 @@ func parseAndVerifyRoot(txt string, loc *linkEntry) (rootEntry, error) {
 	return e, nil
 }
 
+// resolveEntry retrieves an entry from the cache or fetches it from the network
+// if it isn't cached.
 func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, error) {
+	if e := c.entries[hash]; e != nil {
+		return e, nil
+	}
+	e, err := c.doResolveEntry(ctx, domain, hash)
+	if err != nil {
+		return nil, err
+	}
+	c.entries[hash] = e
+	return e, nil
+}
+
+// doResolveEntry fetches an entry via DNS.
+func (c *Client) doResolveEntry(ctx context.Context, domain, hash string) (entry, error) {
 	wantHash, err := b32format.DecodeString(hash)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base32 hash")

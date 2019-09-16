@@ -19,7 +19,6 @@ package dnsdisc
 import (
 	"context"
 	"crypto/ecdsa"
-	"fmt"
 	"time"
 
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -31,8 +30,8 @@ type clientTree struct {
 	loc        *linkEntry
 	root       *rootEntry
 	lastUpdate time.Time // last revalidation of root
-	links      *treeSync
-	enrs       *treeSync
+	enrs       *subtreeSync
+	links      *subtreeSync
 }
 
 func newClientTree(c *Client, loc *linkEntry) *clientTree {
@@ -64,7 +63,7 @@ func (ct *clientTree) syncAll() error {
 // syncRandom retrieves a single entry of the tree. The Node return value
 // is non-nil if the entry was a node.
 func (ct *clientTree) syncRandom(ctx context.Context) (*enode.Node, error) {
-	// re-check root, but don't check every call.
+	// Re-check root, but don't check every call.
 	if time.Since(ct.lastUpdate) > ct.c.cfg.RecheckInterval {
 		if err := ct.updateRoot(); err != nil {
 			return nil, err
@@ -73,25 +72,42 @@ func (ct *clientTree) syncRandom(ctx context.Context) (*enode.Node, error) {
 
 	// Link tree sync has priority, run it to completion before syncing ENRs.
 	if !ct.links.done() {
-		hash := ct.links.missing[0]
-		_, err := ct.links.resolveNext(ctx, hash)
-		if err != nil {
-			return nil, err
-		}
-		ct.links.missing = ct.links.missing[1:]
-		return nil, nil
+		err := ct.syncNextLink(ctx)
+		return nil, err
 	}
-	// Sync next entry in ENR tree.
-	if !ct.enrs.done() {
-		hash := ct.enrs.missing[0]
-		e, err := ct.enrs.resolveNext(ctx, hash)
-		if err != nil {
-			return nil, err
-		}
-		ct.enrs.missing = ct.enrs.missing[1:]
-		if ee, ok := e.(*enrEntry); ok {
-			return ee.node, nil
-		}
+
+	// Sync next random entry in ENR tree. Once every node has been visited, we simply
+	// start over. This is fine because entries are cached.
+	if ct.enrs.done() {
+		ct.enrs = newSubtreeSync(ct.c, ct.loc, ct.root.eroot, false)
+	}
+	return ct.syncNextRandomENR(ctx)
+}
+
+func (ct *clientTree) syncNextLink(ctx context.Context) error {
+	hash := ct.links.missing[0]
+	e, err := ct.links.resolveNext(ctx, hash)
+	if err != nil {
+		return err
+	}
+	ct.links.missing = ct.links.missing[1:]
+
+	if le, ok := e.(*linkEntry); ok {
+		// Found linked tree, add it to client.
+		ct.c.addTree(le)
+	}
+	return nil
+}
+
+func (ct *clientTree) syncNextRandomENR(ctx context.Context) (*enode.Node, error) {
+	hash := ct.enrs.missing[0] // TODO: random
+	e, err := ct.enrs.resolveNext(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	ct.enrs.missing = ct.enrs.missing[1:]
+	if ee, ok := e.(*enrEntry); ok {
+		return ee.node, nil
 	}
 	return nil, nil
 }
@@ -106,18 +122,19 @@ func (ct *clientTree) updateRoot() error {
 		return err
 	}
 	ct.root = &root
+
 	// Invalidate subtrees if changed.
 	if ct.links == nil || root.lroot != ct.links.root {
-		ct.links = newTreeSync(ct.c, ct.loc, root.lroot, true)
+		ct.links = newSubtreeSync(ct.c, ct.loc, root.lroot, true)
 	}
 	if ct.enrs == nil || root.eroot != ct.enrs.root {
-		ct.enrs = newTreeSync(ct.c, ct.loc, root.eroot, false)
+		ct.enrs = newSubtreeSync(ct.c, ct.loc, root.eroot, false)
 	}
 	return nil
 }
 
-// treeSync is the sync of an ENR or link subtree.
-type treeSync struct {
+// subtreeSync is the sync of an ENR or link subtree.
+type subtreeSync struct {
 	c       *Client
 	loc     *linkEntry
 	root    string
@@ -125,8 +142,8 @@ type treeSync struct {
 	link    bool     // true if this sync is for the link tree
 }
 
-func newTreeSync(c *Client, loc *linkEntry, root string, link bool) *treeSync {
-	return &treeSync{
+func newSubtreeSync(c *Client, loc *linkEntry, root string, link bool) *subtreeSync {
+	return &subtreeSync{
 		c:       c,
 		root:    root,
 		loc:     loc,
@@ -135,11 +152,11 @@ func newTreeSync(c *Client, loc *linkEntry, root string, link bool) *treeSync {
 	}
 }
 
-func (ts *treeSync) done() bool {
+func (ts *subtreeSync) done() bool {
 	return len(ts.missing) == 0
 }
 
-func (ts *treeSync) resolveAll() error {
+func (ts *subtreeSync) resolveAll() error {
 	for !ts.done() {
 		hash := ts.missing[0]
 		ctx, cancel := context.WithTimeout(context.Background(), ts.c.cfg.Timeout)
@@ -153,25 +170,19 @@ func (ts *treeSync) resolveAll() error {
 	return nil
 }
 
-func (ts *treeSync) resolveNext(ctx context.Context, hash string) (entry, error) {
-	var err error
-	e, ok := ts.c.entries[hash]
-	if !ok {
-		// branch unavailable locally, use resolver
-		e, err = ts.c.resolveEntry(ctx, ts.loc.domain, hash)
-		if err != nil {
-			return nil, err
-		}
+func (ts *subtreeSync) resolveNext(ctx context.Context, hash string) (entry, error) {
+	e, err := ts.c.resolveEntry(ctx, ts.loc.domain, hash)
+	if err != nil {
+		return nil, err
 	}
-	ts.c.entries[hash] = e
 	switch e := e.(type) {
 	case *enrEntry:
 		if ts.link {
-			return nil, fmt.Errorf("found enr entry in link tree")
+			return nil, errENRInLinkTree
 		}
 	case *linkEntry:
 		if !ts.link {
-			return nil, fmt.Errorf("found link entry in enr tree")
+			return nil, errLinkInENRTree
 		}
 	case *subtreeEntry:
 		ts.missing = append(ts.missing, e.children...)

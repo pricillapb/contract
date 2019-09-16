@@ -19,6 +19,7 @@ package dnsdisc
 import (
 	"context"
 	"crypto/ecdsa"
+	"math/rand"
 	"reflect"
 	"testing"
 
@@ -30,27 +31,32 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enr"
 )
 
+const (
+	signingKeySeed = 0x111111
+	nodesSeed1     = 0x2945237
+	nodesSeed2     = 0x4567299
+)
+
 func TestClientSyncTree(t *testing.T) {
 	r := mapResolver{
-		"n":                            "enrtree-root=v1 e=QFT4PBCRX4XQCV3VUYJ6BTCEPU l=JGUFMSAGI7KZYB3P7IZW4S5Y3A seq=3 sig=3FmXuVwpa8Y7OstZTx9PIb1mt8FrW7VpDOFv4AaGCsZ2EIHmhraWhe4NxYhQDlw5MjeFXYMbJjsPeKlHzmJREQE=",
-		"QFT4PBCRX4XQCV3VUYJ6BTCEPU.n": "enrtree=N7ZW6LHUPSH4YQYAFWIG44M2OU,5VTS2SZK6TC3UZCOX3YIGNZ76I,3KRT2RWDGBGOIT4BVUPTMREO7A",
+		"3CA2MBMUQ55ZCT74YEEQLANJDI.n": "enr=-HW4QAggRauloj2SDLtIHN1XBkvhFZ1vtf1raYQp9TBW2RD5EEawDzbtSmlXUfnaHcvwOizhVYLtr7e6vw7NAf6mTuoCgmlkgnY0iXNlY3AyNTZrMaECjrXI8TLNXU0f8cthpAMxEshUyQlK-AM0PW2wfrnacNI=",
+		"53HBTPGGZ4I76UEPCNQGZWIPTQ.n": "enr=-HW4QOFzoVLaFJnNhbgMoDXPnOvcdVuj7pDpqRvh6BRDO68aVi5ZcjB3vzQRZH2IcLBGHzo8uUN3snqmgTiE56CH3AMBgmlkgnY0iXNlY3AyNTZrMaECC2_24YYkYHEgdzxlSNKQEnHhuNAbNlMlWJxrJxbAFvA=",
+		"BG7SVUBUAJ3UAWD2ATEBLMRNEE.n": "enrtree=53HBTPGGZ4I76UEPCNQGZWIPTQ,3CA2MBMUQ55ZCT74YEEQLANJDI,HNHR6UTVZF5TJKK3FV27ZI76P4",
+		"HNHR6UTVZF5TJKK3FV27ZI76P4.n": "enr=-HW4QLAYqmrwllBEnzWWs7I5Ev2IAs7x_dZlbYdRdMUx5EyKHDXp7AV5CkuPGUPdvbv1_Ms1CPfhcGCvSElSosZmyoqAgmlkgnY0iXNlY3AyNTZrMaECriawHKWdDRk2xeZkrOXBQ0dfMFLHY4eENZwdufn1S1o=",
 		"JGUFMSAGI7KZYB3P7IZW4S5Y3A.n": "enrtree-link=AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org",
-		"N7ZW6LHUPSH4YQYAFWIG44M2OU.n": "enr=-HW4QCmjL_ZHKP_UOCVv2avoj_tMgQAktxnCdJfx-HpeTOeDDi4EyKMnJLccLGlg5GyRo3wc4NUrJBmByM0bzZPHeHMIgmlkgnY0iXNlY3AyNTZrMaEDUybYcILt0ULt3FUY-tJEjOpWwm8-Bqf2EoBr17JOmKk=",
-		"5VTS2SZK6TC3UZCOX3YIGNZ76I.n": "enr=-HW4QNPOHkqXzibYBvK1rwT5t15o2IkphtInmWwsLCpMWzmyZopJ09CMAfTcCqzTNlw0ByaZB_A1yQHNsGMh-SmwfnwEgmlkgnY0iXNlY3AyNTZrMaECxUT5ee0C-7zsA9FRx8yK7C8M8vkJ07tWHWUeqEZ7DBY=",
-		"3KRT2RWDGBGOIT4BVUPTMREO7A.n": "enr=-HW4QLZHjM4vZXkbp-5xJoHsKSbE7W39FPC8283X-y8oHcHPTnDDlIlzL5ArvDUlHZVDPgmFASrh7cWgLOLxj4wprRkHgmlkgnY0iXNlY3AyNTZrMaEC3t2jLMhDpCDX5mbSEwDn4L3iUfyXzoO8G28XvjGRkrA=",
+		"n":                            "enrtree-root=v1 e=BG7SVUBUAJ3UAWD2ATEBLMRNEE l=JGUFMSAGI7KZYB3P7IZW4S5Y3A seq=1 sig=gacuU0nTy9duIdu1IFDyF5Lv9CFHqHiNcj91n0frw70tZo3tZZsCVkE3j1ILYyVOHRLWGBmawo_SEkThZ9PgcQE=",
 	}
 	var (
-		wantNodes = testrecords[:3]
+		wantNodes = testNodes(0x29452, 3)
 		wantLinks = []string{"enrtree://AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org"}
-		wantSeq   = uint(3)
+		wantSeq   = uint(1)
 	)
-
 	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
-	stree, err := c.SyncTree("enrtree://APFGGTFOBVE2ZNAB3CSMNNX6RRK3ODIRLP2AA5U4YFAA6MSYZUYTQ@n")
+	stree, err := c.SyncTree("enrtree://AKPYQIUQIL7PSIACI32J7FGZW56E5FKHEFCCOFHILBIMW3M6LWXS2@n")
 	if err != nil {
 		t.Fatal("sync error:", err)
 	}
-	if !reflect.DeepEqual(sortByID(stree.Nodes()), wantNodes) {
+	if !reflect.DeepEqual(sortByID(stree.Nodes()), sortByID(wantNodes)) {
 		t.Errorf("wrong nodes in synced tree:\nhave %v\nwant %v", spew.Sdump(stree.Nodes()), spew.Sdump(wantNodes))
 	}
 	if !reflect.DeepEqual(stree.Links(), wantLinks) {
@@ -79,12 +85,36 @@ func TestClientSyncTreeBadNode(t *testing.T) {
 
 // This test checks that RandomNode hits all entries.
 func TestClientRandomNode(t *testing.T) {
-	tree, url := makeTestTree(testrecords, []string{})
+	nodes := testNodes(nodesSeed1, 30)
+	tree, url := makeTestTree("n", nodes, []string{})
 	r := mapResolver(tree.ToTXT("n"))
 	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
 	if err := c.AddTree(url); err != nil {
 		t.Fatal(err)
 	}
+
+	checkRandomNode(t, c, nodes)
+}
+
+// This test checks that RandomNode traverses linked trees as well as explicitly added trees.
+func TestClientRandomNodeLinks(t *testing.T) {
+	nodes := testNodes(nodesSeed1, 40)
+	tree1, url1 := makeTestTree("t1", nodes[:10], []string{})
+	tree2, url2 := makeTestTree("t2", nodes[10:], []string{url1})
+	cfg := Config{
+		Resolver: newMapResolver(tree1.ToTXT("t1"), tree2.ToTXT("t2")),
+		Logger:   testlog.Logger(t, log.LvlTrace),
+	}
+	c, _ := NewClient(cfg)
+	if err := c.AddTree(url2); err != nil {
+		t.Fatal(err)
+	}
+
+	checkRandomNode(t, c, nodes)
+}
+
+func checkRandomNode(t *testing.T, c *Client, wantNodes []*enode.Node) {
+	t.Helper()
 
 	var (
 		seen     = make(map[enode.ID]*enode.Node)
@@ -92,69 +122,82 @@ func TestClientRandomNode(t *testing.T) {
 		maxCalls = 200
 		ctx      = context.Background()
 	)
-	for len(seen) < len(testrecords) && calls < maxCalls {
+	for len(seen) < len(wantNodes) && calls < maxCalls {
 		calls++
 		n := c.RandomNode(ctx)
 		seen[n.ID()] = n
 	}
-	if calls > len(testrecords) {
-		t.Fatalf("too many calls: %d, want at most %d", calls, len(testrecords))
+	if calls >= maxCalls {
+		t.Fatalf("too many calls: %d, want at most %d", calls, maxCalls)
+	}
+	for _, n := range wantNodes {
+		if seen[n.ID()] == nil {
+			t.Errorf("RandomNode didn't discover node %v", n.ID())
+		}
 	}
 }
 
-func makeTestTree(nodes []*enode.Node, links []string) (*Tree, string) {
+func makeTestTree(domain string, nodes []*enode.Node, links []string) (*Tree, string) {
 	tree, err := MakeTree(1, nodes, links)
 	if err != nil {
 		panic(err)
 	}
-	url, err := tree.Sign(testkeys[0], "n")
+	url, err := tree.Sign(testKey(signingKeySeed), domain)
 	if err != nil {
 		panic(err)
 	}
 	return tree, url
 }
 
-var (
-	testkeys    []*ecdsa.PrivateKey
-	testrecords []*enode.Node
-)
-
-func init() {
-	testkeys = []*ecdsa.PrivateKey{
-		hexkey("b71c71a67e1177ad4e901695e1b4b9ee17ae16c6668d313eac2f96dbcda3f291"),
-		hexkey("8a1f9a8f95be41cd7ccb6168179afb4504aefe388d1e14474d32c45c72ce7b7a"),
-		hexkey("49a7b37aa6f6645917e7b807e9d1c00d4fa71f18343b0d4122a4d2df64dd6fee"),
-		hexkey("45a915e4d060149eb4365960e6a7a45f334393093061116b197e3240065ff2d8"),
-		hexkey("7018732ded552337dfbe3d6f7393b5fc2c4dff57d3420d16c91309a8bb47b51d"),
-		hexkey("90725056af7cdbe7ba4ea470a5542c9b1e615b175ac18294e20bfad060f8cf5e"),
-		hexkey("09ffd992a55877c2260e80eff793f229ed55983420532ea64d8473f87f1a981a"),
-		hexkey("f51f6be7a7367376f5200ddc525ffb5835068b92c863ab92460cb31d107724a6"),
-		hexkey("b300e6a49e8425bb3eda749ace0db408d43adcda3c5a808bf3abe86e059dee28"),
-		hexkey("78e766d81cfa4e5f5d77b9804b6389b219b09967c392bbdf7f11c7df2931d313"),
+// testKeys creates deterministic private keys for testing.
+func testKeys(seed int64, n int) []*ecdsa.PrivateKey {
+	rand := rand.New(rand.NewSource(seed))
+	keys := make([]*ecdsa.PrivateKey, n)
+	for i := 0; i < n; i++ {
+		key, err := ecdsa.GenerateKey(crypto.S256(), rand)
+		if err != nil {
+			panic("can't generate key: " + err.Error())
+		}
+		keys[i] = key
 	}
-	testrecords = make([]*enode.Node, len(testkeys))
-	for i, k := range testkeys {
+	return keys
+}
+
+func testKey(seed int64) *ecdsa.PrivateKey {
+	return testKeys(seed, 1)[0]
+}
+
+func testNodes(seed int64, n int) []*enode.Node {
+	keys := testKeys(seed, n)
+	nodes := make([]*enode.Node, n)
+	for i, key := range keys {
 		record := new(enr.Record)
 		record.SetSeq(uint64(i))
-		enode.SignV4(record, k)
+		enode.SignV4(record, key)
 		n, err := enode.New(enode.ValidSchemes, record)
 		if err != nil {
 			panic(err)
 		}
-		testrecords[i] = n
+		nodes[i] = n
 	}
-	sortByID(testrecords)
+	return nodes
 }
 
-func hexkey(s string) *ecdsa.PrivateKey {
-	k, err := crypto.HexToECDSA(s)
-	if err != nil {
-		panic("invalid private key " + s)
-	}
-	return k
+func testNode(seed int64) *enode.Node {
+	return testNodes(seed, 1)[0]
 }
 
 type mapResolver map[string]string
+
+func newMapResolver(maps ...map[string]string) mapResolver {
+	mr := make(mapResolver)
+	for _, m := range maps {
+		for k, v := range m {
+			mr[k] = v
+		}
+	}
+	return mr
+}
 
 func (mr mapResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
 	if record, ok := mr[name]; ok {

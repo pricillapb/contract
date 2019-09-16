@@ -33,12 +33,14 @@ var (
 	errSyntax       = errors.New("invalid syntax")
 )
 
-// Resolver errors
+// Resolver/sync errors
 var (
-	errNoRoot       = errors.New("no valid root found")
-	errNoEntry      = errors.New("no valid tree entry found")
-	errHashMismatch = errors.New("hash mismatch")
-	errBadHash      = errors.New("invalid base32 hash")
+	errNoRoot        = errors.New("no valid root found")
+	errNoEntry       = errors.New("no valid tree entry found")
+	errHashMismatch  = errors.New("hash mismatch")
+	errBadHash       = errors.New("invalid base32 hash")
+	errENRInLinkTree = errors.New("enr entry in link tree")
+	errLinkInENRTree = errors.New("link entry in ENR tree")
 )
 
 type nameError struct {
