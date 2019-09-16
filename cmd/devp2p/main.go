@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -122,4 +123,10 @@ func writeNodesJSON(file string, nodes []nodeJSON) {
 	if err := ioutil.WriteFile(file, nodesJSON, 0644); err != nil {
 		exit(err)
 	}
+}
+
+func sortByID(nodes []nodeJSON) {
+	sort.Slice(nodes, func(i, j int) bool {
+		return bytes.Compare(nodes[i].ID[:], nodes[j].ID[:]) < 0
+	})
 }

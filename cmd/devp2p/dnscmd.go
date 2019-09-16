@@ -278,6 +278,7 @@ func writeTreeDefinition(directory string, def *dnsDefinition) {
 	for i, n := range def.Nodes {
 		nodes[i] = nodeJSON{ID: n.ID(), Seq: n.Seq(), Record: n}
 	}
+	sortByID(nodes)
 	// Write.
 	if err := os.Mkdir(directory, 0744); err != nil && !os.IsExist(err) {
 		exit(err)

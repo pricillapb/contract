@@ -140,6 +140,7 @@ func discv4ResolveJSON(ctx *cli.Context) error {
 		n = disc.Resolve(n)
 		result[i] = nodeJSON{ID: n.ID(), Seq: n.Seq(), Record: n}
 	}
+	sortByID(result)
 	writeNodesJSON(file, result)
 	return nil
 }
