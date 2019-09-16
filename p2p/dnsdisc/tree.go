@@ -40,10 +40,9 @@ type Tree struct {
 	entries map[string]entry
 }
 
-// Sign signs the tree with the given private key and sets the update sequence number.
-func (t *Tree) Sign(key *ecdsa.PrivateKey, seq uint, domain string) (string, error) {
+// Sign signs the tree with the given private key and sets the sequence number.
+func (t *Tree) Sign(key *ecdsa.PrivateKey, domain string) (url string, err error) {
 	root := *t.root
-	root.seq = seq
 	sig, err := crypto.Sign(root.sigHash(), key)
 	if err != nil {
 		return "", err
@@ -54,17 +53,19 @@ func (t *Tree) Sign(key *ecdsa.PrivateKey, seq uint, domain string) (string, err
 	return link.url(), nil
 }
 
-func (t *Tree) SetSignature(pubkey *ecdsa.PublicKey, seq uint, signature string) error {
+// SetSignature verifies the given signature and assigns it as the tree's current
+// signature if valid.
+func (t *Tree) SetSignature(pubkey *ecdsa.PublicKey, signature string) error {
 	sig, err := b64format.DecodeString(signature)
 	if err != nil {
-		return err
+		return errInvalidSig
 	}
 	root := *t.root
-	root.seq = seq
 	root.sig = sig
 	if !root.verifySignature(pubkey) {
 		return errInvalidSig
 	}
+	t.root = &root
 	return nil
 }
 
@@ -84,7 +85,7 @@ func (t *Tree) ToTXT(domain string) map[string]string {
 	for _, e := range t.entries {
 		sd := subdomain(e)
 		if domain != "" {
-			sd = domain + "." + sd
+			sd = sd + "." + domain
 		}
 		records[sd] = e.String()
 	}
@@ -123,7 +124,7 @@ var (
 )
 
 // MakeTree creates a tree containing the given nodes and links.
-func MakeTree(nodes []*enode.Node, links []string) (*Tree, error) {
+func MakeTree(seq uint, nodes []*enode.Node, links []string) (*Tree, error) {
 	// Sort records by ID.
 	records := make([]*enr.Record, len(nodes))
 	for i := range nodes {
@@ -154,7 +155,7 @@ func MakeTree(nodes []*enode.Node, links []string) (*Tree, error) {
 	t.entries[subdomain(eroot)] = eroot
 	lroot := t.build(linkEntries)
 	t.entries[subdomain(lroot)] = lroot
-	t.root = &rootEntry{eroot: subdomain(eroot), lroot: subdomain(lroot)}
+	t.root = &rootEntry{seq: seq, eroot: subdomain(eroot), lroot: subdomain(lroot)}
 	return t, nil
 }
 
@@ -232,7 +233,7 @@ func (e *rootEntry) sigHash() []byte {
 }
 
 func (e *rootEntry) verifySignature(pubkey *ecdsa.PublicKey) bool {
-	sig := e.sig[:len(e.sig)-1] // remove recovery id
+	sig := e.sig[:crypto.RecoveryIDOffset] // remove recovery id
 	return crypto.VerifySignature(crypto.FromECDSAPub(pubkey), e.sigHash(), sig)
 }
 
@@ -271,12 +272,17 @@ var (
 )
 
 type entryError struct {
-	typ string
-	err error
+	typ  string
+	name string
+	err  error
 }
 
 func (err entryError) Error() string {
-	return fmt.Sprintf("invalid %s entry: %v", err.typ, err.err)
+	loc := ""
+	if err.name != "" {
+		loc = " (@ " + err.name + ")"
+	}
+	return fmt.Sprintf("invalid %s entry%s: %v", err.typ, loc, err.err)
 }
 
 const minHashLength = 10
@@ -300,14 +306,14 @@ func parseRoot(e string) (rootEntry, error) {
 	var eroot, lroot, sig string
 	var seq uint
 	if _, err := fmt.Sscanf(e, rootPrefix+" e=%s l=%s seq=%d sig=%s", &eroot, &lroot, &seq, &sig); err != nil {
-		return rootEntry{}, entryError{"root", errSyntax}
+		return rootEntry{}, entryError{typ: "root", err: errSyntax}
 	}
 	if !isValidHash(eroot) || !isValidHash(lroot) {
-		return rootEntry{}, entryError{"root", errInvalidChild}
+		return rootEntry{}, entryError{typ: "root", err: errInvalidChild}
 	}
 	sigb, err := b64format.DecodeString(sig)
-	if err != nil || len(sigb) != 65 {
-		return rootEntry{}, entryError{"root", errInvalidSig}
+	if err != nil || len(sigb) != crypto.SignatureLength {
+		return rootEntry{}, entryError{typ: "root", err: errInvalidSig}
 	}
 	return rootEntry{eroot, lroot, seq, sigb}, nil
 }
@@ -315,16 +321,16 @@ func parseRoot(e string) (rootEntry, error) {
 func parseLink(e string) (entry, error) {
 	pos := strings.IndexByte(e, '@')
 	if pos == -1 {
-		return nil, entryError{"link", errNoPubkey}
+		return nil, entryError{typ: "link", err: errNoPubkey}
 	}
 	keystring, domain := e[:pos], e[pos+1:]
 	keybytes, err := b32format.DecodeString(keystring)
 	if err != nil {
-		return nil, entryError{"link", errBadPubkey}
+		return nil, entryError{typ: "link", err: errBadPubkey}
 	}
 	key, err := crypto.DecompressPubkey(keybytes)
 	if err != nil {
-		return nil, entryError{"link", errBadPubkey}
+		return nil, entryError{typ: "link", err: errBadPubkey}
 	}
 	return &linkEntry{domain, key}, nil
 }
@@ -333,7 +339,7 @@ func parseSubtree(e string) (entry, error) {
 	hashes := make([]string, 0, strings.Count(e, ","))
 	for _, c := range strings.Split(e, ",") {
 		if !isValidHash(c) {
-			return nil, entryError{"subtree", errInvalidChild}
+			return nil, entryError{typ: "subtree", err: errInvalidChild}
 		}
 		hashes = append(hashes, c)
 	}
@@ -343,11 +349,11 @@ func parseSubtree(e string) (entry, error) {
 func parseENR(e string) (entry, error) {
 	enc, err := b64format.DecodeString(e)
 	if err != nil {
-		return nil, entryError{"enr", errInvalidENR}
+		return nil, entryError{typ: "enr", err: errInvalidENR}
 	}
 	var rec enr.Record
 	if err := rlp.DecodeBytes(enc, &rec); err != nil {
-		return nil, entryError{"enr", err}
+		return nil, entryError{typ: "enr", err: err}
 	}
 	return &enrEntry{&rec}, nil
 }

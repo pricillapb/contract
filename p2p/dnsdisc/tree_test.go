@@ -33,11 +33,11 @@ func TestParseRoot(t *testing.T) {
 	}{
 		{
 			input: "enrtree-root=v1 e=TO4Q75OQ2N7DX4EOOR7X66A6OM seq=3 sig=N-YY6UB9xD0hFx1Gmnt7v0RfSxch5tKyry2SRDoLx7B4GfPXagwLxQqyf7gAMvApFn_ORwZQekMWa_pXrcGCtw=",
-			err:   entryError{"root", errSyntax},
+			err:   entryError{typ: "root", err: errSyntax},
 		},
 		{
 			input: "enrtree-root=v1 e=TO4Q75OQ2N7DX4EOOR7X66A6OM l=TO4Q75OQ2N7DX4EOOR7X66A6OM seq=3 sig=N-YY6UB9xD0hFx1Gmnt7v0RfSxch5tKyry2SRDoLx7B4GfPXagwLxQqyf7gAMvApFn_ORwZQekMWa_pXrcGCtw=",
-			err:   entryError{"root", errInvalidSig},
+			err:   entryError{typ: "root", err: errInvalidSig},
 		},
 	}
 	for i, test := range tests {
@@ -60,15 +60,15 @@ func TestParseEntry(t *testing.T) {
 		// Subtrees:
 		{
 			input: "enrtree=",
-			err:   entryError{"subtree", errInvalidChild},
+			err:   entryError{typ: "subtree", err: errInvalidChild},
 		},
 		{
 			input: "enrtree=1,2",
-			err:   entryError{"subtree", errInvalidChild},
+			err:   entryError{typ: "subtree", err: errInvalidChild},
 		},
 		{
 			input: "enrtree=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-			err:   entryError{"subtree", errInvalidChild},
+			err:   entryError{typ: "subtree", err: errInvalidChild},
 		},
 		{
 			input: "enrtree=AAAAAAAAAAAAAAAAAA",
@@ -85,20 +85,24 @@ func TestParseEntry(t *testing.T) {
 		},
 		{
 			input: "enrtree-link=nodes.example.org",
-			err:   entryError{"link", errNoPubkey},
+			err:   entryError{typ: "link", err: errNoPubkey},
 		},
 		{
 			input: "enrtree-link=AP62DT7WOTEQZGQZOU474PP3KMEGVTTE7A7NPRXKX3DUD57@nodes.example.org",
-			err:   entryError{"link", errBadPubkey},
+			err:   entryError{typ: "link", err: errBadPubkey},
 		},
 		{
 			input: "enrtree-link=AP62DT7WONEQZGQZOU474PP3KMEGVTTE7A7NPRXKX3DUD57TQHGIA@nodes.example.org",
-			err:   entryError{"link", errBadPubkey},
+			err:   entryError{typ: "link", err: errBadPubkey},
 		},
 		// ENRs
 		{
 			input: "enr=-HW4QLZHjM4vZXkbp-5xJoHsKSbE7W39FPC8283X-y8oHcHPTnDDlIlzL5ArvDUlHZVDPgmFASrh7cWgLOLxj4wprRkHgmlkgnY0iXNlY3AyNTZrMaEC3t2jLMhDpCDX5mbSEwDn4L3iUfyXzoO8G28XvjGRkrA=",
 			e:     &enrEntry{record: testrecords[7].Record()},
+		},
+		{
+			input: "enr=-HW4QLZHjM4vZXkbp-5xJoHsKSbE7W39FPC8283X-y8oHcHPTnDDlIlzL5ArvDUlHZVDPgmFASrh7cWgLOLxj4wprRkHgmlkgnY0iXNlY3AyNTZrMaEC3t2jLMhDpCDX5mbSEwDn4L3iUfyXzoO8G28XvjGRkrAg=",
+			err:   entryError{typ: "enr", err: errInvalidENR},
 		},
 		// Invalid:
 		{input: "", err: errUnknownEntry},
@@ -126,7 +130,7 @@ func TestMakeTree(t *testing.T) {
 		nodes[i] = n
 	}
 
-	tree, err := MakeTree(nodes, nil)
+	tree, err := MakeTree(2, nodes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

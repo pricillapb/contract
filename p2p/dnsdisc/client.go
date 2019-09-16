@@ -190,7 +190,7 @@ func parseAndVerifyRoot(txt string, loc *linkEntry) (rootEntry, error) {
 		return e, err
 	}
 	if !e.verifySignature(loc.pubkey) {
-		return e, entryError{"root", errInvalidSig}
+		return e, entryError{typ: "root", err: errInvalidSig}
 	}
 	return e, nil
 }
@@ -207,12 +207,20 @@ func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, 
 		return nil, err
 	}
 	for _, txt := range txts {
-		if e, err := parseEntry(txt); err == nil {
-			if !bytes.HasPrefix(crypto.Keccak256([]byte(txt)), wantHash) {
-				err = fmt.Errorf("hash mismatch at %s.%s", hash, domain)
-			}
-			return e, err
+		e, err := parseEntry(txt)
+		if err == errUnknownEntry {
+			continue
 		}
+		if !bytes.HasPrefix(crypto.Keccak256([]byte(txt)), wantHash) {
+			return nil, fmt.Errorf("hash mismatch at %s.%s", hash, domain)
+		}
+		if ee, ok := err.(entryError); ok {
+			ee.name = name
+			return nil, ee
+		} else if err != nil {
+			return nil, err
+		}
+		return e, nil
 	}
-	return nil, err
+	return nil, fmt.Errorf("no entry found at %q", name)
 }
