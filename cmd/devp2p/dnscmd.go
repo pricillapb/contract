@@ -254,11 +254,7 @@ func treeToDefinition(url string, t *dnsdisc.Tree) *dnsDefinition {
 		Sig:   t.Signature(),
 		Links: t.Links(),
 	}
-	nodes, err := t.Nodes(enode.ValidSchemes)
-	if err != nil {
-		exit(err)
-	}
-	return &dnsDefinition{Meta: meta, Nodes: nodes}
+	return &dnsDefinition{Meta: meta, Nodes: t.Nodes()}
 }
 
 // loadTreeDefinition loads a directory in 'definition' format.
