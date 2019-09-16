@@ -271,6 +271,9 @@ var (
 	errSyntax       = errors.New("invalid syntax")
 )
 
+const minHashLength = 10
+const rootPrefix = "enrtree-root=v1"
+
 type entryError struct {
 	typ  string
 	name string
@@ -280,12 +283,10 @@ type entryError struct {
 func (err entryError) Error() string {
 	loc := ""
 	if err.name != "" {
-		loc = " (@ " + err.name + ")"
+		loc = " at " + err.name + ""
 	}
 	return fmt.Sprintf("invalid %s entry%s: %v", err.typ, loc, err.err)
 }
-
-const minHashLength = 10
 
 func parseEntry(e string) (entry, error) {
 	switch {
@@ -299,8 +300,6 @@ func parseEntry(e string) (entry, error) {
 		return nil, errUnknownEntry
 	}
 }
-
-const rootPrefix = "enrtree-root=v1"
 
 func parseRoot(e string) (rootEntry, error) {
 	var eroot, lroot, sig string
