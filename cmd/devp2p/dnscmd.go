@@ -122,15 +122,15 @@ func dnsSign(ctx *cli.Context) error {
 	if ctx.IsSet(dnsDomainFlag.Name) {
 		domain = ctx.String(dnsDomainFlag.Name)
 	}
-	t, err := dnsdisc.MakeTree(def.Nodes, def.Meta.Links)
+	t, err := dnsdisc.MakeTree(def.Meta.Seq, def.Nodes, def.Meta.Links)
 	if err != nil {
 		return err
 	}
 
 	key := loadSigningKey(keyfile)
-	url, err := t.Sign(key, def.Meta.Seq, domain)
+	url, err := t.Sign(key, domain)
 	if err != nil {
-		return fmt.Errorf("Can't sign: %v", err)
+		return fmt.Errorf("can't sign: %v", err)
 	}
 
 	def = treeToDefinition(url, t)
@@ -160,11 +160,11 @@ func dnsToTXT(ctx *cli.Context) error {
 	if def.Meta.Sig == "" {
 		return fmt.Errorf("missing signature, run 'devp2p dns sign' first")
 	}
-	t, err := dnsdisc.MakeTree(def.Nodes, def.Meta.Links)
+	t, err := dnsdisc.MakeTree(def.Meta.Seq, def.Nodes, def.Meta.Links)
 	if err != nil {
 		return err
 	}
-	if err := t.SetSignature(pubkey, def.Meta.Seq, def.Meta.Sig); err != nil {
+	if err := t.SetSignature(pubkey, def.Meta.Sig); err != nil {
 		return err
 	}
 	writeTXTJSON(output, t.ToTXT(domain))
