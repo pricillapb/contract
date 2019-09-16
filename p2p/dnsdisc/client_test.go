@@ -17,11 +17,14 @@
 package dnsdisc
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"reflect"
+	"sort"
 	"testing"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/testlog"
 	"github.com/ethereum/go-ethereum/log"
@@ -30,31 +33,42 @@ import (
 )
 
 func TestClientSyncTree(t *testing.T) {
-	tree, err := MakeTree(3, testrecords[:3], []string{"enrtree://AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tree.Sign(testkeys[0], "n")
-	// fmt.Println(url)
+	// tree, err := MakeTree(3, testrecords[:3], []string{"enrtree://AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org"})
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	// tree.Sign(testkeys[0], "n")
 	// for name, content := range tree.ToTXT("n") {
 	// 	fmt.Printf("%q: %q,\n", name, content)
 	// }
 
 	r := mapResolver{
-		"n":                            "enrtree-root=v1 e=TOFRR3BZDNHSY6XGP6T77KIK4Q l=JGUFMSAGI7KZYB3P7IZW4S5Y3A seq=3 sig=JW-YXz4FQP1OUbjzLF3k2zkcwqqyvKer-E3hUgf5vRpyaRT7nEUqEgTFbGS-MTDnWDR5L6d26wNZB0lLckIUQQA=",
-		"TOFRR3BZDNHSY6XGP6T77KIK4Q.n": "enrtree=6ENOKQN2BOKNIFFQW56UPMFC7A,NKPAZPIMU5YADTIXWWYVICDVQI,RXN7EWFAAL6Y6XOWO3EPO4UKMM",
+		"n":                            "enrtree-root=v1 e=QFT4PBCRX4XQCV3VUYJ6BTCEPU l=JGUFMSAGI7KZYB3P7IZW4S5Y3A seq=3 sig=3FmXuVwpa8Y7OstZTx9PIb1mt8FrW7VpDOFv4AaGCsZ2EIHmhraWhe4NxYhQDlw5MjeFXYMbJjsPeKlHzmJREQE=",
+		"QFT4PBCRX4XQCV3VUYJ6BTCEPU.n": "enrtree=N7ZW6LHUPSH4YQYAFWIG44M2OU,5VTS2SZK6TC3UZCOX3YIGNZ76I,3KRT2RWDGBGOIT4BVUPTMREO7A",
 		"JGUFMSAGI7KZYB3P7IZW4S5Y3A.n": "enrtree-link=AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org",
-		"6ENOKQN2BOKNIFFQW56UPMFC7A.n": "enr=-HW4QO7fsG9CUu_f9SPwjFx8pKL7Huyu5oULkdKNg5rpZndpD-Y_QIIb9AwOx1MoclwQoPWb47EbjmeLOXJq0CnZmF8CgmlkgnY0iXNlY3AyNTZrMaED_aHP9nTJDJoZdTn-PftTCGrOZPg-18bqvsdB9_OBzIA=",
-		"NKPAZPIMU5YADTIXWWYVICDVQI.n": "enr=-HW4QHihi1ZXeISPgoEfNZ1X8Y9MJnG5lEe2ahcfxLlY4GS2YJwW26w8UltTCGN64jwqdQJKccqohlzU3sS8qLIU8OIBgmlkgnY0iXNlY3AyNTZrMaEC7XwtBeeStrNXoEYa3OsFl-XTmI6pWvjrighCz_djt5A=",
-		"RXN7EWFAAL6Y6XOWO3EPO4UKMM.n": "enr=-HW4QPl99oxKbLdy5R-wcLCEz4DjqXKwhMPIdGDdrmm0VVt-Qh55V6jAVKIwWpJapx7UGX6Hzf80fnTr2lFunBb7mJCAgmlkgnY0iXNlY3AyNTZrMaEDymNMrg1JrLQB2KTGtv6MVbcNEVv0AHacwUAPMljNMTg=",
+		"N7ZW6LHUPSH4YQYAFWIG44M2OU.n": "enr=-HW4QCmjL_ZHKP_UOCVv2avoj_tMgQAktxnCdJfx-HpeTOeDDi4EyKMnJLccLGlg5GyRo3wc4NUrJBmByM0bzZPHeHMIgmlkgnY0iXNlY3AyNTZrMaEDUybYcILt0ULt3FUY-tJEjOpWwm8-Bqf2EoBr17JOmKk=",
+		"5VTS2SZK6TC3UZCOX3YIGNZ76I.n": "enr=-HW4QNPOHkqXzibYBvK1rwT5t15o2IkphtInmWwsLCpMWzmyZopJ09CMAfTcCqzTNlw0ByaZB_A1yQHNsGMh-SmwfnwEgmlkgnY0iXNlY3AyNTZrMaECxUT5ee0C-7zsA9FRx8yK7C8M8vkJ07tWHWUeqEZ7DBY=",
+		"3KRT2RWDGBGOIT4BVUPTMREO7A.n": "enr=-HW4QLZHjM4vZXkbp-5xJoHsKSbE7W39FPC8283X-y8oHcHPTnDDlIlzL5ArvDUlHZVDPgmFASrh7cWgLOLxj4wprRkHgmlkgnY0iXNlY3AyNTZrMaEC3t2jLMhDpCDX5mbSEwDn4L3iUfyXzoO8G28XvjGRkrA=",
 	}
 	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
+
+	var (
+		wantNodes = testrecords[:3]
+		wantLinks = []string{"enrtree://AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org"}
+		wantSeq   = uint(3)
+	)
 	stree, err := c.SyncTree("enrtree://APFGGTFOBVE2ZNAB3CSMNNX6RRK3ODIRLP2AA5U4YFAA6MSYZUYTQ@n")
 	if err != nil {
 		t.Fatal("sync error:", err)
 	}
-	if !reflect.DeepEqual(stree, tree) {
-		t.Error("incomplete tree synced")
+	if !reflect.DeepEqual(sortByID(stree.Nodes()), wantNodes) {
+		t.Errorf("wrong nodes in synced tree:\nhave %v\nwant %v", spew.Sdump(stree.Nodes()), spew.Sdump(wantNodes))
+	}
+	if !reflect.DeepEqual(stree.Links(), wantLinks) {
+		t.Errorf("wrong links in synced tree: %v", stree.Links())
+	}
+	if stree.Seq() != wantSeq {
+		t.Errorf("synced tree has wrong seq: %d", stree.Seq())
 	}
 }
 
@@ -107,6 +121,7 @@ func init() {
 		}
 		testrecords[i] = n
 	}
+	sortByID(testrecords)
 }
 
 func hexkey(s string) *ecdsa.PrivateKey {
@@ -133,4 +148,11 @@ func (mr mapResolver) LookupTXT(ctx context.Context, name string) ([]string, err
 		return []string{record}, nil
 	}
 	return nil, nil
+}
+
+func sortByID(nodes []*enode.Node) []*enode.Node {
+	sort.Slice(nodes, func(i, j int) bool {
+		return bytes.Compare(nodes[i].ID().Bytes(), nodes[j].ID().Bytes()) < 0
+	})
+	return nodes
 }

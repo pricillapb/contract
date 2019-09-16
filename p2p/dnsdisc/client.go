@@ -207,7 +207,7 @@ func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, 
 		return nil, err
 	}
 	for _, txt := range txts {
-		e, err := parseEntry(txt)
+		e, err := parseEntry(txt, c.cfg.ValidSchemes)
 		if err == errUnknownEntry {
 			continue
 		}

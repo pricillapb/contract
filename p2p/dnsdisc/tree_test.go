@@ -98,7 +98,7 @@ func TestParseEntry(t *testing.T) {
 		// ENRs
 		{
 			input: "enr=-HW4QLZHjM4vZXkbp-5xJoHsKSbE7W39FPC8283X-y8oHcHPTnDDlIlzL5ArvDUlHZVDPgmFASrh7cWgLOLxj4wprRkHgmlkgnY0iXNlY3AyNTZrMaEC3t2jLMhDpCDX5mbSEwDn4L3iUfyXzoO8G28XvjGRkrA=",
-			e:     &enrEntry{record: testrecords[7].Record()},
+			e:     &enrEntry{node: testrecords[2]},
 		},
 		{
 			input: "enr=-HW4QLZHjM4vZXkbp-5xJoHsKSbE7W39FPC8283X-y8oHcHPTnDDlIlzL5ArvDUlHZVDPgmFASrh7cWgLOLxj4wprRkHgmlkgnY0iXNlY3AyNTZrMaEC3t2jLMhDpCDX5mbSEwDn4L3iUfyXzoO8G28XvjGRkrAg=",
@@ -111,7 +111,7 @@ func TestParseEntry(t *testing.T) {
 		{input: "enrtree-x=", err: errUnknownEntry},
 	}
 	for i, test := range tests {
-		e, err := parseEntry(test.input)
+		e, err := parseEntry(test.input, enode.ValidSchemes)
 		if !reflect.DeepEqual(e, test.e) {
 			t.Errorf("test %d: wrong entry %s, want %s", i, spew.Sdump(e), spew.Sdump(test.e))
 		}

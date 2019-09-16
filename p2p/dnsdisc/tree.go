@@ -103,18 +103,14 @@ func (t *Tree) Links() []string {
 }
 
 // Nodes returns all nodes contained in the tree.
-func (t *Tree) Nodes(validSchemes enr.IdentityScheme) ([]*enode.Node, error) {
+func (t *Tree) Nodes() []*enode.Node {
 	var nodes []*enode.Node
-	for hash, e := range t.entries {
+	for _, e := range t.entries {
 		if ee, ok := e.(*enrEntry); ok {
-			n, err := enode.New(validSchemes, ee.record)
-			if err != nil {
-				return nodes, fmt.Errorf("invalid node at %s: %v", hash, err)
-			}
-			nodes = append(nodes, n)
+			nodes = append(nodes, ee.node)
 		}
 	}
-	return nodes, nil
+	return nodes
 }
 
 var (
@@ -125,10 +121,8 @@ var (
 // MakeTree creates a tree containing the given nodes and links.
 func MakeTree(seq uint, nodes []*enode.Node, links []string) (*Tree, error) {
 	// Sort records by ID.
-	records := make([]*enr.Record, len(nodes))
-	for i := range nodes {
-		records[i] = nodes[i].Record()
-	}
+	records := make([]*enode.Node, len(nodes))
+	copy(records, nodes)
 	sort.Slice(records, func(i, j int) bool {
 		id1, id2 := nodes[i].ID(), nodes[j].ID()
 		return bytes.Compare(id1[:], id2[:]) < 0
@@ -200,7 +194,7 @@ type (
 		children []string
 	}
 	enrEntry struct {
-		record *enr.Record
+		node *enode.Node
 	}
 	linkEntry struct {
 		domain string
@@ -241,7 +235,7 @@ func (e *subtreeEntry) String() string {
 }
 
 func (e *enrEntry) String() string {
-	enc, _ := rlp.EncodeToBytes(e.record)
+	enc, _ := rlp.EncodeToBytes(e.node.Record())
 	return "enr=" + b64format.EncodeToString(enc)
 }
 
@@ -262,14 +256,14 @@ func (e *linkEntry) link() string {
 const minHashLength = 10
 const rootPrefix = "enrtree-root=v1"
 
-func parseEntry(e string) (entry, error) {
+func parseEntry(e string, validSchemes enr.IdentityScheme) (entry, error) {
 	switch {
 	case strings.HasPrefix(e, "enrtree-link="):
 		return parseLink(e[13:])
 	case strings.HasPrefix(e, "enrtree="):
 		return parseSubtree(e[8:])
 	case strings.HasPrefix(e, "enr="):
-		return parseENR(e[4:])
+		return parseENR(e[4:], validSchemes)
 	default:
 		return nil, errUnknownEntry
 	}
@@ -322,7 +316,7 @@ func parseSubtree(e string) (entry, error) {
 	return &subtreeEntry{hashes}, nil
 }
 
-func parseENR(e string) (entry, error) {
+func parseENR(e string, validSchemes enr.IdentityScheme) (entry, error) {
 	enc, err := b64format.DecodeString(e)
 	if err != nil {
 		return nil, entryError{"enr", errInvalidENR}
@@ -331,7 +325,11 @@ func parseENR(e string) (entry, error) {
 	if err := rlp.DecodeBytes(enc, &rec); err != nil {
 		return nil, entryError{"enr", err}
 	}
-	return &enrEntry{&rec}, nil
+	n, err := enode.New(validSchemes, &rec)
+	if err != nil {
+		return nil, entryError{"enr", err}
+	}
+	return &enrEntry{n}, nil
 }
 
 func isValidHash(s string) bool {

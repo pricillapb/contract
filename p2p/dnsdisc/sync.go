@@ -90,8 +90,7 @@ func (ct *clientTree) syncRandom(ctx context.Context) (*enode.Node, error) {
 		}
 		ct.enrs.missing = ct.links.missing[1:]
 		if ee, ok := e.(*enrEntry); ok {
-			// Found entry containing a record, validate the ENR signature.
-			return enode.New(ct.c.cfg.ValidSchemes, ee.record)
+			return ee.node, nil
 		}
 	}
 	return nil, nil
