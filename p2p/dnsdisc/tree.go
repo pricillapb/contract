@@ -68,7 +68,7 @@ func (t *Tree) SetSignature(pubkey *ecdsa.PublicKey, signature string) error {
 	return nil
 }
 
-// Seq returns the update sequence number of the tree.
+// Seq returns the sequence number of the tree.
 func (t *Tree) Seq() uint {
 	return t.root.seq
 }
@@ -123,10 +123,7 @@ func MakeTree(seq uint, nodes []*enode.Node, links []string) (*Tree, error) {
 	// Sort records by ID.
 	records := make([]*enode.Node, len(nodes))
 	copy(records, nodes)
-	sort.Slice(records, func(i, j int) bool {
-		id1, id2 := nodes[i].ID(), nodes[j].ID()
-		return bytes.Compare(id1[:], id2[:]) < 0
-	})
+	sortByID(records)
 
 	// Create the leaf list.
 	enrEntries := make([]entry, len(records))
@@ -175,6 +172,13 @@ func (t *Tree) build(entries []entry) entry {
 		t.entries[subdomain(e)] = e
 	}
 	return t.build(roots)
+}
+
+func sortByID(nodes []*enode.Node) []*enode.Node {
+	sort.Slice(nodes, func(i, j int) bool {
+		return bytes.Compare(nodes[i].ID().Bytes(), nodes[j].ID().Bytes()) < 0
+	})
+	return nodes
 }
 
 // Entry Types

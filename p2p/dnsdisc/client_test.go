@@ -17,11 +17,9 @@
 package dnsdisc
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"reflect"
-	"sort"
 	"testing"
 
 	"github.com/davecgh/go-spew/spew"
@@ -148,11 +146,4 @@ func (mr mapResolver) LookupTXT(ctx context.Context, name string) ([]string, err
 		return []string{record}, nil
 	}
 	return nil, nil
-}
-
-func sortByID(nodes []*enode.Node) []*enode.Node {
-	sort.Slice(nodes, func(i, j int) bool {
-		return bytes.Compare(nodes[i].ID().Bytes(), nodes[j].ID().Bytes()) < 0
-	})
-	return nodes
 }
