@@ -109,18 +109,30 @@ func dnsSign(ctx *cli.Context) error {
 	var (
 		defdir  = ctx.Args().Get(0)
 		keyfile = ctx.Args().Get(1)
-		domain  = ctx.String(dnsDomainFlag.Name)
+		def     = loadTreeDefinition(defdir)
+		domain  = dnsDomainFlag.Value
 	)
-	def := loadTreeDefinition(defdir)
-	key := loadSigningKey(keyfile)
+	if def.Meta.URL != "" {
+		d, _, err := dnsdisc.ParseURL(def.Meta.URL)
+		if err != nil {
+			return fmt.Errorf("invalid 'url' field: %v", err)
+		}
+		domain = d
+	}
+	if ctx.IsSet(dnsDomainFlag.Name) {
+		domain = ctx.String(dnsDomainFlag.Name)
+	}
 	t, err := dnsdisc.MakeTree(def.Nodes, def.Meta.Links)
 	if err != nil {
 		return err
 	}
+
+	key := loadSigningKey(keyfile)
 	url, err := t.Sign(key, def.Meta.Seq, domain)
 	if err != nil {
 		return fmt.Errorf("Can't sign: %v", err)
 	}
+
 	def = treeToDefinition(url, t)
 	def.Meta.LastModified = time.Now()
 	writeTreeDefinition(defdir, def)
@@ -143,7 +155,7 @@ func dnsToTXT(ctx *cli.Context) error {
 	def := loadTreeDefinition(defdir)
 	domain, pubkey, err := dnsdisc.ParseURL(def.Meta.URL)
 	if err != nil {
-		return fmt.Errorf("invalid 'url': %v", err)
+		return fmt.Errorf("invalid 'url' field: %v", err)
 	}
 	if def.Meta.Sig == "" {
 		return fmt.Errorf("missing signature, run 'devp2p dns sign' first")
