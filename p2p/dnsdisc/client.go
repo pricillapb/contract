@@ -146,11 +146,15 @@ func (c *Client) RandomNode(ctx context.Context) *enode.Node {
 
 // randomTree returns a random tree.
 func (c *Client) randomTree() *clientTree {
+	if len(c.trees) == 0 {
+		return nil
+	}
 	limit := rand.Intn(len(c.trees))
 	for _, ct := range c.trees {
-		if limit--; limit == 0 {
+		if limit == 0 {
 			return ct
 		}
+		limit--
 	}
 	return nil
 }

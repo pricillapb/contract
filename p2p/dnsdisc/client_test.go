@@ -31,15 +31,6 @@ import (
 )
 
 func TestClientSyncTree(t *testing.T) {
-	// tree, err := MakeTree(3, testrecords[:3], []string{"enrtree://AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org"})
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// tree.Sign(testkeys[0], "n")
-	// for name, content := range tree.ToTXT("n") {
-	// 	fmt.Printf("%q: %q,\n", name, content)
-	// }
-
 	r := mapResolver{
 		"n":                            "enrtree-root=v1 e=QFT4PBCRX4XQCV3VUYJ6BTCEPU l=JGUFMSAGI7KZYB3P7IZW4S5Y3A seq=3 sig=3FmXuVwpa8Y7OstZTx9PIb1mt8FrW7VpDOFv4AaGCsZ2EIHmhraWhe4NxYhQDlw5MjeFXYMbJjsPeKlHzmJREQE=",
 		"QFT4PBCRX4XQCV3VUYJ6BTCEPU.n": "enrtree=N7ZW6LHUPSH4YQYAFWIG44M2OU,5VTS2SZK6TC3UZCOX3YIGNZ76I,3KRT2RWDGBGOIT4BVUPTMREO7A",
@@ -48,13 +39,13 @@ func TestClientSyncTree(t *testing.T) {
 		"5VTS2SZK6TC3UZCOX3YIGNZ76I.n": "enr=-HW4QNPOHkqXzibYBvK1rwT5t15o2IkphtInmWwsLCpMWzmyZopJ09CMAfTcCqzTNlw0ByaZB_A1yQHNsGMh-SmwfnwEgmlkgnY0iXNlY3AyNTZrMaECxUT5ee0C-7zsA9FRx8yK7C8M8vkJ07tWHWUeqEZ7DBY=",
 		"3KRT2RWDGBGOIT4BVUPTMREO7A.n": "enr=-HW4QLZHjM4vZXkbp-5xJoHsKSbE7W39FPC8283X-y8oHcHPTnDDlIlzL5ArvDUlHZVDPgmFASrh7cWgLOLxj4wprRkHgmlkgnY0iXNlY3AyNTZrMaEC3t2jLMhDpCDX5mbSEwDn4L3iUfyXzoO8G28XvjGRkrA=",
 	}
-	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
-
 	var (
 		wantNodes = testrecords[:3]
 		wantLinks = []string{"enrtree://AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org"}
 		wantSeq   = uint(3)
 	)
+
+	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
 	stree, err := c.SyncTree("enrtree://APFGGTFOBVE2ZNAB3CSMNNX6RRK3ODIRLP2AA5U4YFAA6MSYZUYTQ@n")
 	if err != nil {
 		t.Fatal("sync error:", err)
@@ -77,17 +68,50 @@ func TestClientSyncTreeBadNode(t *testing.T) {
 		"JGUFMSAGI7KZYB3P7IZW4S5Y3A.n": "enrtree-link=AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org",
 		"ZFJZDQKSOMJRYYQSZKJZC54HCF.n": "enr=gggggggggggggg=",
 	}
+
 	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
 	_, err := c.SyncTree("enrtree://APFGGTFOBVE2ZNAB3CSMNNX6RRK3ODIRLP2AA5U4YFAA6MSYZUYTQ@n")
 	wantErr := nameError{name: "ZFJZDQKSOMJRYYQSZKJZC54HCF.n", err: entryError{typ: "enr", err: errInvalidENR}}
 	if err != wantErr {
-		t.Fatalf("expected sync error %q, got %v", wantErr, err)
+		t.Fatalf("expected sync error %q, got %q", wantErr, err)
 	}
 }
 
-type countResolver struct {
-	qcount int
-	child  Resolver
+// This test checks that RandomNode hits all entries.
+func TestClientRandomNode(t *testing.T) {
+	tree, url := makeTestTree(testrecords, []string{})
+	r := mapResolver(tree.ToTXT("n"))
+	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
+	if err := c.AddTree(url); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		seen     = make(map[enode.ID]*enode.Node)
+		calls    = 0
+		maxCalls = 200
+		ctx      = context.Background()
+	)
+	for len(seen) < len(testrecords) && calls < maxCalls {
+		calls++
+		n := c.RandomNode(ctx)
+		seen[n.ID()] = n
+	}
+	if calls > len(testrecords) {
+		t.Fatalf("too many calls: %d, want at most %d", calls, len(testrecords))
+	}
+}
+
+func makeTestTree(nodes []*enode.Node, links []string) (*Tree, string) {
+	tree, err := MakeTree(1, nodes, links)
+	if err != nil {
+		panic(err)
+	}
+	url, err := tree.Sign(testkeys[0], "n")
+	if err != nil {
+		panic(err)
+	}
+	return tree, url
 }
 
 var (
@@ -128,15 +152,6 @@ func hexkey(s string) *ecdsa.PrivateKey {
 		panic("invalid private key " + s)
 	}
 	return k
-}
-
-func newCountResolver(r Resolver) *countResolver {
-	return &countResolver{child: r}
-}
-
-func (cr *countResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
-	cr.qcount++
-	return cr.child.LookupTXT(ctx, name)
 }
 
 type mapResolver map[string]string

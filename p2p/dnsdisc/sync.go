@@ -88,7 +88,7 @@ func (ct *clientTree) syncRandom(ctx context.Context) (*enode.Node, error) {
 		if err != nil {
 			return nil, err
 		}
-		ct.enrs.missing = ct.links.missing[1:]
+		ct.enrs.missing = ct.enrs.missing[1:]
 		if ee, ok := e.(*enrEntry); ok {
 			return ee.node, nil
 		}
