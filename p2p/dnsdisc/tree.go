@@ -56,7 +56,7 @@ func (t *Tree) Sign(key *ecdsa.PrivateKey, domain string) (url string, err error
 // signature if valid.
 func (t *Tree) SetSignature(pubkey *ecdsa.PublicKey, signature string) error {
 	sig, err := b64format.DecodeString(signature)
-	if err != nil {
+	if err != nil || len(sig) != crypto.SignatureLength {
 		return errInvalidSig
 	}
 	root := *t.root
@@ -156,7 +156,7 @@ func (t *Tree) build(entries []entry) entry {
 	if len(entries) == 1 {
 		return entries[0]
 	}
-	if len(entries) < maxChildren {
+	if len(entries) <= maxChildren {
 		hashes := make([]string, len(entries))
 		for i, e := range entries {
 			hashes[i] = subdomain(e)
@@ -164,17 +164,18 @@ func (t *Tree) build(entries []entry) entry {
 		}
 		return &subtreeEntry{hashes}
 	}
-	var roots []entry
+	var subtrees []entry
 	for len(entries) > 0 {
 		n := maxChildren
 		if len(entries) < n {
 			n = len(entries)
 		}
-		e := t.build(entries[:n])
-		roots = append(roots, e)
-		t.entries[subdomain(e)] = e
+		sub := t.build(entries[:n])
+		entries = entries[n:]
+		subtrees = append(subtrees, sub)
+		t.entries[subdomain(sub)] = sub
 	}
-	return t.build(roots)
+	return t.build(subtrees)
 }
 
 func sortByID(nodes []*enode.Node) []*enode.Node {
