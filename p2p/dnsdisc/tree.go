@@ -335,6 +335,9 @@ func parseLink(e string) (entry, error) {
 }
 
 func parseSubtree(e string) (entry, error) {
+	if e == "" {
+		return &subtreeEntry{}, nil // empty entry is OK
+	}
 	hashes := make([]string, 0, strings.Count(e, ","))
 	for _, c := range strings.Split(e, ",") {
 		if !isValidHash(c) {

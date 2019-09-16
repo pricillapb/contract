@@ -59,16 +59,16 @@ func TestParseEntry(t *testing.T) {
 	}{
 		// Subtrees:
 		{
-			input: "enrtree=",
-			err:   entryError{typ: "subtree", err: errInvalidChild},
-		},
-		{
 			input: "enrtree=1,2",
 			err:   entryError{typ: "subtree", err: errInvalidChild},
 		},
 		{
 			input: "enrtree=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 			err:   entryError{typ: "subtree", err: errInvalidChild},
+		},
+		{
+			input: "enrtree=",
+			e:     &subtreeEntry{},
 		},
 		{
 			input: "enrtree=AAAAAAAAAAAAAAAAAA",
