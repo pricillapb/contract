@@ -19,6 +19,7 @@ package dnsdisc
 import (
 	"context"
 	"crypto/ecdsa"
+	"math/rand"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -101,16 +102,26 @@ func (ct *clientTree) syncNextLink(ctx context.Context) error {
 }
 
 func (ct *clientTree) syncNextRandomENR(ctx context.Context) (*enode.Node, error) {
-	hash := ct.enrs.missing[0] // TODO: random
+	index := rand.Intn(len(ct.enrs.missing))
+	hash := ct.enrs.missing[index]
 	e, err := ct.enrs.resolveNext(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
-	ct.enrs.missing = ct.enrs.missing[1:]
+	ct.enrs.missing = removeHash(ct.enrs.missing, index)
 	if ee, ok := e.(*enrEntry); ok {
 		return ee.node, nil
 	}
 	return nil, nil
+}
+
+// removeHash removes the element at index from h.
+func removeHash(h []string, index int) []string {
+	if len(h) == 1 {
+		return nil
+	}
+	h[index] = h[len(h)-1]
+	return h[:len(h)-1]
 }
 
 // updateRoot ensures that the given tree has an up-to-date root.
