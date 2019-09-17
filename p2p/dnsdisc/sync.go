@@ -21,15 +21,16 @@ import (
 	"crypto/ecdsa"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
 // clientTree is a full tree being synced.
 type clientTree struct {
 	c          *Client
+	lastUpdate mclock.AbsTime // last revalidation of root
 	loc        *linkEntry
 	root       *rootEntry
-	lastUpdate time.Time // last revalidation of root
 	enrs       *subtreeSync
 	links      *subtreeSync
 }
@@ -64,7 +65,7 @@ func (ct *clientTree) syncAll() error {
 // is non-nil if the entry was a node.
 func (ct *clientTree) syncRandom(ctx context.Context) (*enode.Node, error) {
 	// Re-check root, but don't check every call.
-	if time.Since(ct.lastUpdate) > ct.c.cfg.RecheckInterval {
+	if ct.rootUpdateDue() {
 		if err := ct.updateRoot(); err != nil {
 			return nil, err
 		}
@@ -114,7 +115,7 @@ func (ct *clientTree) syncNextRandomENR(ctx context.Context) (*enode.Node, error
 
 // updateRoot ensures that the given tree has an up-to-date root.
 func (ct *clientTree) updateRoot() error {
-	ct.lastUpdate = time.Now()
+	ct.lastUpdate = ct.c.clock.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), ct.c.cfg.Timeout)
 	defer cancel()
 	root, err := ct.c.resolveRoot(ctx, ct.loc)
@@ -133,6 +134,11 @@ func (ct *clientTree) updateRoot() error {
 	return nil
 }
 
+// rootUpdateDue returns true when a root update is needed.
+func (ct *clientTree) rootUpdateDue() bool {
+	return ct.root == nil || time.Duration(ct.c.clock.Now()-ct.lastUpdate) > ct.c.cfg.RecheckInterval
+}
+
 // subtreeSync is the sync of an ENR or link subtree.
 type subtreeSync struct {
 	c       *Client
@@ -143,13 +149,7 @@ type subtreeSync struct {
 }
 
 func newSubtreeSync(c *Client, loc *linkEntry, root string, link bool) *subtreeSync {
-	return &subtreeSync{
-		c:       c,
-		root:    root,
-		loc:     loc,
-		link:    link,
-		missing: []string{root},
-	}
+	return &subtreeSync{c, loc, root, []string{root}, link}
 }
 
 func (ts *subtreeSync) done() bool {

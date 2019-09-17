@@ -22,8 +22,10 @@ import (
 	"math/rand"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/testlog"
 	"github.com/ethereum/go-ethereum/log"
@@ -51,6 +53,7 @@ func TestClientSyncTree(t *testing.T) {
 		wantLinks = []string{"enrtree://AM5FCQLWIZX2QFPNJAP7VUERCCRNGRHWZG3YYHIUV7BVDQ5FDPRT2@morenodes.example.org"}
 		wantSeq   = uint(1)
 	)
+
 	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
 	stree, err := c.SyncTree("enrtree://AKPYQIUQIL7PSIACI32J7FGZW56E5FKHEFCCOFHILBIMW3M6LWXS2@n")
 	if err != nil {
@@ -110,6 +113,42 @@ func TestClientRandomNodeLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	checkRandomNode(t, c, nodes)
+}
+
+// This test checks that roots are re-checked by random node.
+func TestClientRootRecheck(t *testing.T) {
+	var (
+		clock     mclock.Simulated
+		nodes     = testNodes(nodesSeed1, 30)
+		tree, url = makeTestTree("n", nodes[:25], []string{})
+		resolver  = newMapResolver(tree.ToTXT("n"))
+		cfg       = Config{
+			Resolver:        resolver,
+			Logger:          testlog.Logger(t, log.LvlTrace),
+			RecheckInterval: 20 * time.Minute,
+		}
+	)
+	c, _ := NewClient(cfg)
+	c.clock = &clock
+	c.AddTree(url)
+	checkRandomNode(t, c, nodes[:25])
+
+	// Update some nodes and ensure RandomNode returns the new nodes as well.
+	keys := testKeys(nodesSeed1, len(nodes))
+	for i, n := range nodes[:len(nodes)/2] {
+		r := n.Record()
+		r.Set(enr.IP{127, 0, 0, 1})
+		r.SetSeq(55)
+		enode.SignV4(r, keys[i])
+		n2, _ := enode.New(enode.ValidSchemes, r)
+		nodes[i] = n2
+	}
+	tree2, _ := makeTestTree("n", nodes, []string{})
+	resolver.clear()
+	resolver.add(tree2.ToTXT("n"))
+
+	clock.Run(cfg.RecheckInterval + 1*time.Second)
 	checkRandomNode(t, c, nodes)
 }
 
@@ -192,11 +231,21 @@ type mapResolver map[string]string
 func newMapResolver(maps ...map[string]string) mapResolver {
 	mr := make(mapResolver)
 	for _, m := range maps {
-		for k, v := range m {
-			mr[k] = v
-		}
+		mr.add(m)
 	}
 	return mr
+}
+
+func (mr mapResolver) clear() {
+	for k := range mr {
+		delete(mr, k)
+	}
+}
+
+func (mr mapResolver) add(m map[string]string) {
+	for k, v := range m {
+		mr[k] = v
+	}
 }
 
 func (mr mapResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {

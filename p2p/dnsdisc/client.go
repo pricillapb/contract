@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -34,6 +35,7 @@ import (
 // Client discovers nodes by querying DNS servers.
 type Client struct {
 	cfg       Config
+	clock     mclock.Clock
 	trees     map[string]*clientTree
 	rootTrees map[*clientTree]struct{} // explicitly added trees only
 	entries   map[string]entry         // global entry cache
@@ -80,6 +82,7 @@ func (cfg Config) withDefaults() Config {
 func NewClient(cfg Config, urls ...string) (*Client, error) {
 	c := &Client{
 		cfg:       cfg.withDefaults(),
+		clock:     mclock.System{},
 		trees:     make(map[string]*clientTree),
 		rootTrees: make(map[*clientTree]struct{}),
 		entries:   make(map[string]entry),
