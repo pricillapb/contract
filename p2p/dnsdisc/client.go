@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
+	lru "github.com/hashicorp/golang-lru"
 )
 
 // Client discovers nodes by querying DNS servers.
@@ -39,13 +40,14 @@ type Client struct {
 	linkCache linkCache
 	trees     map[string]*clientTree
 
-	entries map[string]entry // global entry cache
+	entries *lru.Cache
 }
 
 // Config holds configuration options for the client.
 type Config struct {
 	Timeout         time.Duration      // timeout used for DNS lookups (default 5s)
 	RecheckInterval time.Duration      // time between tree root update checks (default 30min)
+	CacheLimit      int                // maximum number of cached records (default 1000)
 	ValidSchemes    enr.IdentityScheme // acceptable ENR identity schemes (default enode.ValidSchemes)
 	Resolver        Resolver           // the DNS resolver to use (defaults to system DNS)
 	Logger          log.Logger         // destination of client log messages (defaults to root logger)
@@ -60,12 +62,16 @@ func (cfg Config) withDefaults() Config {
 	const (
 		defaultTimeout = 5 * time.Second
 		defaultRecheck = 30 * time.Minute
+		defaultCache   = 1000
 	)
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
 	}
 	if cfg.RecheckInterval == 0 {
 		cfg.RecheckInterval = defaultRecheck
+	}
+	if cfg.CacheLimit == 0 {
+		cfg.CacheLimit = defaultCache
 	}
 	if cfg.ValidSchemes == nil {
 		cfg.ValidSchemes = enode.ValidSchemes
@@ -82,10 +88,13 @@ func (cfg Config) withDefaults() Config {
 // NewClient creates a client.
 func NewClient(cfg Config, urls ...string) (*Client, error) {
 	c := &Client{
-		cfg:     cfg.withDefaults(),
-		clock:   mclock.System{},
-		trees:   make(map[string]*clientTree),
-		entries: make(map[string]entry),
+		cfg:   cfg.withDefaults(),
+		clock: mclock.System{},
+		trees: make(map[string]*clientTree),
+	}
+	var err error
+	if c.entries, err = lru.New(c.cfg.CacheLimit); err != nil {
+		return nil, err
 	}
 	for _, url := range urls {
 		if err := c.AddTree(url); err != nil {
@@ -93,6 +102,22 @@ func NewClient(cfg Config, urls ...string) (*Client, error) {
 		}
 	}
 	return c, nil
+}
+
+// SyncTree downloads the entire node tree at the given URL. This doesn't add the tree for
+// later use, but any previously-synced entries are reused.
+func (c *Client) SyncTree(url string) (*Tree, error) {
+	le, err := parseURL(url)
+	if err != nil {
+		return nil, fmt.Errorf("invalid enrtree URL: %v", err)
+	}
+	ct := newClientTree(c, le)
+	t := &Tree{entries: make(map[string]entry)}
+	if err := ct.syncAll(t.entries); err != nil {
+		return nil, err
+	}
+	t.root = ct.root
+	return t, nil
 }
 
 // AddTree adds a enrtree:// URL to crawl.
@@ -119,25 +144,6 @@ func (c *Client) ensureTree(le *linkEntry) (*clientTree, error) {
 	ct := newClientTree(c, le)
 	c.trees[le.domain] = ct
 	return ct, nil
-}
-
-// SyncTree downloads the entire node tree at the given URL. This doesn't add the tree for
-// later use, but any previously-synced entries are reused.
-func (c *Client) SyncTree(url string) (*Tree, error) {
-	le, err := parseURL(url)
-	if err != nil {
-		return nil, fmt.Errorf("invalid enrtree URL: %v", err)
-	}
-	var ct *clientTree
-	if existing, ok := c.trees[le.domain]; ok && existing.matchPubkey(le.pubkey) {
-		ct = existing
-	} else {
-		ct = newClientTree(c, le)
-	}
-	if err := ct.syncAll(); err != nil {
-		return nil, err
-	}
-	return c.collectTree(ct), nil
 }
 
 // RandomNode retrieves the next random node.
@@ -185,21 +191,6 @@ func (c *Client) gcTrees() {
 	c.trees = trees
 }
 
-// collectTree creates a stand-alone tree from the node cache.
-func (c *Client) collectTree(ct *clientTree) *Tree {
-	t := &Tree{root: ct.root, entries: make(map[string]entry)}
-	missing := []string{ct.links.root, ct.enrs.root}
-	for len(missing) > 0 {
-		e := c.entries[missing[0]]
-		t.entries[missing[0]] = e
-		if subtree, ok := e.(*subtreeEntry); ok {
-			missing = append(missing, subtree.children...)
-		}
-		missing = missing[1:]
-	}
-	return t
-}
-
 // resolveRoot retrieves a root entry via DNS.
 func (c *Client) resolveRoot(ctx context.Context, loc *linkEntry) (rootEntry, error) {
 	txts, err := c.cfg.Resolver.LookupTXT(ctx, loc.domain)
@@ -212,7 +203,7 @@ func (c *Client) resolveRoot(ctx context.Context, loc *linkEntry) (rootEntry, er
 			return parseAndVerifyRoot(txt, loc)
 		}
 	}
-	return rootEntry{}, fmt.Errorf("no root found at %q", loc.domain)
+	return rootEntry{}, nameError{loc.domain, errNoRoot}
 }
 
 func parseAndVerifyRoot(txt string, loc *linkEntry) (rootEntry, error) {
@@ -229,14 +220,15 @@ func parseAndVerifyRoot(txt string, loc *linkEntry) (rootEntry, error) {
 // resolveEntry retrieves an entry from the cache or fetches it from the network
 // if it isn't cached.
 func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, error) {
-	if e := c.entries[hash]; e != nil {
-		return e, nil
+	cacheKey := truncateHash(hash)
+	if e, ok := c.entries.Get(cacheKey); ok {
+		return e.(entry), nil
 	}
 	e, err := c.doResolveEntry(ctx, domain, hash)
 	if err != nil {
 		return nil, err
 	}
-	c.entries[hash] = e
+	c.entries.Add(cacheKey, e)
 	return e, nil
 }
 

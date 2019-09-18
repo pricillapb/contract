@@ -68,6 +68,9 @@ func TestClientSyncTree(t *testing.T) {
 	if stree.Seq() != wantSeq {
 		t.Errorf("synced tree has wrong seq: %d", stree.Seq())
 	}
+	if len(c.trees) > 0 {
+		t.Errorf("tree from SyncTree added to client")
+	}
 }
 
 // In this test, syncing the tree fails because it contains an invalid ENR entry.

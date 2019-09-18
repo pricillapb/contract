@@ -24,7 +24,6 @@ import (
 // Entry parse errors.
 var (
 	errUnknownEntry = errors.New("unknown entry type")
-	errEmptySubtree = errors.New("empty subtree")
 	errNoPubkey     = errors.New("missing public key")
 	errBadPubkey    = errors.New("invalid public key")
 	errInvalidENR   = errors.New("invalid node record")
@@ -38,7 +37,6 @@ var (
 	errNoRoot        = errors.New("no valid root found")
 	errNoEntry       = errors.New("no valid tree entry found")
 	errHashMismatch  = errors.New("hash mismatch")
-	errBadHash       = errors.New("invalid base32 hash")
 	errENRInLinkTree = errors.New("enr entry in link tree")
 	errLinkInENRTree = errors.New("link entry in ENR tree")
 )

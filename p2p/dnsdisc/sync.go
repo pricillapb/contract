@@ -52,14 +52,14 @@ func keysEqual(k1, k2 *ecdsa.PublicKey) bool {
 }
 
 // syncAll retrieves all entries of the tree.
-func (ct *clientTree) syncAll() error {
+func (ct *clientTree) syncAll(dest map[string]entry) error {
 	if err := ct.updateRoot(); err != nil {
 		return err
 	}
-	if err := ct.links.resolveAll(); err != nil {
+	if err := ct.links.resolveAll(dest); err != nil {
 		return err
 	}
-	if err := ct.enrs.resolveAll(); err != nil {
+	if err := ct.enrs.resolveAll(dest); err != nil {
 		return err
 	}
 	return nil
@@ -180,15 +180,16 @@ func (ts *subtreeSync) done() bool {
 	return len(ts.missing) == 0
 }
 
-func (ts *subtreeSync) resolveAll() error {
+func (ts *subtreeSync) resolveAll(dest map[string]entry) error {
 	for !ts.done() {
 		hash := ts.missing[0]
 		ctx, cancel := context.WithTimeout(context.Background(), ts.c.cfg.Timeout)
-		_, err := ts.resolveNext(ctx, hash)
+		e, err := ts.resolveNext(ctx, hash)
 		cancel()
 		if err != nil {
 			return err
 		}
+		dest[hash] = e
 		ts.missing = ts.missing[1:]
 	}
 	return nil

@@ -81,12 +81,12 @@ func TestParseEntry(t *testing.T) {
 			e:     &subtreeEntry{},
 		},
 		{
-			input: "enrtree=AAAAAAAAAAAAAAAAAA",
-			e:     &subtreeEntry{[]string{"AAAAAAAAAAAAAAAAAA"}},
+			input: "enrtree=AAAAAAAAAAAAAAAAAAAA",
+			e:     &subtreeEntry{[]string{"AAAAAAAAAAAAAAAAAAAA"}},
 		},
 		{
-			input: "enrtree=AAAAAAAAAAAAAAAAAA,BBBBBBBBBBBBBBBBBB",
-			e:     &subtreeEntry{[]string{"AAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBB"}},
+			input: "enrtree=AAAAAAAAAAAAAAAAAAAA,BBBBBBBBBBBBBBBBBBBB",
+			e:     &subtreeEntry{[]string{"AAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBB"}},
 		},
 		// Links
 		{

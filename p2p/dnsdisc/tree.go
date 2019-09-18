@@ -114,10 +114,9 @@ func (t *Tree) Nodes() []*enode.Node {
 }
 
 const (
-	hashAbbrev  = 16
-	maxChildren = 300 / (hashAbbrev * (13 / 8))
-	// for parsing
-	minHashLength = 10
+	hashAbbrev    = 16
+	maxChildren   = 300 / (hashAbbrev * (13 / 8))
+	minHashLength = 12
 	rootPrefix    = "enrtree-root=v1"
 )
 
@@ -345,6 +344,15 @@ func isValidHash(s string) bool {
 	buf := make([]byte, 32)
 	_, err := b32format.Decode(buf, []byte(s))
 	return err == nil
+}
+
+// truncateHash truncates the given base32 hash string to the minimum acceptable length.
+func truncateHash(hash string) string {
+	maxLen := b32format.EncodedLen(minHashLength)
+	if len(hash) < maxLen {
+		panic(fmt.Errorf("dnsdisc: hash %q is too short", hash))
+	}
+	return hash[:maxLen]
 }
 
 // URL encoding
