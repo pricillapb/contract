@@ -89,7 +89,7 @@ func TestClientSyncTreeBadNode(t *testing.T) {
 // This test checks that RandomNode hits all entries.
 func TestClientRandomNode(t *testing.T) {
 	nodes := testNodes(nodesSeed1, 30)
-	tree, url := makeTestTree("n", nodes, []string{})
+	tree, url := makeTestTree("n", nodes, nil)
 	r := mapResolver(tree.ToTXT("n"))
 	c, _ := NewClient(Config{Resolver: r, Logger: testlog.Logger(t, log.LvlTrace)})
 	if err := c.AddTree(url); err != nil {
@@ -102,7 +102,7 @@ func TestClientRandomNode(t *testing.T) {
 // This test checks that RandomNode traverses linked trees as well as explicitly added trees.
 func TestClientRandomNodeLinks(t *testing.T) {
 	nodes := testNodes(nodesSeed1, 40)
-	tree1, url1 := makeTestTree("t1", nodes[:10], []string{})
+	tree1, url1 := makeTestTree("t1", nodes[:10], nil)
 	tree2, url2 := makeTestTree("t2", nodes[10:], []string{url1})
 	cfg := Config{
 		Resolver: newMapResolver(tree1.ToTXT("t1"), tree2.ToTXT("t2")),
@@ -116,21 +116,25 @@ func TestClientRandomNodeLinks(t *testing.T) {
 	checkRandomNode(t, c, nodes)
 }
 
-// This test checks that roots are re-checked by random node.
-func TestClientRootRecheck(t *testing.T) {
+// This test verifies that RandomNode re-checks the root of the tree to catch
+// updates to nodes.
+func TestClientRandomNodeUpdates(t *testing.T) {
 	var (
-		clock     mclock.Simulated
-		nodes     = testNodes(nodesSeed1, 30)
-		tree, url = makeTestTree("n", nodes[:25], []string{})
-		resolver  = newMapResolver(tree.ToTXT("n"))
-		cfg       = Config{
+		clock    = new(mclock.Simulated)
+		nodes    = testNodes(nodesSeed1, 30)
+		resolver = newMapResolver()
+		cfg      = Config{
 			Resolver:        resolver,
 			Logger:          testlog.Logger(t, log.LvlTrace),
 			RecheckInterval: 20 * time.Minute,
 		}
+		c, _ = NewClient(cfg)
 	)
-	c, _ := NewClient(cfg)
-	c.clock = &clock
+	c.clock = clock
+	tree1, url := makeTestTree("n", nodes[:25], nil)
+
+	// Sync the original tree.
+	resolver.add(tree1.ToTXT("n"))
 	c.AddTree(url)
 	checkRandomNode(t, c, nodes[:25])
 
@@ -144,35 +148,78 @@ func TestClientRootRecheck(t *testing.T) {
 		n2, _ := enode.New(enode.ValidSchemes, r)
 		nodes[i] = n2
 	}
-	tree2, _ := makeTestTree("n", nodes, []string{})
+	tree2, _ := makeTestTree("n", nodes, nil)
+	clock.Run(cfg.RecheckInterval + 1*time.Second)
 	resolver.clear()
 	resolver.add(tree2.ToTXT("n"))
-
-	clock.Run(cfg.RecheckInterval + 1*time.Second)
 	checkRandomNode(t, c, nodes)
+}
+
+// This test verifies that RandomNode re-checks the root of the tree to catch
+// updates to links.
+func TestClientRandomNodeLinkUpdates(t *testing.T) {
+	var (
+		clock    = new(mclock.Simulated)
+		nodes    = testNodes(nodesSeed1, 30)
+		resolver = newMapResolver()
+		cfg      = Config{
+			Resolver:        resolver,
+			Logger:          testlog.Logger(t, log.LvlTrace),
+			RecheckInterval: 20 * time.Minute,
+		}
+		c, _ = NewClient(cfg)
+	)
+	c.clock = clock
+	tree3, url3 := makeTestTree("t3", nodes[20:30], nil)
+	tree2, url2 := makeTestTree("t2", nodes[10:20], nil)
+	tree1, url1 := makeTestTree("t1", nodes[0:10], []string{url2})
+	resolver.add(tree1.ToTXT("t1"))
+	resolver.add(tree2.ToTXT("t2"))
+	resolver.add(tree3.ToTXT("t3"))
+
+	// Sync tree1 using RandomNode.
+	c.AddTree(url1)
+	checkRandomNode(t, c, nodes[:20])
+
+	// Add link to tree3, remove link to tree2.
+	tree1, _ = makeTestTree("t1", nodes[:10], []string{url3})
+	resolver.add(tree1.ToTXT("t1"))
+	clock.Run(cfg.RecheckInterval + 1*time.Second)
+	t.Log("tree1 updated")
+
+	var wantNodes []*enode.Node
+	wantNodes = append(wantNodes, tree1.Nodes()...)
+	wantNodes = append(wantNodes, tree3.Nodes()...)
+	checkRandomNode(t, c, wantNodes)
+
+	// Check that linked trees are GCed when they're no longer referenced.
+	if len(c.trees) != 2 {
+		t.Errorf("client knows %d trees, want 2", len(c.trees))
+	}
 }
 
 func checkRandomNode(t *testing.T, c *Client, wantNodes []*enode.Node) {
 	t.Helper()
 
 	var (
-		seen     = make(map[enode.ID]*enode.Node)
+		want     = make(map[enode.ID]*enode.Node)
+		maxCalls = len(wantNodes) * 2
 		calls    = 0
-		maxCalls = 200
 		ctx      = context.Background()
 	)
-	for len(seen) < len(wantNodes) && calls < maxCalls {
-		calls++
-		n := c.RandomNode(ctx)
-		seen[n.ID()] = n
-	}
-	if calls >= maxCalls {
-		t.Fatalf("too many calls: %d, want at most %d", calls, maxCalls)
-	}
 	for _, n := range wantNodes {
-		if seen[n.ID()] == nil {
-			t.Errorf("RandomNode didn't discover node %v", n.ID())
+		want[n.ID()] = n
+	}
+	for ; len(want) > 0 && calls < maxCalls; calls++ {
+		n := c.RandomNode(ctx)
+		if n == nil {
+			t.Fatalf("RandomNode returned nil (call %d)", calls)
 		}
+		delete(want, n.ID())
+	}
+	t.Logf("checkRandomNode called RandomNode %d times to find %d nodes", calls, len(wantNodes))
+	for _, n := range want {
+		t.Errorf("RandomNode didn't discover node %v", n.ID())
 	}
 }
 

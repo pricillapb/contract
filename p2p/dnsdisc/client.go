@@ -36,9 +36,10 @@ import (
 type Client struct {
 	cfg       Config
 	clock     mclock.Clock
+	linkCache linkCache
 	trees     map[string]*clientTree
-	rootTrees map[*clientTree]struct{} // explicitly added trees only
-	entries   map[string]entry         // global entry cache
+
+	entries map[string]entry // global entry cache
 }
 
 // Config holds configuration options for the client.
@@ -81,11 +82,10 @@ func (cfg Config) withDefaults() Config {
 // NewClient creates a client.
 func NewClient(cfg Config, urls ...string) (*Client, error) {
 	c := &Client{
-		cfg:       cfg.withDefaults(),
-		clock:     mclock.System{},
-		trees:     make(map[string]*clientTree),
-		rootTrees: make(map[*clientTree]struct{}),
-		entries:   make(map[string]entry),
+		cfg:     cfg.withDefaults(),
+		clock:   mclock.System{},
+		trees:   make(map[string]*clientTree),
+		entries: make(map[string]entry),
 	}
 	for _, url := range urls {
 		if err := c.AddTree(url); err != nil {
@@ -101,22 +101,24 @@ func (c *Client) AddTree(url string) error {
 	if err != nil {
 		return fmt.Errorf("invalid enrtree URL: %v", err)
 	}
-	tree, ok := c.trees[le.domain]
-	if ok {
-		if tree.matchPubkey(le.pubkey) {
-			return fmt.Errorf("conflicting public keys for domain %q", le.domain)
-		}
-	} else {
-		tree = c.addTree(le)
+	ct, err := c.ensureTree(le)
+	if err != nil {
+		return err
 	}
-	c.rootTrees[tree] = struct{}{}
+	c.linkCache.add(ct)
 	return nil
 }
 
-func (c *Client) addTree(le *linkEntry) *clientTree {
+func (c *Client) ensureTree(le *linkEntry) (*clientTree, error) {
+	if tree, ok := c.trees[le.domain]; ok {
+		if !tree.matchPubkey(le.pubkey) {
+			return nil, fmt.Errorf("conflicting public keys for domain %q", le.domain)
+		}
+		return tree, nil
+	}
 	ct := newClientTree(c, le)
 	c.trees[le.domain] = ct
-	return ct
+	return ct, nil
 }
 
 // SyncTree downloads the entire node tree at the given URL. This doesn't add the tree for
@@ -161,8 +163,8 @@ func (c *Client) RandomNode(ctx context.Context) *enode.Node {
 
 // randomTree returns a random tree.
 func (c *Client) randomTree() *clientTree {
-	if len(c.trees) == 0 {
-		return nil
+	if !c.linkCache.valid() {
+		c.gcTrees()
 	}
 	limit := rand.Intn(len(c.trees))
 	for _, ct := range c.trees {
@@ -172,6 +174,15 @@ func (c *Client) randomTree() *clientTree {
 		limit--
 	}
 	return nil
+}
+
+// gcTrees rebuilds the 'trees' map.
+func (c *Client) gcTrees() {
+	trees := make(map[string]*clientTree)
+	for t := range c.linkCache.all() {
+		trees[t.loc.domain] = t
+	}
+	c.trees = trees
 }
 
 // collectTree creates a stand-alone tree from the node cache.

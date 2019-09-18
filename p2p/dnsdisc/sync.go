@@ -28,16 +28,19 @@ import (
 
 // clientTree is a full tree being synced.
 type clientTree struct {
-	c          *Client
-	lastUpdate mclock.AbsTime // last revalidation of root
-	loc        *linkEntry
-	root       *rootEntry
-	enrs       *subtreeSync
-	links      *subtreeSync
+	c             *Client
+	loc           *linkEntry
+	root          *rootEntry
+	lastRootCheck mclock.AbsTime // last revalidation of root
+	enrs          *subtreeSync
+	links         *subtreeSync
+	linkCache     linkCache
 }
 
 func newClientTree(c *Client, loc *linkEntry) *clientTree {
-	return &clientTree{c: c, loc: loc}
+	ct := &clientTree{c: c, loc: loc}
+	ct.linkCache.self = ct
+	return ct
 }
 
 func (ct *clientTree) matchPubkey(key *ecdsa.PublicKey) bool {
@@ -65,13 +68,11 @@ func (ct *clientTree) syncAll() error {
 // syncRandom retrieves a single entry of the tree. The Node return value
 // is non-nil if the entry was a node.
 func (ct *clientTree) syncRandom(ctx context.Context) (*enode.Node, error) {
-	// Re-check root, but don't check every call.
 	if ct.rootUpdateDue() {
 		if err := ct.updateRoot(); err != nil {
 			return nil, err
 		}
 	}
-
 	// Link tree sync has priority, run it to completion before syncing ENRs.
 	if !ct.links.done() {
 		err := ct.syncNextLink(ctx)
@@ -95,8 +96,11 @@ func (ct *clientTree) syncNextLink(ctx context.Context) error {
 	ct.links.missing = ct.links.missing[1:]
 
 	if le, ok := e.(*linkEntry); ok {
-		// Found linked tree, add it to client.
-		ct.c.addTree(le)
+		lt, err := ct.c.ensureTree(le)
+		if err != nil {
+			return err
+		}
+		ct.linkCache.add(lt)
 	}
 	return nil
 }
@@ -115,18 +119,26 @@ func (ct *clientTree) syncNextRandomENR(ctx context.Context) (*enode.Node, error
 	return nil, nil
 }
 
+func (ct *clientTree) String() string {
+	return ct.loc.url()
+}
+
 // removeHash removes the element at index from h.
 func removeHash(h []string, index int) []string {
 	if len(h) == 1 {
 		return nil
 	}
-	h[index] = h[len(h)-1]
-	return h[:len(h)-1]
+	last := len(h) - 1
+	if index < last {
+		h[index] = h[last]
+		h[last] = ""
+	}
+	return h[:last]
 }
 
 // updateRoot ensures that the given tree has an up-to-date root.
 func (ct *clientTree) updateRoot() error {
-	ct.lastUpdate = ct.c.clock.Now()
+	ct.lastRootCheck = ct.c.clock.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), ct.c.cfg.Timeout)
 	defer cancel()
 	root, err := ct.c.resolveRoot(ctx, ct.loc)
@@ -138,6 +150,7 @@ func (ct *clientTree) updateRoot() error {
 	// Invalidate subtrees if changed.
 	if ct.links == nil || root.lroot != ct.links.root {
 		ct.links = newSubtreeSync(ct.c, ct.loc, root.lroot, true)
+		ct.linkCache.reset()
 	}
 	if ct.enrs == nil || root.eroot != ct.enrs.root {
 		ct.enrs = newSubtreeSync(ct.c, ct.loc, root.eroot, false)
@@ -147,7 +160,7 @@ func (ct *clientTree) updateRoot() error {
 
 // rootUpdateDue returns true when a root update is needed.
 func (ct *clientTree) rootUpdateDue() bool {
-	return ct.root == nil || time.Duration(ct.c.clock.Now()-ct.lastUpdate) > ct.c.cfg.RecheckInterval
+	return ct.root == nil || time.Duration(ct.c.clock.Now()-ct.lastRootCheck) > ct.c.cfg.RecheckInterval
 }
 
 // subtreeSync is the sync of an ENR or link subtree.
@@ -199,4 +212,65 @@ func (ts *subtreeSync) resolveNext(ctx context.Context, hash string) (entry, err
 		ts.missing = append(ts.missing, e.children...)
 	}
 	return e, nil
+}
+
+// linkCache tracks the links of a tree.
+type linkCache struct {
+	self    *clientTree
+	directM map[*clientTree]struct{} // direct links
+	allM    map[*clientTree]struct{} // direct & transitive links
+}
+
+// reset clears the cache.
+func (lc *linkCache) reset() {
+	lc.directM = nil
+	lc.allM = nil
+}
+
+// add adds a direct link to the cache.
+func (lc *linkCache) add(ct *clientTree) {
+	if lc.directM == nil {
+		lc.directM = make(map[*clientTree]struct{})
+	}
+	if _, ok := lc.directM[ct]; !ok {
+		lc.invalidate()
+	}
+	lc.directM[ct] = struct{}{}
+}
+
+// invalidate resets the cache of transitive links.
+func (lc *linkCache) invalidate() {
+	lc.allM = nil
+}
+
+// valid returns true when the cache of transitive links is up-to-date.
+func (lc *linkCache) valid() bool {
+	// Re-check validity of child caches to catch updates.
+	for ct := range lc.allM {
+		if ct != lc.self && !ct.linkCache.valid() {
+			lc.allM = nil
+			break
+		}
+	}
+	return lc.allM != nil
+}
+
+// all returns all trees reachable through the cache.
+func (lc *linkCache) all() map[*clientTree]struct{} {
+	if lc.valid() {
+		return lc.allM
+	}
+	// Remake lc.allM it by taking the union of all() across children.
+	m := make(map[*clientTree]struct{})
+	if lc.self != nil {
+		m[lc.self] = struct{}{}
+	}
+	for ct := range lc.directM {
+		m[ct] = struct{}{}
+		for lt := range ct.linkCache.all() {
+			m[lt] = struct{}{}
+		}
+	}
+	lc.allM = m
+	return m
 }
