@@ -122,10 +122,15 @@ const (
 
 // MakeTree creates a tree containing the given nodes and links.
 func MakeTree(seq uint, nodes []*enode.Node, links []string) (*Tree, error) {
-	// Sort records by ID.
+	// Sort records by ID and ensure all nodes have a valid record.
 	records := make([]*enode.Node, len(nodes))
 	copy(records, nodes)
 	sortByID(records)
+	for _, n := range records {
+		if len(n.Record().Signature()) == 0 {
+			return nil, fmt.Errorf("can't add node %v: unsigned node record", n.ID())
+		}
+	}
 
 	// Create the leaf list.
 	enrEntries := make([]entry, len(records))
