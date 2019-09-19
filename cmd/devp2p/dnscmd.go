@@ -197,12 +197,12 @@ func dnsToCloudflare(ctx *cli.Context) error {
 func loadSigningKey(keyfile string) *ecdsa.PrivateKey {
 	keyjson, err := ioutil.ReadFile(keyfile)
 	if err != nil {
-		exit(fmt.Errorf("Failed to read the keyfile at '%s': %v", keyfile, err))
+		exit(fmt.Errorf("failed to read the keyfile at '%s': %v", keyfile, err))
 	}
 	password, _ := console.Stdin.PromptPassword("Please enter the password for '" + keyfile + "': ")
 	key, err := keystore.DecryptKey(keyjson, password)
 	if err != nil {
-		exit(fmt.Errorf("Error decrypting key: %v", err))
+		exit(fmt.Errorf("error decrypting key: %v", err))
 	}
 	return key.PrivateKey
 }
@@ -230,12 +230,6 @@ func dnsClient(ctx *cli.Context) *dnsdisc.Client {
 //
 // This format exists because it's convenient to edit. nodes.json can be generated
 // in multiple ways: it may be written by a DHT crawler or compiled by a human.
-
-type dnsTXTJSON map[string]dnsTXT
-
-type dnsTXT struct {
-	Value string `json:"value"`
-}
 
 type dnsDefinition struct {
 	Meta  dnsMetaJSON
@@ -310,7 +304,7 @@ func ensureValidTreeSignature(t *dnsdisc.Tree, pubkey *ecdsa.PublicKey, sig stri
 		return fmt.Errorf("missing signature, run 'devp2p dns sign' first")
 	}
 	if err := t.SetSignature(pubkey, sig); err != nil {
-		return fmt.Errorf("invalid signature on tree, run 'devp2p dns sign' to update it.")
+		return fmt.Errorf("invalid signature on tree, run 'devp2p dns sign' to update it")
 	}
 	return nil
 }
@@ -339,15 +333,6 @@ func treeDefinitionFiles(directory string) (string, string) {
 	meta := filepath.Join(directory, "enrtree-info.json")
 	nodes := filepath.Join(directory, "nodes.json")
 	return meta, nodes
-}
-
-// loadTXTJSON loads TXT records in JSON format.
-func loadTXTJSON(file string) map[string]string {
-	var txt map[string]string
-	if err := common.LoadJSON(file, &txt); err != nil {
-		exit(err)
-	}
-	return txt
 }
 
 // writeTXTJSON writes TXT records in JSON format.

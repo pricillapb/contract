@@ -56,18 +56,6 @@ func writeNodesJSON(file string, nodes nodeSet) {
 	}
 }
 
-func (ns nodeSet) nodeInfos() []nodeJSON {
-	result := make([]nodeJSON, 0, len(ns))
-	for _, n := range ns {
-		result = append(result, n)
-	}
-	// Sort by ID.
-	sort.Slice(result, func(i, j int) bool {
-		return bytes.Compare(result[i].N.ID().Bytes(), result[j].N.ID().Bytes()) < 0
-	})
-	return result
-}
-
 func (ns nodeSet) nodes() []*enode.Node {
 	result := make([]*enode.Node, 0, len(ns))
 	for _, n := range ns {
