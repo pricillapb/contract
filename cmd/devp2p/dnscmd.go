@@ -41,6 +41,7 @@ var (
 			dnsSyncCommand,
 			dnsSignCommand,
 			dnsTXTCommand,
+			dnsCloudflareCommand,
 		},
 	}
 	dnsSyncCommand = cli.Command{
@@ -63,6 +64,13 @@ var (
 		ArgsUsage: "<tree-directory> <output-file>",
 		Action:    dnsToTXT,
 	}
+	dnsCloudflareCommand = cli.Command{
+		Name:      "to-cloudflare",
+		Usage:     "Deploy DNS TXT records to cloudflare",
+		ArgsUsage: "<tree-directory>",
+		Action:    dnsToCloudflare,
+		Flags:     []cli.Flag{cloudflareTokenFlag, cloudflareZoneIDFlag},
+	}
 )
 
 var (
@@ -73,7 +81,6 @@ var (
 	dnsDomainFlag = cli.StringFlag{
 		Name:  "domain",
 		Usage: "Domain name of the tree",
-		Value: "localhost",
 	}
 	dnsSeqFlag = cli.UintFlag{
 		Name:  "seq",
@@ -114,7 +121,7 @@ func dnsSign(ctx *cli.Context) error {
 		defdir  = ctx.Args().Get(0)
 		keyfile = ctx.Args().Get(1)
 		def     = loadTreeDefinition(defdir)
-		domain  = dnsDomainFlag.Value
+		domain  = directoryName(defdir)
 	)
 	if def.Meta.URL != "" {
 		d, _, err := dnsdisc.ParseURL(def.Meta.URL)
@@ -148,45 +155,42 @@ func dnsSign(ctx *cli.Context) error {
 	return nil
 }
 
+func directoryName(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		exit(err)
+	}
+	return filepath.Base(abs)
+}
+
 // dnsToTXT peforms dnsTXTCommand.
 func dnsToTXT(ctx *cli.Context) error {
 	if ctx.NArg() < 1 {
 		return fmt.Errorf("need tree definition directory as argument")
 	}
-	var (
-		defdir = ctx.Args().Get(0)
-		output = ctx.Args().Get(1)
-	)
+	output := ctx.Args().Get(1)
 	if output == "" {
 		output = "-" // default to stdout
 	}
-
-	def := loadTreeDefinition(defdir)
-	domain, pubkey, err := dnsdisc.ParseURL(def.Meta.URL)
+	domain, t, err := loadTreeDefinitionForExport(ctx.Args().Get(0))
 	if err != nil {
-		return fmt.Errorf("invalid 'url' field: %v", err)
-	}
-	t, err := dnsdisc.MakeTree(def.Meta.Seq, def.Nodes, def.Meta.Links)
-	if err != nil {
-		return err
-	}
-	if err := ensureValidTreeSignature(t, pubkey, def.Meta.Sig); err != nil {
 		return err
 	}
 	writeTXTJSON(output, t.ToTXT(domain))
 	return nil
 }
 
-// ensureValidTreeSignature checks that sig is valid for tree and assigns it as the
-// tree's signature if valid.
-func ensureValidTreeSignature(t *dnsdisc.Tree, pubkey *ecdsa.PublicKey, sig string) error {
-	if sig == "" {
-		return fmt.Errorf("missing signature, run 'devp2p dns sign' first")
+// dnsToCloudflare peforms dnsCloudflareCommand.
+func dnsToCloudflare(ctx *cli.Context) error {
+	if ctx.NArg() < 1 {
+		return fmt.Errorf("need tree definition directory as argument")
 	}
-	if err := t.SetSignature(pubkey, sig); err != nil {
-		return fmt.Errorf("invalid signature on tree, run 'devp2p dns sign' to update it.")
+	domain, t, err := loadTreeDefinitionForExport(ctx.Args().Get(0))
+	if err != nil {
+		return err
 	}
-	return nil
+	client := newCloudflareClient(ctx)
+	return client.deploy(domain, t)
 }
 
 // loadSigningKey loads a private key in Ethereum keystore format.
@@ -260,7 +264,8 @@ func treeToDefinition(url string, t *dnsdisc.Tree) *dnsDefinition {
 func loadTreeDefinition(directory string) *dnsDefinition {
 	metaFile, nodesFile := treeDefinitionFiles(directory)
 	var def dnsDefinition
-	if err := common.LoadJSON(metaFile, &def.Meta); err != nil {
+	err := common.LoadJSON(metaFile, &def.Meta)
+	if err != nil && !os.IsNotExist(err) {
 		exit(err)
 	}
 	// Check link syntax.
@@ -276,6 +281,38 @@ func loadTreeDefinition(directory string) *dnsDefinition {
 	}
 	def.Nodes = nodes.nodes()
 	return &def
+}
+
+// loadTreeDefinitionForExport loads a DNS tree and ensures it is signed.
+func loadTreeDefinitionForExport(dir string) (domain string, t *dnsdisc.Tree, err error) {
+	metaFile, _ := treeDefinitionFiles(dir)
+	def := loadTreeDefinition(dir)
+	if def.Meta.URL == "" {
+		return "", nil, fmt.Errorf("missing 'url' field in %v", metaFile)
+	}
+	domain, pubkey, err := dnsdisc.ParseURL(def.Meta.URL)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid 'url' field in %v: %v", metaFile, err)
+	}
+	if t, err = dnsdisc.MakeTree(def.Meta.Seq, def.Nodes, def.Meta.Links); err != nil {
+		return "", nil, err
+	}
+	if err := ensureValidTreeSignature(t, pubkey, def.Meta.Sig); err != nil {
+		return "", nil, err
+	}
+	return domain, t, nil
+}
+
+// ensureValidTreeSignature checks that sig is valid for tree and assigns it as the
+// tree's signature if valid.
+func ensureValidTreeSignature(t *dnsdisc.Tree, pubkey *ecdsa.PublicKey, sig string) error {
+	if sig == "" {
+		return fmt.Errorf("missing signature, run 'devp2p dns sign' first")
+	}
+	if err := t.SetSignature(pubkey, sig); err != nil {
+		return fmt.Errorf("invalid signature on tree, run 'devp2p dns sign' to update it.")
+	}
+	return nil
 }
 
 // writeTreeDefinition writes a DNS node tree definition to the given directory.
