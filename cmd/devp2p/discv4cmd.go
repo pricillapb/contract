@@ -118,13 +118,9 @@ func discv4ResolveJSON(ctx *cli.Context) error {
 	file := ctx.Args().Get(0)
 
 	// Load existing nodes in file.
-	var json []nodeJSON
-	if common.FileExist(file) {
-		json = loadNodesJSON(file)
-	}
 	var nodes []*enode.Node
-	for _, jn := range json {
-		nodes = append(nodes, jn.Record)
+	if common.FileExist(file) {
+		nodes = loadNodesJSON(file).nodes()
 	}
 	// Add nodes from command line arguments.
 	for i := 1; i < ctx.NArg(); i++ {
@@ -135,12 +131,11 @@ func discv4ResolveJSON(ctx *cli.Context) error {
 		nodes = append(nodes, n)
 	}
 
-	result := make([]nodeJSON, len(nodes))
-	for i, n := range nodes {
+	result := make(nodeSet, len(nodes))
+	for _, n := range nodes {
 		n = disc.Resolve(n)
-		result[i] = nodeJSON{ID: n.ID(), Seq: n.Seq(), Record: n}
+		result[n.ID()] = nodeJSON{Seq: n.Seq(), N: n}
 	}
-	sortByID(result)
 	writeNodesJSON(file, result)
 	return nil
 }

@@ -259,7 +259,6 @@ func treeToDefinition(url string, t *dnsdisc.Tree) *dnsDefinition {
 // loadTreeDefinition loads a directory in 'definition' format.
 func loadTreeDefinition(directory string) *dnsDefinition {
 	metaFile, nodesFile := treeDefinitionFiles(directory)
-	nodes := loadNodesJSON(nodesFile)
 	var def dnsDefinition
 	if err := common.LoadJSON(metaFile, &def.Meta); err != nil {
 		exit(err)
@@ -271,28 +270,23 @@ func loadTreeDefinition(directory string) *dnsDefinition {
 		}
 	}
 	// Check/convert nodes.
-	def.Nodes = make([]*enode.Node, len(nodes))
-	for i, dn := range nodes {
-		if dn.ID != dn.Record.ID() {
-			exit(fmt.Errorf("invalid node %v: 'id' does not match ID %v from record", dn.ID, dn.Record.ID()))
-		}
-		def.Nodes[i] = dn.Record
+	nodes := loadNodesJSON(nodesFile)
+	if err := nodes.verify(); err != nil {
+		exit(err)
 	}
+	def.Nodes = nodes.nodes()
 	return &def
 }
 
 // writeTreeDefinition writes a DNS node tree definition to the given directory.
 func writeTreeDefinition(directory string, def *dnsDefinition) {
-	metaJSON, err := json.MarshalIndent(&def.Meta, "", "  ")
+	metaJSON, err := json.MarshalIndent(&def.Meta, "", jsonIndent)
 	if err != nil {
 		exit(err)
 	}
 	// Convert nodes.
-	nodes := make([]nodeJSON, len(def.Nodes))
-	for i, n := range def.Nodes {
-		nodes[i] = nodeJSON{ID: n.ID(), Seq: n.Seq(), Record: n}
-	}
-	sortByID(nodes)
+	nodes := make(nodeSet, len(def.Nodes))
+	nodes.add(def.Nodes...)
 	// Write.
 	if err := os.Mkdir(directory, 0744); err != nil && !os.IsExist(err) {
 		exit(err)
@@ -321,7 +315,7 @@ func loadTXTJSON(file string) map[string]string {
 
 // writeTXTJSON writes TXT records in JSON format.
 func writeTXTJSON(file string, txt map[string]string) {
-	txtJSON, err := json.MarshalIndent(txt, "", "  ")
+	txtJSON, err := json.MarshalIndent(txt, "", jsonIndent)
 	if err != nil {
 		exit(err)
 	}
