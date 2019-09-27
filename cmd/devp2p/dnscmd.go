@@ -334,7 +334,7 @@ func writeTreeMetadata(directory string, def *dnsDefinition) {
 func writeTreeNodes(directory string, def *dnsDefinition) {
 	ns := make(nodeSet, len(def.Nodes))
 	ns.add(def.Nodes...)
-	nodesFile, _ := treeDefinitionFiles(directory)
+	_, nodesFile := treeDefinitionFiles(directory)
 	writeNodesJSON(nodesFile, ns)
 }
 
