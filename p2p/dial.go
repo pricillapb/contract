@@ -34,9 +34,6 @@ const (
 	// private networks.
 	dialHistoryExpiration = inboundThrottleTime + 5*time.Second
 
-	// Timeout for NextNode on the discovery iterator.
-	discoveryTimeout = 4 * time.Second
-
 	// If no peers are found for this amount of time, the initial bootnodes are dialed.
 	fallbackInterval = 20 * time.Second
 
