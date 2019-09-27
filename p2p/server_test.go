@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/testlog"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/p2p/discutil"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"golang.org/x/crypto/sha3"
@@ -233,6 +234,7 @@ func TestServerTaskScheduling(t *testing.T) {
 		Config:    Config{MaxPeers: 10},
 		localnode: enode.NewLocalNode(db, newkey()),
 		nodedb:    db,
+		discmix:   discutil.NewFairMix(0),
 		quit:      make(chan struct{}),
 		running:   true,
 		log:       log.New(),
@@ -283,6 +285,7 @@ func TestServerManyTasks(t *testing.T) {
 			nodedb:    db,
 			running:   true,
 			log:       log.New(),
+			discmix:   discutil.NewFairMix(0),
 		}
 		done       = make(chan *testTask)
 		start, end = 0, 0
